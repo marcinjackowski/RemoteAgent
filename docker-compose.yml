@@ -1,0 +1,25 @@
+# Local infrastructure dependencies for development only.
+#
+# The credentials below are non-secret, local-only defaults. Real environments
+# inject credentials out of band; nothing here is used in CI or production.
+name: remoteagent-dev
+
+services:
+  postgres:
+    image: postgres:17.2-alpine
+    environment:
+      POSTGRES_USER: remoteagent
+      POSTGRES_PASSWORD: remoteagent-local-dev
+      POSTGRES_DB: remoteagent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remoteagent -d remoteagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

@@ -1,0 +1,16 @@
+# Local worker runtime state. Contains Claude session IDs, prompts and responses.
+.remote-agent/
+
+# Dependencies and build artifacts
+node_modules/
+dist/
+.turbo/
+coverage/
+
+# Tool caches and logs
+*.tsbuildinfo
+*.log
+
+# OS noise
+.DS_Store
+

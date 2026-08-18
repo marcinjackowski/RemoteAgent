@@ -1,0 +1,39 @@
+{
+  "name": "remoteagent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": "24.19.0",
+    "pnpm": "10.26.1"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && turbo run typecheck",
+    "test": "vitest run",
+    "build": "turbo run build",
+    "workflow:validate": "tsx scripts/workflow/validate.ts",
+    "check": "pnpm run lint && pnpm run format && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run workflow:validate"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "eslint": "10.8.1",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-boundaries": "7.2.0",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "turbo": "2.10.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0",
+    "vite": "8.2.1",
+    "vitest": "4.1.11"
+  }
+}

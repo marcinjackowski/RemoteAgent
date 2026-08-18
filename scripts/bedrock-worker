@@ -1,0 +1,511 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+SCHEMA_PATH="$SCRIPT_DIR/bedrock-worker-report.schema.json"
+
+MODEL="${REMOTE_AGENT_WORKER_MODEL:-us.anthropic.claude-opus-4-8}"
+AWS_WORKER_REGION="${REMOTE_AGENT_AWS_REGION:-us-east-1}"
+EFFORT="${REMOTE_AGENT_WORKER_EFFORT:-high}"
+AUTOCOMPACT="${REMOTE_AGENT_WORKER_AUTOCOMPACT:-1M}"
+MAX_BUDGET_USD="${REMOTE_AGENT_WORKER_MAX_BUDGET_USD:-10}"
+MAX_TURNS="${REMOTE_AGENT_WORKER_MAX_TURNS:-80}"
+STATE_ROOT="${REMOTE_AGENT_WORKER_STATE_DIR:-$REPO_ROOT/.remote-agent/bedrock-worker}"
+
+WORKER_NAME="implementer"
+NEW_SESSION=0
+READ_ONLY=0
+RAW_OUTPUT=0
+DOCTOR=0
+CHECK_BEDROCK=0
+PROMPT_PARTS=()
+
+usage() {
+  sed -n '2,120p' <<'USAGE'
+Bedrock Opus 4.8 worker for RemoteAgent.
+
+Usage:
+  scripts/bedrock-worker [options] [--] [prompt...]
+  printf '%s\n' 'prompt' | scripts/bedrock-worker [options]
+
+Options:
+  --name NAME       Persistent worker/session name (default: implementer)
+  --new             Start a new session; archive the previous session ID
+  --readonly        Expose only Read, Glob and Grep tools
+  --raw             Print the raw Claude JSON envelope instead of the report
+  --doctor          Validate local prerequisites without invoking Bedrock
+  --check-bedrock   Validate AWS credentials and profile access without inference
+  -h, --help        Show this help
+
+With no prompt and a terminal stdin, the prompt defaults to "continue".
+
+Environment overrides:
+  AWS_BEARER_TOKEN_BEDROCK             preferred Bedrock API key
+  REMOTE_AGENT_WORKER_MODEL            default us.anthropic.claude-opus-4-8
+  REMOTE_AGENT_AWS_REGION              default us-east-1
+  REMOTE_AGENT_WORKER_EFFORT           default high
+  REMOTE_AGENT_WORKER_AUTOCOMPACT      default 1M
+  REMOTE_AGENT_WORKER_MAX_BUDGET_USD   default 10
+  REMOTE_AGENT_WORKER_MAX_TURNS        default 80
+  REMOTE_AGENT_WORKER_STATE_DIR        default .remote-agent/bedrock-worker
+  REMOTE_AGENT_WORKER_ALLOW_REMOTE     set to 1 to allow git push/glab MR tools
+
+If AWS_BEARER_TOKEN_BEDROCK is unset, the wrapper reads only that key from
+~/.claude/settings.json. Other user-level Claude settings remain disabled.
+USAGE
+}
+
+fail() {
+  printf 'bedrock-worker: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+valid_worker_name() {
+  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ ]]
+}
+
+while (($# > 0)); do
+  case "$1" in
+    --name)
+      (($# >= 2)) || fail "--name requires a value"
+      WORKER_NAME="$2"
+      shift 2
+      ;;
+    --new)
+      NEW_SESSION=1
+      shift
+      ;;
+    --readonly)
+      READ_ONLY=1
+      shift
+      ;;
+    --raw)
+      RAW_OUTPUT=1
+      shift
+      ;;
+    --doctor)
+      DOCTOR=1
+      shift
+      ;;
+    --check-bedrock)
+      CHECK_BEDROCK=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      PROMPT_PARTS+=("$@")
+      break
+      ;;
+    -* )
+      fail "unknown option: $1"
+      ;;
+    *)
+      PROMPT_PARTS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+valid_worker_name "$WORKER_NAME" || fail "invalid worker name: $WORKER_NAME"
+require_command claude
+require_command jq
+require_command uuidgen
+test -f "$SCHEMA_PATH" || fail "missing report schema: $SCHEMA_PATH"
+
+BEDROCK_BEARER_TOKEN="${AWS_BEARER_TOKEN_BEDROCK:-}"
+BEDROCK_AUTH_SOURCE="aws_credential_chain"
+if [[ -n "$BEDROCK_BEARER_TOKEN" ]]; then
+  BEDROCK_AUTH_SOURCE="environment_api_key"
+elif [[ -f "$HOME/.claude/settings.json" ]]; then
+  BEDROCK_BEARER_TOKEN="$(
+    jq -r '
+      if (.env.AWS_BEARER_TOKEN_BEDROCK | type) == "string" then
+        .env.AWS_BEARER_TOKEN_BEDROCK
+      else
+        empty
+      end
+    ' "$HOME/.claude/settings.json" 2>/dev/null || true
+  )"
+  if [[ -n "$BEDROCK_BEARER_TOKEN" ]]; then
+    BEDROCK_AUTH_SOURCE="claude_user_settings_api_key"
+  fi
+fi
+
+print_doctor_report() {
+  jq -e . "$SCHEMA_PATH" >/dev/null
+  printf 'worker_name=%s\n' "$WORKER_NAME"
+  printf 'model=%s\n' "$MODEL"
+  printf 'aws_region=%s\n' "$AWS_WORKER_REGION"
+  printf 'autocompact=%s\n' "$AUTOCOMPACT"
+  printf 'effort=%s\n' "$EFFORT"
+  printf 'max_budget_usd=%s\n' "$MAX_BUDGET_USD"
+  printf 'max_turns=%s\n' "$MAX_TURNS"
+  printf 'claude_version=%s\n' "$(claude --version)"
+  printf 'schema=valid\n'
+  printf 'bedrock_auth_source=%s\n' "$BEDROCK_AUTH_SOURCE"
+}
+
+if ((DOCTOR == 1)); then
+  print_doctor_report
+  printf 'aws_credentials=not_checked_until_invocation\n'
+  exit 0
+fi
+
+if ((CHECK_BEDROCK == 1)); then
+  require_command aws
+  print_doctor_report
+  if [[ -n "$BEDROCK_BEARER_TOKEN" ]]; then
+    printf 'bedrock_api_key=present\n'
+  else
+    if ! aws sts get-caller-identity --output json >/dev/null 2>&1; then
+      fail "AWS credentials are unavailable or invalid; no model call was made"
+    fi
+    printf 'aws_credentials=valid\n'
+  fi
+  if ! AWS_BEARER_TOKEN_BEDROCK="$BEDROCK_BEARER_TOKEN" \
+    aws bedrock get-inference-profile \
+    --region "$AWS_WORKER_REGION" \
+    --inference-profile-identifier "$MODEL" \
+    --output json >/dev/null 2>&1; then
+    if [[ -n "$BEDROCK_BEARER_TOKEN" ]]; then
+      fail "Bedrock API key cannot access the configured profile; verify key expiration, Region and model access; no model call was made"
+    fi
+    fail "Bedrock profile metadata is not accessible; grant the documented GetInferenceProfile permission; no model call was made"
+  fi
+  printf 'bedrock_profile=accessible\n'
+  printf 'bedrock_invoke_permission=not_verified_without_inference\n'
+  exit 0
+fi
+
+if ((${#PROMPT_PARTS[@]} > 0)); then
+  PROMPT="${PROMPT_PARTS[*]}"
+elif [[ ! -t 0 ]]; then
+  PROMPT="$(< /dev/stdin)"
+else
+  PROMPT="continue"
+fi
+
+[[ -n "${PROMPT//[[:space:]]/}" ]] || fail "prompt cannot be empty"
+
+umask 077
+WORKER_DIR="$STATE_ROOT/$WORKER_NAME"
+SESSION_FILE="$WORKER_DIR/session-id"
+ENVELOPE_DIR="$WORKER_DIR/envelopes"
+REPORT_DIR="$WORKER_DIR/reports"
+STDERR_DIR="$WORKER_DIR/stderr"
+ARCHIVE_DIR="$WORKER_DIR/archived-sessions"
+mkdir -p "$ENVELOPE_DIR" "$REPORT_DIR" "$STDERR_DIR" "$ARCHIVE_DIR"
+
+if ((NEW_SESSION == 1)) && [[ -f "$SESSION_FILE" ]]; then
+  ARCHIVE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  mv -- "$SESSION_FILE" "$ARCHIVE_DIR/session-id-$ARCHIVE_STAMP"
+fi
+
+SESSION_MODE="new"
+if [[ -f "$SESSION_FILE" ]]; then
+  SESSION_ID="$(<"$SESSION_FILE")"
+  [[ "$SESSION_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "invalid stored session ID"
+  SESSION_ARGS=(--resume "$SESSION_ID")
+  SESSION_MODE="resume"
+else
+  SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  SESSION_TMP="$WORKER_DIR/.session-id.tmp.$$"
+  printf '%s\n' "$SESSION_ID" >"$SESSION_TMP"
+  mv -- "$SESSION_TMP" "$SESSION_FILE"
+  SESSION_ARGS=(--session-id "$SESSION_ID")
+fi
+
+SCHEMA_JSON="$(jq -c . "$SCHEMA_PATH")"
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+ENVELOPE_PATH="$ENVELOPE_DIR/$RUN_STAMP.json"
+ENVELOPE_TMP="$WORKER_DIR/.envelope.$RUN_STAMP.tmp"
+REPORT_PATH="$REPORT_DIR/$RUN_STAMP.json"
+REPORT_TMP="$WORKER_DIR/.report.$RUN_STAMP.tmp"
+STDERR_PATH="$STDERR_DIR/$RUN_STAMP.log"
+STDERR_TMP="$WORKER_DIR/.stderr.$RUN_STAMP.tmp"
+
+WORKER_SYSTEM_PROMPT=$(cat <<'PROMPT'
+You are the implementation worker for RemoteAgent. The repository, AGENTS.md,
+CLAUDE.md, task index, latest handoff and latest audit are the source of truth.
+Execute only the current implementation task or requested audit remediation.
+Never audit or approve your own work. Do not expose secrets. Do not claim tests
+you did not run. When the task scope is complete, write the required repository
+handoff, set AWAITING_AUDIT and stop. Every invocation must finish with the
+requested structured report. The report contains concise engineering rationale,
+alternatives and evidence, never private chain-of-thought.
+PROMPT
+)
+
+CLAUDE_ARGS=(
+  --print
+  --output-format json
+  --model "$MODEL"
+  --effort "$EFFORT"
+  --autocompact "$AUTOCOMPACT"
+  --max-budget-usd "$MAX_BUDGET_USD"
+  --max-turns "$MAX_TURNS"
+  --json-schema "$SCHEMA_JSON"
+  --append-system-prompt "$WORKER_SYSTEM_PROMPT"
+  --setting-sources project
+  --strict-mcp-config
+  --mcp-config '{"mcpServers":{}}'
+  --no-chrome
+  --name "remote-agent-$WORKER_NAME"
+  "${SESSION_ARGS[@]}"
+)
+
+if ((READ_ONLY == 1)); then
+  CLAUDE_ARGS+=(
+    --tools "Read,Glob,Grep"
+    --permission-mode plan
+  )
+else
+  ALLOWED_TOOLS=(
+    "Read"
+    "Glob"
+    "Grep"
+    "Edit"
+    "Write"
+    "Bash(pwd:*)"
+    "Bash(ls:*)"
+    "Bash(find:*)"
+    "Bash(rg:*)"
+    "Bash(sed:*)"
+    "Bash(wc:*)"
+    "Bash(test:*)"
+    "Bash(mkdir:*)"
+    "Bash(cp:*)"
+    "Bash(mv:*)"
+    "Bash(chmod:*)"
+    "Bash(git status:*)"
+    "Bash(git diff:*)"
+    "Bash(git log:*)"
+    "Bash(git show:*)"
+    "Bash(git rev-parse:*)"
+    "Bash(git ls-files:*)"
+    "Bash(git branch:*)"
+    "Bash(git add:*)"
+    "Bash(git commit:*)"
+    "Bash(corepack:*)"
+    "Bash(node:*)"
+    "Bash(npm:*)"
+    "Bash(npx:*)"
+    "Bash(pnpm:*)"
+    "Bash(docker:*)"
+  )
+  if [[ "${REMOTE_AGENT_WORKER_ALLOW_REMOTE:-0}" == "1" ]]; then
+    ALLOWED_TOOLS+=(
+      "Bash(git fetch:*)"
+      "Bash(git push:*)"
+      "Bash(glab mr:*)"
+    )
+  fi
+  CLAUDE_ARGS+=(
+    --tools "Bash,Edit,Read,Write,Glob,Grep"
+    --allowedTools "${ALLOWED_TOOLS[@]}"
+    --permission-mode acceptEdits
+  )
+fi
+
+printf 'bedrock-worker: %s session=%s model=%s region=%s\n' \
+  "$SESSION_MODE" "$SESSION_ID" "$MODEL" "$AWS_WORKER_REGION" >&2
+
+set +e
+(
+  cd -- "$REPO_ROOT"
+  env \
+    CLAUDE_CODE_USE_BEDROCK=1 \
+    AWS_BEARER_TOKEN_BEDROCK="$BEDROCK_BEARER_TOKEN" \
+    AWS_REGION="$AWS_WORKER_REGION" \
+    ANTHROPIC_MODEL="$MODEL" \
+    claude "${CLAUDE_ARGS[@]}" "$PROMPT"
+) >"$ENVELOPE_TMP" 2>"$STDERR_TMP"
+CLAUDE_EXIT=$?
+set -e
+
+mv -- "$ENVELOPE_TMP" "$ENVELOPE_PATH"
+mv -- "$STDERR_TMP" "$STDERR_PATH"
+
+ENVELOPE_VALID=0
+HAS_STRUCTURED_OUTPUT=0
+if jq -e . "$ENVELOPE_PATH" >/dev/null 2>&1; then
+  ENVELOPE_VALID=1
+  if jq -e '.structured_output != null' "$ENVELOPE_PATH" >/dev/null 2>&1; then
+    HAS_STRUCTURED_OUTPUT=1
+  fi
+fi
+
+ERROR_CATEGORY=""
+ERROR_HTTP_STATUS=0
+ERROR_RETRIABLE=false
+ERROR_SAFE_MESSAGE=""
+
+if ((CLAUDE_EXIT != 0 || HAS_STRUCTURED_OUTPUT == 0)); then
+  if ((ENVELOPE_VALID == 1)); then
+    ERROR_HTTP_STATUS="$(jq -r 'if (.api_error_status | type) == "number" then .api_error_status else 0 end' "$ENVELOPE_PATH")"
+    ERROR_TEXT="$(jq -r '(.result // .error.message // "") | tostring | ascii_downcase' "$ENVELOPE_PATH")"
+  else
+    ERROR_TEXT=""
+  fi
+
+  if [[ "$ERROR_HTTP_STATUS" == "403" ]] || [[ "$ERROR_TEXT" == *"accessdenied"* ]] || [[ "$ERROR_TEXT" == *"not authorized"* ]]; then
+    ERROR_CATEGORY="authorization"
+    ERROR_SAFE_MESSAGE="AWS denied permission for the configured Bedrock inference profile."
+  elif [[ "$ERROR_HTTP_STATUS" == "401" ]] || [[ "$ERROR_TEXT" == *"credential"* ]] || [[ "$ERROR_TEXT" == *"failed to authenticate"* ]]; then
+    ERROR_CATEGORY="authentication"
+    ERROR_SAFE_MESSAGE="AWS credentials are unavailable or invalid for Bedrock."
+  elif [[ "$ERROR_HTTP_STATUS" == "429" ]] || [[ "$ERROR_TEXT" == *"throttl"* ]] || [[ "$ERROR_TEXT" == *"too many requests"* ]]; then
+    ERROR_CATEGORY="throttling"
+    ERROR_RETRIABLE=true
+    ERROR_SAFE_MESSAGE="Bedrock throttled the request; retry with backoff."
+  elif [[ "$ERROR_TEXT" == *"model access"* ]] || [[ "$ERROR_TEXT" == *"model is not available"* ]] || [[ "$ERROR_TEXT" == *"inference profile"* ]] || [[ "$ERROR_TEXT" == *"validationexception"* ]]; then
+    ERROR_CATEGORY="model_access"
+    ERROR_SAFE_MESSAGE="The configured Bedrock model or inference profile is unavailable."
+  elif ((ENVELOPE_VALID == 0)); then
+    ERROR_CATEGORY="invalid_output"
+    ERROR_SAFE_MESSAGE="Claude returned an empty or malformed JSON envelope."
+  elif ((CLAUDE_EXIT != 0)); then
+    ERROR_CATEGORY="cli"
+    ERROR_SAFE_MESSAGE="Claude Code exited before returning a valid structured report."
+  else
+    ERROR_CATEGORY="invalid_output"
+    ERROR_SAFE_MESSAGE="Claude did not return a validated structured report."
+  fi
+fi
+
+if [[ -n "$ERROR_CATEGORY" ]]; then
+  WORKER_ERROR_JSON="$(jq -cn \
+    --arg category "$ERROR_CATEGORY" \
+    --arg safe_message "$ERROR_SAFE_MESSAGE" \
+    --argjson http_status "$ERROR_HTTP_STATUS" \
+    --argjson retriable "$ERROR_RETRIABLE" \
+    '{
+      "category": $category,
+      "http_status": (if $http_status == 0 then null else $http_status end),
+      "retriable": $retriable,
+      "safe_message": $safe_message
+    }')"
+else
+  WORKER_ERROR_JSON=null
+fi
+
+if ((HAS_STRUCTURED_OUTPUT == 1)); then
+  jq \
+    --arg worker "$WORKER_NAME" \
+    --arg session_id "$SESSION_ID" \
+    --arg model "$MODEL" \
+    --arg region "$AWS_WORKER_REGION" \
+    --arg auth_source "$BEDROCK_AUTH_SOURCE" \
+    --arg envelope "$ENVELOPE_PATH" \
+    --arg stderr_path "$STDERR_PATH" \
+    --argjson cli_exit "$CLAUDE_EXIT" \
+    --argjson worker_error "$WORKER_ERROR_JSON" \
+    '.structured_output + {
+      "_worker": {
+        "name": $worker,
+        "session_id": $session_id,
+        "model": $model,
+        "aws_region": $region,
+        "auth_source": $auth_source,
+        "claude_exit_code": $cli_exit,
+        "envelope_path": $envelope,
+        "stderr_path": $stderr_path,
+        "error": $worker_error
+      }
+    }' "$ENVELOPE_PATH" >"$REPORT_TMP"
+else
+  FALLBACK_STATUS="failed"
+  FALLBACK_SUMMARY="Claude did not return a validated structured report."
+  FALLBACK_NEXT_ACTION="Inspect the raw envelope and repository state; reconcile before retry."
+  FALLBACK_RISK="A structured work report is unavailable; do not assume whether workspace side effects occurred."
+  case "$ERROR_CATEGORY" in
+    authentication)
+      FALLBACK_STATUS="blocked"
+      FALLBACK_SUMMARY="The worker could not authenticate to Amazon Bedrock."
+      FALLBACK_NEXT_ACTION="Restore the configured AWS credential chain, run --check-bedrock, then retry."
+      FALLBACK_RISK="The model was not invoked and no structured work report exists."
+      ;;
+    authorization)
+      FALLBACK_STATUS="blocked"
+      FALLBACK_SUMMARY="Amazon Bedrock rejected the worker request because IAM permission is missing."
+      FALLBACK_NEXT_ACTION="Attach the documented least-privilege IAM policy, run --check-bedrock, then perform the read-only smoke test."
+      FALLBACK_RISK="The model was not invoked and no structured work report exists."
+      ;;
+    model_access)
+      FALLBACK_STATUS="blocked"
+      FALLBACK_SUMMARY="The configured Bedrock model or inference profile is not accessible."
+      FALLBACK_NEXT_ACTION="Confirm model access, profile ID and Region, then run --check-bedrock before retrying."
+      FALLBACK_RISK="The model did not return a structured work report."
+      ;;
+    throttling)
+      FALLBACK_STATUS="blocked"
+      FALLBACK_SUMMARY="Amazon Bedrock throttled the worker request."
+      FALLBACK_NEXT_ACTION="Retry with exponential backoff; request a quota change if throttling persists."
+      FALLBACK_RISK="The request is retriable, but no structured work report exists for this invocation."
+      ;;
+  esac
+  jq -n \
+    --arg worker "$WORKER_NAME" \
+    --arg session_id "$SESSION_ID" \
+    --arg model "$MODEL" \
+    --arg region "$AWS_WORKER_REGION" \
+    --arg auth_source "$BEDROCK_AUTH_SOURCE" \
+    --arg envelope "$ENVELOPE_PATH" \
+    --arg stderr_path "$STDERR_PATH" \
+    --arg status "$FALLBACK_STATUS" \
+    --arg summary "$FALLBACK_SUMMARY" \
+    --arg next_action "$FALLBACK_NEXT_ACTION" \
+    --arg risk "$FALLBACK_RISK" \
+    --argjson cli_exit "$CLAUDE_EXIT" \
+    --argjson worker_error "$WORKER_ERROR_JSON" \
+    '{
+      "status": $status,
+      "task_id": null,
+      "summary": $summary,
+      "decision_rationale": [],
+      "alternatives_considered": [],
+      "work_done": [],
+      "files_changed": [],
+      "commands_run": [],
+      "tests": [],
+      "questions": [],
+      "risks": [$risk],
+      "handoff_path": null,
+      "audit_requested": false,
+      "next_action": $next_action,
+      "_worker": {
+        "name": $worker,
+        "session_id": $session_id,
+        "model": $model,
+        "aws_region": $region,
+        "auth_source": $auth_source,
+        "claude_exit_code": $cli_exit,
+        "envelope_path": $envelope,
+        "stderr_path": $stderr_path,
+        "error": $worker_error
+      }
+    }' >"$REPORT_TMP"
+fi
+
+mv -- "$REPORT_TMP" "$REPORT_PATH"
+if ((RAW_OUTPUT == 1)); then
+  cat -- "$ENVELOPE_PATH"
+else
+  cat -- "$REPORT_PATH"
+fi
+
+if ((CLAUDE_EXIT != 0)); then
+  printf 'bedrock-worker: Claude exited with %s; inspect %s\n' \
+    "$CLAUDE_EXIT" "$ENVELOPE_PATH" >&2
+fi
+printf 'bedrock-worker: report=%s\n' "$REPORT_PATH" >&2
+exit "$CLAUDE_EXIT"

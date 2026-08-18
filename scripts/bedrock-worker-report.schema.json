@@ -1,0 +1,196 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "awaiting_audit",
+        "waiting_for_user",
+        "blocked",
+        "completed",
+        "failed"
+      ]
+    },
+    "task_id": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "summary": { "type": "string" },
+    "decision_rationale": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "alternatives_considered": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "work_done": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "change": { "type": "string" }
+        },
+        "required": ["path", "change"]
+      }
+    },
+    "commands_run": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": { "type": "string" },
+          "outcome": { "type": "string" },
+          "exit_code": {
+            "anyOf": [
+              { "type": "integer" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["command", "outcome", "exit_code"]
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "command": { "type": "string" },
+          "outcome": {
+            "type": "string",
+            "enum": ["passed", "failed", "not_run", "not_verified"]
+          },
+          "evidence": { "type": "string" }
+        },
+        "required": ["name", "command", "outcome", "evidence"]
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "question": { "type": "string" },
+          "why_now": { "type": "string" },
+          "recommendation": { "type": "string" },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["question", "why_now", "recommendation", "options"]
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "handoff_path": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "audit_requested": { "type": "boolean" },
+    "next_action": { "type": "string" },
+    "_worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "session_id": { "type": "string" },
+        "model": { "type": "string" },
+        "aws_region": { "type": "string" },
+        "auth_source": {
+          "type": "string",
+          "enum": [
+            "environment_api_key",
+            "claude_user_settings_api_key",
+            "aws_credential_chain"
+          ]
+        },
+        "claude_exit_code": { "type": "integer" },
+        "envelope_path": { "type": "string" },
+        "stderr_path": { "type": "string" },
+        "error": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "authentication",
+                    "authorization",
+                    "throttling",
+                    "model_access",
+                    "invalid_output",
+                    "cli"
+                  ]
+                },
+                "http_status": {
+                  "anyOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                  ]
+                },
+                "retriable": { "type": "boolean" },
+                "safe_message": { "type": "string" }
+              },
+              "required": [
+                "category",
+                "http_status",
+                "retriable",
+                "safe_message"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "session_id",
+        "model",
+        "aws_region",
+        "auth_source",
+        "claude_exit_code",
+        "envelope_path",
+        "stderr_path",
+        "error"
+      ]
+    }
+  },
+  "required": [
+    "status",
+    "task_id",
+    "summary",
+    "decision_rationale",
+    "alternatives_considered",
+    "work_done",
+    "files_changed",
+    "commands_run",
+    "tests",
+    "questions",
+    "risks",
+    "handoff_path",
+    "audit_requested",
+    "next_action"
+  ]
+}

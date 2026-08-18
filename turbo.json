@@ -1,0 +1,16 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "tasks": {
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "inputs": ["src/**", "tsconfig.json", "$TURBO_DEFAULT$"],
+      "outputs": []
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "tsconfig.json", "$TURBO_DEFAULT$"],
+      "outputs": ["dist/**"]
+    }
+  }
+}

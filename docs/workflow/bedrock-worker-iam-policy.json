@@ -1,0 +1,38 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeOpus48UsInferenceProfile",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:us-east-1:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-opus-4-8"
+    },
+    {
+      "Sid": "InvokeOpus48UsFoundationModelsThroughProfile",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-8",
+        "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-opus-4-8",
+        "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-8"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "bedrock:InferenceProfileArn": "arn:aws:bedrock:us-east-1:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-opus-4-8"
+        }
+      }
+    },
+    {
+      "Sid": "InspectOpus48UsInferenceProfile",
+      "Effect": "Allow",
+      "Action": "bedrock:GetInferenceProfile",
+      "Resource": "arn:aws:bedrock:us-east-1:<ACCOUNT_ID>:inference-profile/us.anthropic.claude-opus-4-8"
+    }
+  ]
+}

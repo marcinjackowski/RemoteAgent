@@ -1,0 +1,11 @@
+**/node_modules/**
+**/dist/**
+**/.turbo/**
+**/coverage/**
+pnpm-lock.yaml
+
+# Hand-authored Markdown and the pre-existing worker schema are prose and
+# contracts maintained by hand, not machine-formatted code.
+**/*.md
+scripts/bedrock-worker-report.schema.json
+docs/workflow/bedrock-worker-iam-policy.json

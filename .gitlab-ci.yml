@@ -1,0 +1,61 @@
+# CI foundation for RemoteAgent.
+#
+# Runs the same deterministic checks a developer runs locally. It installs only
+# from the committed lockfile and never fetches secrets: base controls do not
+# require any project credentials.
+image: node:24.19.0-bookworm-slim
+
+stages:
+  - verify
+
+variables:
+  # Pinned package manager, activated via Corepack.
+  PNPM_VERSION: "10.26.1"
+  # Keep the pnpm content-addressable store inside the project for caching.
+  PNPM_STORE_DIR: "$CI_PROJECT_DIR/.pnpm-store"
+
+# Shared setup: enable the pinned pnpm and install from the frozen lockfile.
+.pnpm-setup: &pnpm-setup
+  before_script:
+    - corepack enable
+    - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    - pnpm config set store-dir "$PNPM_STORE_DIR"
+    - pnpm install --frozen-lockfile
+
+cache:
+  key:
+    files:
+      - pnpm-lock.yaml
+  paths:
+    - .pnpm-store
+
+lint:
+  stage: verify
+  <<: *pnpm-setup
+  script:
+    - pnpm run lint
+    - pnpm run format
+
+typecheck:
+  stage: verify
+  <<: *pnpm-setup
+  script:
+    - pnpm run typecheck
+
+test:
+  stage: verify
+  <<: *pnpm-setup
+  script:
+    - pnpm run test
+
+build:
+  stage: verify
+  <<: *pnpm-setup
+  script:
+    - pnpm run build
+
+workflow-validate:
+  stage: verify
+  <<: *pnpm-setup
+  script:
+    - pnpm run workflow:validate

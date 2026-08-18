@@ -1,0 +1,68 @@
+# Checklist audytora
+
+Checklist jest wspólna dla wszystkich tasków. Specyficzny `Audit focus` w pliku
+taska ma pierwszeństwo i rozszerza poniższe punkty.
+
+## 1. Zakres i wymagania
+
+- Czy implementacja realizuje wszystkie kryteria taska?
+- Czy nie wprowadza nieuzgodnionego zakresu albo zmiany architektury?
+- Czy każdy materialny wymóg ma konkretny dowód?
+- Czy wcześniejsze findingi zostały rzeczywiście usunięte?
+
+## 2. Kod i kontrakty
+
+- Przeczytaj pełny diff oraz istotny kod wywołujący i wywoływany.
+- Sprawdź typowanie runtime, błędy, edge cases i kompatybilność schema/version.
+- Szukaj duplikacji źródeł prawdy, implicit defaults i stanów niemożliwych.
+- Sprawdź migracje oraz rollback, jeśli task dotyka danych.
+
+## 3. Trwałość i współbieżność
+
+- Gdzie jest granica transakcji?
+- Co dzieje się przy crash przed/po każdej operacji?
+- Czy retry może powtórzyć side effect?
+- Czy locks/leases używają fencing i mają poprawny timeout?
+- Czy dwa cases pozostają izolowane, a jeden case ma jednego writera?
+
+## 4. Security i privacy
+
+- Czy owner, connection, repo i tool scope są ustalane poza modelem?
+- Czy zewnętrzne treści są traktowane jako niezaufane?
+- Czy sekrety lub PII mogą trafić do promptu, logu, błędu albo fixture?
+- Czy błędy auth/policy failują zamknięcie?
+- Czy destructive paths, shell, network i filesystem mają twarde granice?
+
+## 5. Agent i narzędzia
+
+- Czy model nie jest źródłem autoryzacji ani potwierdzenia wykonania?
+- Czy structured output jest walidowany i wersjonowany?
+- Czy repair/retry nie odtwarza tools lub side effectów?
+- Czy tool output ma provenance, limity i redakcję?
+- Czy checkpoint wystarcza do wznowienia bez poprzedniej sesji?
+
+## 6. Test evidence
+
+- Uruchom wymagane testy samodzielnie.
+- Potwierdź, że test sprawdza zachowanie, a nie tylko mock implementation detail.
+- Sprawdź negatywne ścieżki, concurrency, retry, cancellation i recovery.
+- Zweryfikuj snapshot diff zamiast automatycznie go akceptować.
+- Powiąż wynik z konkretnym kodem/commitem/tree digest.
+
+## 7. Operacyjność
+
+- Czy są wystarczające correlation IDs, metrics i actionable errors?
+- Czy limit, timeout, backpressure, DLQ i kill switch zachowują się jawnie?
+- Czy operator potrafi rozpoznać i naprawić stan bez ręcznej edycji DB?
+- Czy dokumentacja i runbook odpowiadają rzeczywistemu zachowaniu?
+
+## 8. Werdykt
+
+- `PASS`: wszystkie kryteria spełnione, brak unresolved BLOCKER/HIGH/MEDIUM.
+- `CHANGES_REQUIRED`: implementacja jest naprawialna w zakresie taska; findingi
+  zawierają konkretne wymagane zmiany.
+- `BLOCKED`: audyt jest niemożliwy albo potrzebna jest zewnętrzna decyzja/stan.
+
+Brak możliwości uruchomienia kluczowego testu oznacza `NOT_VERIFIED`, nie PASS na
+podstawie samej deklaracji handoffu.
+

@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+WORKER="$SCRIPT_DIR/bedrock-worker"
+IAM_POLICY="$SCRIPT_DIR/../docs/workflow/bedrock-worker-iam-policy.json"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/bedrock-worker-test.XXXXXX")"
+FAKE_BIN="$TEST_ROOT/bin"
+ORIGINAL_PATH="$PATH"
+PASS_COUNT=0
+
+cleanup() {
+  rm -rf -- "$TEST_ROOT"
+}
+trap cleanup EXIT
+
+fail_test() {
+  printf 'not ok - %s\n' "$*" >&2
+  exit 1
+}
+
+pass_test() {
+  PASS_COUNT=$((PASS_COUNT + 1))
+  printf 'ok %s - %s\n' "$PASS_COUNT" "$1"
+}
+
+assert_contains() {
+  local file="$1"
+  local expected="$2"
+  grep -Fq -- "$expected" "$file" || fail_test "$file does not contain: $expected"
+}
+
+assert_not_contains() {
+  local file="$1"
+  local unexpected="$2"
+  if grep -Fq -- "$unexpected" "$file"; then
+    fail_test "$file unexpectedly contains: $unexpected"
+  fi
+}
+
+assert_arg_present() {
+  local file="$1"
+  local expected="$2"
+  grep -Fqx -- "$expected" "$file" || fail_test "argument is missing: $expected"
+}
+
+assert_arg_absent() {
+  local file="$1"
+  local unexpected="$2"
+  if grep -Fqx -- "$unexpected" "$file"; then
+    fail_test "argument is unexpectedly present: $unexpected"
+  fi
+}
+
+assert_jq() {
+  local file="$1"
+  local expression="$2"
+  jq -e "$expression" "$file" >/dev/null || fail_test "jq assertion failed: $expression"
+}
+
+mkdir -p -- "$FAKE_BIN"
+mkdir -p -- "$TEST_ROOT/home/.claude"
+export HOME="$TEST_ROOT/home"
+
+cat >"$FAKE_BIN/uuidgen" <<'FAKE_UUIDGEN'
+#!/usr/bin/env bash
+printf '%s\n' '11111111-2222-4333-8444-555555555555'
+FAKE_UUIDGEN
+
+cat >"$FAKE_BIN/aws" <<'FAKE_AWS'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${FAKE_AWS_ARGS:-}" ]]; then
+  printf '%s\n' "$@" >"$FAKE_AWS_ARGS"
+fi
+if [[ "${FAKE_REQUIRE_BEARER:-0}" == "1" ]] && [[ "${AWS_BEARER_TOKEN_BEDROCK:-}" != "test-bedrock-api-key" ]]; then
+  printf '%s\n' 'missing expected bearer token' >&2
+  exit 3
+fi
+if [[ "${FAKE_AWS_MODE:-success}" == "denied" ]]; then
+  printf '%s\n' 'AccessDenied for arn:aws:iam::111122223333:user/test-secret' >&2
+  exit 254
+fi
+case "${1:-}:${2:-}" in
+  sts:get-caller-identity)
+    printf '%s\n' '{"Account":"111122223333","Arn":"arn:aws:iam::111122223333:user/test-secret"}'
+    ;;
+  bedrock:get-inference-profile)
+    printf '%s\n' '{"inferenceProfileId":"us.anthropic.claude-opus-4-8","status":"ACTIVE"}'
+    ;;
+  *)
+    printf 'unexpected fake aws arguments: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+FAKE_AWS
+
+cat >"$FAKE_BIN/claude" <<'FAKE_CLAUDE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf '%s\n' '2.1.234 (fake)'
+  exit 0
+fi
+if [[ "${FAKE_REQUIRE_BEARER:-0}" == "1" ]] && [[ "${AWS_BEARER_TOKEN_BEDROCK:-}" != "test-bedrock-api-key" ]]; then
+  printf '%s\n' 'missing expected bearer token' >&2
+  exit 3
+fi
+: "${FAKE_CLAUDE_ARGS:?FAKE_CLAUDE_ARGS is required}"
+printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGS"
+case "${FAKE_CLAUDE_MODE:-success}" in
+  success)
+    cat <<'JSON'
+{"type":"result","subtype":"success","is_error":false,"structured_output":{"status":"completed","task_id":null,"summary":"Fake worker completed.","decision_rationale":[],"alternatives_considered":[],"work_done":[],"files_changed":[],"commands_run":[],"tests":[],"questions":[],"risks":[],"handoff_path":null,"audit_requested":false,"next_action":"None."}}
+JSON
+    ;;
+  authorization)
+    printf '%s\n' 'provider stderr for arn:aws:iam::111122223333:user/test-secret' >&2
+    cat <<'JSON'
+{"type":"result","subtype":"success","is_error":true,"api_error_status":403,"result":"Failed to authenticate. API Error: User arn:aws:iam::111122223333:user/test-secret is not authorized to perform bedrock:InvokeModelWithResponseStream on arn:aws:bedrock:us-east-1:111122223333:inference-profile/us.anthropic.claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":0},"total_cost_usd":0}
+JSON
+    exit 1
+    ;;
+  authentication)
+    printf '%s\n' '{"type":"result","is_error":true,"api_error_status":401,"result":"AWS credentials are invalid"}'
+    exit 1
+    ;;
+  throttling)
+    printf '%s\n' '{"type":"result","is_error":true,"api_error_status":429,"result":"ThrottlingException: too many requests"}'
+    exit 1
+    ;;
+  model_access)
+    printf '%s\n' '{"type":"result","is_error":true,"api_error_status":400,"result":"ValidationException: inference profile is unavailable"}'
+    exit 1
+    ;;
+  cli)
+    printf '%s\n' '{"type":"result","is_error":true,"result":"Unexpected Claude Code failure"}'
+    exit 1
+    ;;
+  malformed)
+    printf '%s\n' 'not-json'
+    exit 1
+    ;;
+  *)
+    printf 'unknown FAKE_CLAUDE_MODE: %s\n' "$FAKE_CLAUDE_MODE" >&2
+    exit 2
+    ;;
+esac
+FAKE_CLAUDE
+
+chmod 700 "$FAKE_BIN/uuidgen" "$FAKE_BIN/aws" "$FAKE_BIN/claude"
+
+export PATH="$FAKE_BIN:$ORIGINAL_PATH"
+
+DOCTOR_OUT="$TEST_ROOT/doctor.out"
+DOCTOR_ERR="$TEST_ROOT/doctor.err"
+"$WORKER" --doctor >"$DOCTOR_OUT" 2>"$DOCTOR_ERR"
+assert_contains "$DOCTOR_OUT" 'schema=valid'
+assert_contains "$DOCTOR_OUT" 'aws_credentials=not_checked_until_invocation'
+assert_contains "$DOCTOR_OUT" 'bedrock_auth_source=aws_credential_chain'
+pass_test 'doctor validates local prerequisites without AWS'
+
+cat >"$HOME/.claude/settings.json" <<'FAKE_SETTINGS'
+{
+  "env": {
+    "AWS_BEARER_TOKEN_BEDROCK": "test-bedrock-api-key"
+  }
+}
+FAKE_SETTINGS
+
+CHECK_OUT="$TEST_ROOT/check.out"
+CHECK_ERR="$TEST_ROOT/check.err"
+FAKE_AWS_ARGS="$TEST_ROOT/aws.args" FAKE_REQUIRE_BEARER=1 \
+  "$WORKER" --check-bedrock >"$CHECK_OUT" 2>"$CHECK_ERR"
+assert_contains "$CHECK_OUT" 'bedrock_auth_source=claude_user_settings_api_key'
+assert_contains "$CHECK_OUT" 'bedrock_api_key=present'
+assert_contains "$CHECK_OUT" 'bedrock_profile=accessible'
+assert_contains "$CHECK_OUT" 'bedrock_invoke_permission=not_verified_without_inference'
+assert_arg_present "$TEST_ROOT/aws.args" 'us.anthropic.claude-opus-4-8'
+pass_test 'Bedrock preflight loads the API key without exposing it'
+
+DENIED_OUT="$TEST_ROOT/check-denied.out"
+DENIED_ERR="$TEST_ROOT/check-denied.err"
+set +e
+FAKE_AWS_MODE=denied "$WORKER" --check-bedrock >"$DENIED_OUT" 2>"$DENIED_ERR"
+DENIED_EXIT=$?
+set -e
+[[ "$DENIED_EXIT" -ne 0 ]] || fail_test 'denied preflight unexpectedly succeeded'
+assert_contains "$DENIED_ERR" 'Bedrock API key cannot access the configured profile'
+assert_not_contains "$DENIED_ERR" 'arn:aws'
+assert_not_contains "$DENIED_ERR" '111122223333'
+pass_test 'preflight does not leak AWS identity details'
+
+assert_jq "$IAM_POLICY" \
+  '[.Statement[].Action | if type == "array" then .[] else . end] | index("bedrock:InvokeModelWithResponseStream") != null'
+assert_jq "$IAM_POLICY" \
+  '[.Statement[].Resource | if type == "array" then .[] else . end] | map(select(contains("foundation-model/anthropic.claude-opus-4-8"))) | length == 3'
+assert_jq "$IAM_POLICY" \
+  '[.Statement[].Resource | if type == "array" then .[] else . end] | map(select(contains("<ACCOUNT_ID>"))) | length == 2'
+assert_jq "$IAM_POLICY" \
+  '[.Statement[] | select(.Condition.StringEquals."bedrock:InferenceProfileArn" != null)] | length == 1'
+pass_test 'IAM template pins the profile, actions and three destination Regions'
+
+SUCCESS_OUT="$TEST_ROOT/success.json"
+SUCCESS_ERR="$TEST_ROOT/success.err"
+SUCCESS_ARGS="$TEST_ROOT/success.args"
+FAKE_CLAUDE_ARGS="$SUCCESS_ARGS" \
+FAKE_REQUIRE_BEARER=1 \
+REMOTE_AGENT_WORKER_STATE_DIR="$TEST_ROOT/state-success" \
+  "$WORKER" --readonly --name smoke --new -- 'transport test' >"$SUCCESS_OUT" 2>"$SUCCESS_ERR"
+assert_jq "$SUCCESS_OUT" '.status == "completed"'
+assert_jq "$SUCCESS_OUT" '._worker.model == "us.anthropic.claude-opus-4-8"'
+assert_jq "$SUCCESS_OUT" '._worker.aws_region == "us-east-1"'
+assert_jq "$SUCCESS_OUT" '._worker.auth_source == "claude_user_settings_api_key"'
+assert_jq "$SUCCESS_OUT" '._worker.claude_exit_code == 0 and ._worker.error == null'
+assert_arg_present "$SUCCESS_ARGS" '--autocompact'
+assert_arg_present "$SUCCESS_ARGS" '1M'
+assert_arg_present "$SUCCESS_ARGS" '--permission-mode'
+assert_arg_present "$SUCCESS_ARGS" 'plan'
+assert_arg_present "$SUCCESS_ARGS" 'Read,Glob,Grep'
+assert_arg_absent "$SUCCESS_ARGS" 'Bash(git push:*)'
+pass_test 'successful read-only invocation returns enriched structured report'
+
+RAW_OUT="$TEST_ROOT/raw.json"
+RAW_STATE="$TEST_ROOT/state-raw"
+FAKE_CLAUDE_ARGS="$TEST_ROOT/raw.args" \
+REMOTE_AGENT_WORKER_STATE_DIR="$RAW_STATE" \
+  "$WORKER" --raw --readonly --name raw --new -- 'raw test' >"$RAW_OUT" 2>/dev/null
+assert_jq "$RAW_OUT" '.structured_output.status == "completed"'
+RAW_REPORT="$(find "$RAW_STATE/raw/reports" -type f -name '*.json' -print)"
+[[ -n "$RAW_REPORT" ]] || fail_test 'raw mode did not persist a report'
+assert_jq "$RAW_REPORT" '.status == "completed" and ._worker.error == null'
+pass_test 'raw mode still persists the structured report'
+
+LOCAL_ARGS="$TEST_ROOT/local.args"
+FAKE_CLAUDE_ARGS="$LOCAL_ARGS" \
+REMOTE_AGENT_WORKER_STATE_DIR="$TEST_ROOT/state-local" \
+  "$WORKER" --name local --new -- 'local test' >/dev/null 2>/dev/null
+assert_arg_absent "$LOCAL_ARGS" 'Bash(git push:*)'
+assert_arg_absent "$LOCAL_ARGS" 'Bash(glab mr:*)'
+
+REMOTE_ARGS="$TEST_ROOT/remote.args"
+FAKE_CLAUDE_ARGS="$REMOTE_ARGS" \
+REMOTE_AGENT_WORKER_STATE_DIR="$TEST_ROOT/state-remote" \
+REMOTE_AGENT_WORKER_ALLOW_REMOTE=1 \
+  "$WORKER" --name remote --new -- 'remote test' >/dev/null 2>/dev/null
+assert_arg_present "$REMOTE_ARGS" 'Bash(git push:*)'
+assert_arg_present "$REMOTE_ARGS" 'Bash(glab mr:*)'
+pass_test 'remote Git operations require explicit opt-in'
+
+AUTH_OUT="$TEST_ROOT/authorization.json"
+AUTH_ERR="$TEST_ROOT/authorization.err"
+set +e
+FAKE_CLAUDE_MODE=authorization \
+FAKE_CLAUDE_ARGS="$TEST_ROOT/authorization.args" \
+REMOTE_AGENT_WORKER_STATE_DIR="$TEST_ROOT/state-authorization" \
+  "$WORKER" --readonly --name authorization --new -- 'auth test' >"$AUTH_OUT" 2>"$AUTH_ERR"
+AUTH_EXIT=$?
+set -e
+[[ "$AUTH_EXIT" -ne 0 ]] || fail_test 'authorization error unexpectedly returned exit 0'
+assert_jq "$AUTH_OUT" '.status == "blocked"'
+assert_jq "$AUTH_OUT" '._worker.error.category == "authorization"'
+assert_jq "$AUTH_OUT" '._worker.error.http_status == 403'
+assert_jq "$AUTH_OUT" '._worker.error.retriable == false'
+assert_not_contains "$AUTH_OUT" 'arn:aws'
+assert_not_contains "$AUTH_OUT" '111122223333'
+assert_not_contains "$AUTH_ERR" 'arn:aws'
+assert_not_contains "$AUTH_ERR" '111122223333'
+AUTH_ENVELOPE="$(jq -r '._worker.envelope_path' "$AUTH_OUT")"
+AUTH_STDERR="$(jq -r '._worker.stderr_path' "$AUTH_OUT")"
+assert_contains "$AUTH_ENVELOPE" 'arn:aws'
+assert_contains "$AUTH_STDERR" 'arn:aws'
+if ENVELOPE_MODE="$(stat -f '%Lp' "$AUTH_ENVELOPE" 2>/dev/null)"; then
+  :
+else
+  ENVELOPE_MODE="$(stat -c '%a' "$AUTH_ENVELOPE")"
+fi
+[[ "$ENVELOPE_MODE" == "600" ]] || fail_test "raw envelope mode is $ENVELOPE_MODE, expected 600"
+if STDERR_MODE="$(stat -f '%Lp' "$AUTH_STDERR" 2>/dev/null)"; then
+  :
+else
+  STDERR_MODE="$(stat -c '%a' "$AUTH_STDERR")"
+fi
+[[ "$STDERR_MODE" == "600" ]] || fail_test "raw stderr mode is $STDERR_MODE, expected 600"
+pass_test 'authorization failures are blocked, sanitized and retained locally'
+
+for MODE_AND_EXPECTATION in \
+  'authentication:blocked:authentication:false' \
+  'throttling:blocked:throttling:true' \
+  'model_access:blocked:model_access:false' \
+  'cli:failed:cli:false' \
+  'malformed:failed:invalid_output:false'; do
+  IFS=: read -r FAKE_MODE EXPECTED_STATUS EXPECTED_CATEGORY EXPECTED_RETRIABLE <<EOF
+$MODE_AND_EXPECTATION
+EOF
+  MODE_OUT="$TEST_ROOT/$FAKE_MODE.json"
+  set +e
+  FAKE_CLAUDE_MODE="$FAKE_MODE" \
+  FAKE_CLAUDE_ARGS="$TEST_ROOT/$FAKE_MODE.args" \
+  REMOTE_AGENT_WORKER_STATE_DIR="$TEST_ROOT/state-$FAKE_MODE" \
+    "$WORKER" --readonly --name "$FAKE_MODE" --new -- 'error test' >"$MODE_OUT" 2>/dev/null
+  MODE_EXIT=$?
+  set -e
+  [[ "$MODE_EXIT" -ne 0 ]] || fail_test "$FAKE_MODE unexpectedly returned exit 0"
+  assert_jq "$MODE_OUT" ".status == \"$EXPECTED_STATUS\""
+  assert_jq "$MODE_OUT" "._worker.error.category == \"$EXPECTED_CATEGORY\""
+  assert_jq "$MODE_OUT" "._worker.error.retriable == $EXPECTED_RETRIABLE"
+done
+pass_test 'common Bedrock and CLI failures have deterministic categories'
+
+SESSION_STATE="$TEST_ROOT/state-session"
+SESSION_ARGS="$TEST_ROOT/session.args"
+FAKE_CLAUDE_ARGS="$SESSION_ARGS" REMOTE_AGENT_WORKER_STATE_DIR="$SESSION_STATE" \
+  "$WORKER" --readonly --name session -- 'first' >/dev/null 2>/dev/null
+assert_arg_present "$SESSION_ARGS" '--session-id'
+FAKE_CLAUDE_ARGS="$SESSION_ARGS" REMOTE_AGENT_WORKER_STATE_DIR="$SESSION_STATE" \
+  "$WORKER" --readonly --name session -- 'second' >/dev/null 2>/dev/null
+assert_arg_present "$SESSION_ARGS" '--resume'
+FAKE_CLAUDE_ARGS="$SESSION_ARGS" REMOTE_AGENT_WORKER_STATE_DIR="$SESSION_STATE" \
+  "$WORKER" --readonly --name session --new -- 'third' >/dev/null 2>/dev/null
+assert_arg_present "$SESSION_ARGS" '--session-id'
+ARCHIVED_COUNT="$(find "$SESSION_STATE/session/archived-sessions" -type f | wc -l | tr -d ' ')"
+[[ "$ARCHIVED_COUNT" == "1" ]] || fail_test "expected one archived session, found $ARCHIVED_COUNT"
+pass_test 'worker sessions resume and archive deterministically'
+
+printf '1..%s\n' "$PASS_COUNT"

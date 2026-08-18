@@ -1,0 +1,79 @@
+# RemoteAgent
+
+RemoteAgent będzie prywatnym, Discord-first systemem wspierającym codzienną
+pracę: odbiera zdarzenia z Jira, Gmaila, Google Calendar i GitLaba, prowadzi
+trwałe sprawy, rozmawia z właścicielem i realizuje pełny engineering loop przy
+użyciu Amazon Bedrock.
+
+Docelowy przepływ dla pracy programistycznej:
+
+```text
+Jira -> Discord thread -> decyzje -> plan -> branch/workspace -> implementacja
+     -> testy i snapshoty -> niezależne review -> poprawki -> commity
+     -> GitLab Merge Request -> pipeline -> dalsza rozmowa
+```
+
+## Start pracy
+
+Agent rozpoczynający lub wznawiający pracę musi zacząć od `AGENTS.md`.
+
+Claude Code automatycznie otrzymuje zgodny bootstrap przez `CLAUDE.md`, który
+importuje te same nadrzędne instrukcje i definiuje repozytoryjne znaczenie
+`continue`.
+
+- Plan systemu: `docs/MASTER_PLAN.md`
+- Kolejka tasków: `docs/tasks/TASK_INDEX.md`
+- Protokół wykonania i audytu: `docs/workflow/EXECUTION_AND_AUDIT.md`
+- Shell worker Bedrock Opus 4.8: `docs/workflow/BEDROCK_WORKER.md`
+- Handoffs: `docs/handoffs/`
+- Audyty: `docs/audits/`
+- Decyzje architektoniczne: `docs/decisions/`
+
+## Najprostszy cykl użytkownika
+
+1. Do agenta implementującego napisz `continue`.
+2. Gdy agent zwróci `STOP — RA-... oczekuje na audyt`, poproś model audytujący:
+   `Wykonaj audyt RA-... zgodnie z AGENTS.md`.
+3. Po zapisaniu audytu wróć do implementera i napisz wyłącznie `continue`.
+4. Implementer sam odczyta werdykt, poprawi findingi albo rozpocznie następny task.
+
+## Rozwój (foundation)
+
+Wymagania: Node `24.19.0` (przypięte w `engines.node` i `.nvmrc`) oraz `pnpm`
+przez Corepack. Package manager jest przypięty polem `packageManager`
+(`pnpm@10.26.1`); ta sama wersja Node jest używana w CI
+(`node:24.19.0-bookworm-slim`).
+
+Instalacja z czystego checkoutu jednym poleceniem:
+
+```bash
+pnpm install --frozen-lockfile
+```
+
+Deterministyczne komendy z roota:
+
+```bash
+pnpm run lint            # ESLint (flat config) + granice zależności
+pnpm run typecheck       # tsc dla narzędzi + turbo run typecheck per workspace
+pnpm run test            # Vitest (unit + guardrails + workflow)
+pnpm run build           # turbo run build per workspace
+pnpm run workflow:validate  # spójność docs/tasks/TASK_INDEX.md
+pnpm run format          # Prettier --check
+pnpm run check           # wszystkie powyższe po kolei
+```
+
+Lokalna infrastruktura (opcjonalnie): `docker compose up -d postgres`.
+
+Struktura workspace jest zdefiniowana w `pnpm-workspace.yaml`:
+
+- `apps/*` — osobno wdrażalne usługi (na tym etapie szkielety bez logiki);
+- `packages/*` — współdzielone biblioteki domenowe (szkielety);
+- `infra/*` — infrastruktura (CDK, szkielet).
+
+Granice zależności: `apps` nie importują `apps`, `packages` nie importują `apps`,
+`infra` zależy tylko od `packages`. Reguła jest egzekwowana przez ESLint i
+chroniona celowo failującym fixture w `test/guardrails`. Wybory toolingowe i
+przypięte wersje opisuje `docs/decisions/ADR-0001-foundation-tooling.md`.
+
+Repozytorium poza fundamentem zawiera plan wykonania i kontrakt współpracy. Kod
+produktowy powstaje w kolejnych, audytowanych taskach.
