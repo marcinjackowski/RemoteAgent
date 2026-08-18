@@ -47,6 +47,19 @@ interface HandoffSpec {
 
 interface RepoSpec {
   rows: RowSpec[];
+  /**
+   * Literal body-row (or trailing-content) lines appended verbatim after the
+   * generated `spec.rows`, before the terminating blank line. Use this to inject
+   * malformed rows, gaps, unrelated tables or extra sections into the fixture.
+   */
+  rawRows?: string[];
+  /**
+   * Fully raw TASK_INDEX.md content, bypassing the header/row builder entirely.
+   * When set, `rows`/`rawRows` are ignored for the index file (but `rows` still
+   * drives the default task-file list). Use this for header/separator/section
+   * anchoring cases that must control every line.
+   */
+  rawIndex?: string;
   /** Task ids for which a docs/tasks/<id>.md file should be created. */
   taskFiles?: string[];
   /** Handoffs to create; a bare string means a single plain HANDOFF-01 for that id. */
@@ -61,20 +74,25 @@ function buildRepo(spec: RepoSpec): string {
   const tasksDir = join(root, "docs", "tasks");
   mkdirSync(tasksDir, { recursive: true });
 
-  const header = [
-    "# Task Index",
-    "",
-    "## Queue",
-    "",
-    "| Order | Task | Status | Depends on | Milestone |",
-    "|---:|---|---|---|---|",
-  ];
-  const body = spec.rows.map((r) => {
-    const link = r.linkTarget ?? `${r.id}.md`;
-    const deps = r.dependsOn && r.dependsOn.length > 0 ? r.dependsOn.join(", ") : "—";
-    return `| ${r.order} | [${r.id}](${link}) Title | ${r.status} | ${deps} | M0 |`;
-  });
-  writeFileSync(join(tasksDir, "TASK_INDEX.md"), [...header, ...body, ""].join("\n"));
+  if (spec.rawIndex !== undefined) {
+    writeFileSync(join(tasksDir, "TASK_INDEX.md"), spec.rawIndex);
+  } else {
+    const header = [
+      "# Task Index",
+      "",
+      "## Queue",
+      "",
+      "| Order | Task | Status | Depends on | Milestone |",
+      "|---:|---|---|---|---|",
+    ];
+    const body = spec.rows.map((r) => {
+      const link = r.linkTarget ?? `${r.id}.md`;
+      const deps = r.dependsOn && r.dependsOn.length > 0 ? r.dependsOn.join(", ") : "—";
+      return `| ${r.order} | [${r.id}](${link}) Title | ${r.status} | ${deps} | M0 |`;
+    });
+    const rawRows = spec.rawRows ?? [];
+    writeFileSync(join(tasksDir, "TASK_INDEX.md"), [...header, ...body, ...rawRows, ""].join("\n"));
+  }
 
   const taskFiles = spec.taskFiles ?? spec.rows.map((r) => r.id);
   for (const id of taskFiles) writeFileSync(join(tasksDir, `${id}.md`), `# ${id}\n`);
@@ -609,6 +627,576 @@ describe("validate — disallowed (malformed) artifact entries", () => {
     const result = validate(root);
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.includes("README.md is not an allowed HANDOFF"))).toBe(true);
+  });
+});
+
+describe("validate — AUDIT-06 audit/handoff revision causality", () => {
+  // Negatives: the newest artifact contradicts the status's place in the cycle,
+  // so a stale verdict must not certify newer, unaudited work.
+  it("rejects AWAITING_AUDIT whose latest handoff is older than the latest audit", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+      audits: [{ id: "RA-001", rev: 2, verdict: "PASS" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.includes(
+          "is AWAITING_AUDIT but latest handoff revision 1 is not newer than latest audit revision 2",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects AUDIT_PASSED backed by a stale PASS audit older than the latest handoff", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: [{ id: "RA-001", rev: 2 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "PASS" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.includes(
+          "latest audit revision 1 is older than latest handoff revision 2; that handoff has not been audited",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects DONE backed by a stale PASS audit older than the latest handoff", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "DONE" }],
+      handoffs: [{ id: "RA-001", rev: 2 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "PASS" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.includes(
+          "latest audit revision 1 is older than latest handoff revision 2; that handoff has not been audited",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects CHANGES_REQUESTED backed by a stale CHANGES_REQUIRED audit older than the latest handoff", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "CHANGES_REQUESTED" }],
+      handoffs: [{ id: "RA-001", rev: 2 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "CHANGES_REQUIRED" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.includes(
+          "latest audit revision 1 is older than latest handoff revision 2; that handoff has not been audited",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  // Positive boundaries: the newest artifact is consistent with the status.
+  it("accepts AWAITING_AUDIT with a fresh handoff and no audit yet", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+    });
+    expect(validate(root).ok).toBe(true);
+  });
+
+  it("accepts AWAITING_AUDIT whose handoff rev6 post-dates audit rev5", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [{ id: "RA-001", rev: 6 }],
+      audits: [{ id: "RA-001", rev: 5, verdict: "CHANGES_REQUIRED" }],
+    });
+    expect(validate(root).ok).toBe(true);
+  });
+
+  it("accepts AUDIT_PASSED with an equal handoff/audit revision PASS", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "PASS" }],
+    });
+    expect(validate(root).ok).toBe(true);
+  });
+
+  it("accepts AUDIT_PASSED whose audit rev2 PASS post-dates handoff rev1", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+      audits: [{ id: "RA-001", rev: 2, verdict: "PASS" }],
+    });
+    expect(validate(root).ok).toBe(true);
+  });
+
+  it("accepts CHANGES_REQUESTED with an equal rev2 handoff/audit CHANGES_REQUIRED", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "CHANGES_REQUESTED" }],
+      handoffs: [{ id: "RA-001", rev: 2 }],
+      audits: [{ id: "RA-001", rev: 2, verdict: "CHANGES_REQUIRED" }],
+    });
+    expect(validate(root).ok).toBe(true);
+  });
+});
+
+describe("validate — AUDIT-06 dependency-status gating", () => {
+  // Positives: the dependency graph is consistent with each dependent's status.
+  it("accepts a task with no dependencies as READY", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "READY" }],
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a DONE dependency unblocking a dependent that is READY, IN_PROGRESS or DONE", () => {
+    // RA-001 is DONE (handoff + PASS audit); each variant of the dependent is
+    // legal because its only dependency is delivered. The DONE variant carries
+    // its own handoff + PASS audit so the assertion isolates dependency gating.
+    const forDependent = (status: string) =>
+      buildRepo({
+        rows: [
+          { order: 1, id: "RA-001", status: "DONE" },
+          { order: 2, id: "RA-002", status, dependsOn: ["RA-001"] },
+        ],
+        handoffs: status === "DONE" ? ["RA-001", "RA-002"] : ["RA-001"],
+        audits: status === "DONE" ? ["RA-001", "RA-002"] : ["RA-001"],
+      });
+
+    for (const status of ["READY", "IN_PROGRESS", "DONE"]) {
+      const result = validate(forDependent(status));
+      expect(result.errors).toEqual([]);
+      expect(result.ok).toBe(true);
+    }
+  });
+
+  it("accepts BLOCKED_BY_DEPENDENCIES while one of several dependencies is unfinished", () => {
+    // RA-001 is DONE but RA-002 is still READY, so RA-003 legitimately waits.
+    const root = buildRepo({
+      rows: [
+        { order: 1, id: "RA-001", status: "DONE" },
+        { order: 2, id: "RA-002", status: "READY" },
+        {
+          order: 3,
+          id: "RA-003",
+          status: "BLOCKED_BY_DEPENDENCIES",
+          dependsOn: ["RA-001", "RA-002"],
+        },
+      ],
+      handoffs: ["RA-001"],
+      audits: ["RA-001"],
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts BLOCKED with pending dependencies given a Decision Request provenance", () => {
+    // BLOCKED is exempt from the dependency gate; the newest artifact is a
+    // handoff declaring a Decision Request, so the block is documented.
+    const root = buildRepo({
+      rows: [
+        { order: 1, id: "RA-001", status: "READY" },
+        { order: 2, id: "RA-002", status: "BLOCKED", dependsOn: ["RA-001"] },
+      ],
+      handoffs: [{ id: "RA-002", rev: 1, decisionRequest: true }],
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts BLOCKED with completed dependencies given a Decision Request provenance", () => {
+    const root = buildRepo({
+      rows: [
+        { order: 1, id: "RA-001", status: "DONE" },
+        { order: 2, id: "RA-002", status: "BLOCKED", dependsOn: ["RA-001"] },
+      ],
+      handoffs: ["RA-001", { id: "RA-002", rev: 1, decisionRequest: true }],
+      audits: ["RA-001"],
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  // Negatives: the status contradicts the delivery state of its dependencies.
+  it("rejects a READY dependent whose dependency is only READY", () => {
+    const root = buildRepo({
+      rows: [
+        { order: 1, id: "RA-001", status: "READY" },
+        { order: 2, id: "RA-002", status: "READY", dependsOn: ["RA-001"] },
+      ],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.includes("depends on unfinished task(s) RA-001 (READY); every dependency must be DONE"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an IN_PROGRESS dependent whose dependency is only AUDIT_PASSED (not DONE)", () => {
+    // AUDIT_PASSED is a passed audit but not yet DONE, so it does not unblock work.
+    const root = buildRepo({
+      rows: [
+        { order: 1, id: "RA-001", status: "AUDIT_PASSED" },
+        { order: 2, id: "RA-002", status: "IN_PROGRESS", dependsOn: ["RA-001"] },
+      ],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", verdict: "PASS" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) =>
+        e.includes(
+          "depends on unfinished task(s) RA-001 (AUDIT_PASSED); every dependency must be DONE",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects BLOCKED_BY_DEPENDENCIES when every dependency is DONE (stale)", () => {
+    const root = buildRepo({
+      rows: [
+        { order: 1, id: "RA-001", status: "DONE" },
+        { order: 2, id: "RA-002", status: "BLOCKED_BY_DEPENDENCIES", dependsOn: ["RA-001"] },
+      ],
+      handoffs: ["RA-001"],
+      audits: ["RA-001"],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.includes("has no unfinished dependency; it should be READY")),
+    ).toBe(true);
+  });
+
+  it("rejects BLOCKED_BY_DEPENDENCIES with zero dependencies", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED_BY_DEPENDENCIES" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.includes("has no unfinished dependency; it should be READY")),
+    ).toBe(true);
+  });
+
+  it("reports an unknown dependency for BLOCKED_BY_DEPENDENCIES without a false should-be-READY hint", () => {
+    // An unknown dependency's status is unknowable, so readiness cannot be
+    // concluded: the unknown-dependency error fires, the "should be READY" does not.
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED_BY_DEPENDENCIES", dependsOn: ["RA-999"] }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("depends on unknown task RA-999"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("should be READY"))).toBe(false);
+  });
+});
+
+describe("validate — AUDIT-06 strict Queue grammar", () => {
+  // Canonical Queue header/separator, reused so body-line numbers are stable:
+  // line 1 "# Task Index", 2 "", 3 "## Queue", 4 "", 5 HEADER, 6 SEP, 7+ body.
+  const HEADER = "| Order | Task | Status | Depends on | Milestone |";
+  const SEP = "|---:|---|---|---|---|";
+  const queueDoc = (...bodyLines: string[]): string =>
+    ["# Task Index", "", "## Queue", "", HEADER, SEP, ...bodyLines, ""].join("\n");
+  const row = (order: string, id: string, status: string, deps: string): string =>
+    `| ${order} | [${id}](${id}.md) Title | ${status} | ${deps} | M0 |`;
+  /** Find an error carrying every expected fragment (line, value, message). */
+  const errorWith = (result: { errors: readonly string[] }, ...fragments: string[]): boolean =>
+    result.errors.some((e) => fragments.every((f) => e.includes(f)));
+
+  it("rejects a duplicate Order 1, reporting the second row's line and value", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001", "RA-002"],
+      rawIndex: queueDoc(row("1", "RA-001", "READY", "—"), row("1", "RA-002", "READY", "—")),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      errorWith(result, "TASK_INDEX.md:8", "Queue Order 1 is out of sequence; expected 2"),
+    ).toBe(true);
+  });
+
+  it("rejects a zero Order as non-positive, with line and offending value", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: queueDoc(row("0", "RA-001", "READY", "—")),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:7", 'Queue Order "0" is not a positive integer')).toBe(
+      true,
+    );
+  });
+
+  it("rejects a gap in orders (1 then 3), reporting the out-of-sequence line and value", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001", "RA-002"],
+      rawIndex: queueDoc(row("1", "RA-001", "READY", "—"), row("3", "RA-002", "READY", "—")),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      errorWith(result, "TASK_INDEX.md:8", "Queue Order 3 is out of sequence; expected 2"),
+    ).toBe(true);
+  });
+
+  it("rejects a nonnumeric Order 'one' on a row containing RA-001", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: queueDoc(row("one", "RA-001", "READY", "—")),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      errorWith(result, "TASK_INDEX.md:7", 'Queue Order "one" is not a positive integer'),
+    ).toBe(true);
+  });
+
+  it("rejects a malformed short body row with the wrong cell count and its line", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: queueDoc("| 1 | [RA-001](RA-001.md) Title | READY |"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:7", "expected exactly 5")).toBe(true);
+  });
+
+  it("rejects a dependency RA-02 as an invalid token, with line and value", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: queueDoc(row("1", "RA-001", "READY", "RA-02")),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      errorWith(result, "TASK_INDEX.md:7", 'Queue Depends on contains an invalid token "RA-02"'),
+    ).toBe(true);
+  });
+
+  it("rejects junk around a valid dependency id (foo RA-001)", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: queueDoc(row("1", "RA-001", "READY", "foo RA-001")),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      errorWith(
+        result,
+        "TASK_INDEX.md:7",
+        'Queue Depends on contains an invalid token "foo RA-001"',
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a duplicate dependency RA-001, RA-001, with line and value", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001", "RA-002"],
+      rawIndex: queueDoc(
+        row("1", "RA-001", "READY", "—"),
+        row("2", "RA-002", "BLOCKED_BY_DEPENDENCIES", "RA-001, RA-001"),
+      ),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(
+      errorWith(result, "TASK_INDEX.md:8", 'Queue Depends on lists duplicate dependency "RA-001"'),
+    ).toBe(true);
+  });
+
+  it("rejects a missing ## Queue even when an identical table exists under another heading", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Backlog",
+        "",
+        HEADER,
+        SEP,
+        row("1", "RA-001", "READY", "—"),
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "no `## Queue` section found")).toBe(true);
+  });
+
+  it("rejects a wrong five-column header, reporting the header line", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Queue",
+        "",
+        "| Order | Task | Status | Milestone |",
+        "|---|---|---|---|",
+        "| 1 | [RA-001](RA-001.md) Title | READY | M0 |",
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:5", "must open with the header")).toBe(true);
+  });
+
+  it("rejects a malformed separator with the wrong cell count, reporting its line", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Queue",
+        "",
+        HEADER,
+        "|---|---|---|",
+        row("1", "RA-001", "READY", "—"),
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:6", "must have exactly 5 cells")).toBe(true);
+  });
+
+  it("rejects an empty Queue body, reporting the expected first-body line", () => {
+    const root = buildRepo({ rows: [], taskFiles: [], rawIndex: queueDoc() });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:7", "has no body rows")).toBe(true);
+  });
+
+  it("does not turn a numeric RA row in an unrelated table outside Queue into a task", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Queue",
+        "",
+        HEADER,
+        SEP,
+        row("1", "RA-001", "READY", "—"),
+        "",
+        "## Reference",
+        "",
+        HEADER,
+        SEP,
+        row("1", "RA-999", "READY", "—"),
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(true);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows.some((r) => r.id === "RA-999")).toBe(false);
+    expect(result.errors.some((e) => e.includes("RA-999"))).toBe(false);
+  });
+
+  it("accepts exact contiguous orders with strict em dash and comma dependency cells", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001", "RA-002", "RA-003"],
+      rawIndex: queueDoc(
+        row("1", "RA-001", "READY", "—"),
+        row("2", "RA-002", "BLOCKED_BY_DEPENDENCIES", "RA-001"),
+        row("3", "RA-003", "BLOCKED_BY_DEPENDENCIES", "RA-001, RA-002"),
+      ),
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.rows).toHaveLength(3);
+  });
+  it("rejects a header missing its trailing outer pipe, reporting the header line", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Queue",
+        "",
+        "| Order | Task | Status | Depends on | Milestone",
+        SEP,
+        row("1", "RA-001", "READY", "—"),
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:5", "must open with the header")).toBe(true);
+  });
+
+  it("rejects a separator missing its trailing outer pipe, reporting its line", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Queue",
+        "",
+        HEADER,
+        "|---:|---|---|---|---",
+        row("1", "RA-001", "READY", "—"),
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:6", "must have exactly 5 cells")).toBe(true);
+  });
+
+  it("rejects a five-cell separator whose one cell has only a single dash", () => {
+    const root = buildRepo({
+      rows: [],
+      taskFiles: ["RA-001"],
+      rawIndex: [
+        "# Task Index",
+        "",
+        "## Queue",
+        "",
+        HEADER,
+        "|---:|-|---|---|---|",
+        row("1", "RA-001", "READY", "—"),
+        "",
+      ].join("\n"),
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(errorWith(result, "TASK_INDEX.md:6", "must have exactly 5 cells")).toBe(true);
   });
 });
 

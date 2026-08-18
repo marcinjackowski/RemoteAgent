@@ -5,6 +5,13 @@
  * stays internally consistent:
  *
  *   - every task id is well formed and unique;
+ *   - the operational task list lives ONLY in the `## Queue` section: its table
+ *     obeys a closed grammar (the exact five-column header as the first non-empty
+ *     table content, an exact five-cell separator row, at least one body row,
+ *     every body row exactly five cells, orders positive and forming a contiguous
+ *     1..N sequence, and a `Depends on` cell that is either the em dash or
+ *     comma-separated RA-NNN tokens with no junk or duplicates) — no body row is
+ *     silently skipped, and numeric rows in unrelated tables never become tasks;
  *   - every table link and task file actually exists;
  *   - every status is a known status;
  *   - every dependency references an existing task;
@@ -47,6 +54,22 @@ const STATUSES_REQUIRING_HANDOFF = new Set<string>([
 
 /** Statuses that can only be reached after at least one audit verdict exists. */
 const STATUSES_REQUIRING_AUDIT = new Set<string>(["CHANGES_REQUESTED", "AUDIT_PASSED", "DONE"]);
+
+/**
+ * Statuses that require every existing dependency to already be `DONE`.
+ *
+ * These are the executable and terminal states a task can only enter once its
+ * prerequisites are delivered. `BLOCKED_BY_DEPENDENCIES` (still waiting) and
+ * `BLOCKED` (documented block allowed from any state) are intentionally absent.
+ */
+const STATUSES_REQUIRING_DEPS_DONE = new Set<string>([
+  "READY",
+  "IN_PROGRESS",
+  "AWAITING_AUDIT",
+  "CHANGES_REQUESTED",
+  "AUDIT_PASSED",
+  "DONE",
+]);
 
 /** The only verdicts an audit document may declare. */
 export const AUDIT_VERDICTS = ["PASS", "CHANGES_REQUIRED", "BLOCKED"] as const;
@@ -105,11 +128,40 @@ function extractTaskIds(cell: string): string[] {
   return matches ? [...matches] : [];
 }
 
+/** Build a {@link TaskRow} from one already-split body row and its 1-based line. */
+function rowFromCells(cells: readonly string[], order: number, line: number): TaskRow {
+  const taskCell = cells[1] ?? "";
+  const statusCell = cells[2] ?? "";
+  const dependsCell = cells[3] ?? "";
+
+  const ids = extractTaskIds(taskCell);
+  const id = ids[0] ?? "";
+  const linkMatch = taskCell.match(/\]\(([^)]+)\)/);
+  const linkTarget = linkMatch?.[1] ?? "";
+
+  return {
+    order,
+    id,
+    linkTarget,
+    status: statusCell,
+    dependsOn: extractTaskIds(dependsCell),
+    line,
+  };
+}
+
 /**
- * Parse the queue table of TASK_INDEX.md into rows.
+ * Parse task rows out of arbitrary markdown, leniently.
  *
  * A data row is any pipe-delimited line whose first cell is an integer order,
- * which excludes the header row and the `---` separator row.
+ * which excludes the header row and the `---` separator row. This function is
+ * intentionally NOT anchored to the `## Queue` section: it is the stable,
+ * backward-compatible export used by callers and tests that hand it a bare table
+ * snippet.
+ *
+ * {@link validate} deliberately does NOT use this. It derives its authoritative
+ * `TaskRow[]` from {@link checkQueueGrammar}, which is anchored to the exact
+ * `## Queue` section, so numeric rows living in unrelated tables can never be
+ * mistaken for tasks.
  */
 export function parseTaskIndex(content: string): TaskRow[] {
   const rows: TaskRow[] = [];
@@ -121,26 +173,256 @@ export function parseTaskIndex(content: string): TaskRow[] {
     if (cells.length < 4) return;
     const order = Number(cells[0]);
     if (!Number.isInteger(order)) return; // header / separator / non-data row
-
-    const taskCell = cells[1] ?? "";
-    const statusCell = cells[2] ?? "";
-    const dependsCell = cells[3] ?? "";
-
-    const ids = extractTaskIds(taskCell);
-    const id = ids[0] ?? "";
-    const linkMatch = taskCell.match(/\]\(([^)]+)\)/);
-    const linkTarget = linkMatch?.[1] ?? "";
-
-    rows.push({
-      order,
-      id,
-      linkTarget,
-      status: statusCell,
-      dependsOn: extractTaskIds(dependsCell),
-      line: idx + 1,
-    });
+    rows.push(rowFromCells(cells, order, idx + 1));
   });
   return rows;
+}
+
+/**
+ * Strict grammar check for the `## Queue` table of TASK_INDEX.md.
+ *
+ * This is the single authoritative parser for {@link validate}. It is anchored to
+ * the exact `## Queue` section so that numeric rows living in unrelated tables can
+ * never be mistaken for tasks, and it returns the body rows it accepts so callers
+ * parse the queue exactly once.
+ *
+ * {@link parseTaskIndex} stays deliberately lenient and unanchored (it silently
+ * skips anything that does not look like a data row) so its `TaskRow[]` shape is a
+ * stable, backward-compatible contract for external callers and tests. That
+ * leniency would be a fail-open hole for the operational queue itself, so
+ * `validate` never relies on it.
+ *
+ * The grammar this enforces, all fail-closed:
+ *
+ *   - exactly one `## Queue` heading must exist;
+ *   - the FIRST non-empty line after the heading (before the next `## ` heading)
+ *     must be the exact five-column header
+ *     `| Order | Task | Status | Depends on | Milestone |`, bounded by leading
+ *     AND trailing outer pipes — a wrong or missing header, a header without its
+ *     closing pipe, or any other content first, is an error;
+ *   - the header must be immediately followed by a five-cell separator row
+ *     bounded by leading AND trailing outer pipes, each cell a valid markdown
+ *     separator token of at least three dashes with an optional leading/trailing
+ *     `:` (a single-dash cell is rejected), e.g. `|---:|---|---|---|---|`;
+ *   - at least one body row must follow the separator;
+ *   - body rows run up to the terminating blank line, the next `## ` heading or
+ *     end of file; every such line is a data row and must parse — nothing is
+ *     silently skipped;
+ *   - a body row must have exactly five pipe-delimited cells bounded by outer
+ *     pipes;
+ *   - `Order` must be a positive integer, and the encountered orders must be
+ *     exactly `1..N` in the order they appear (unique, contiguous, ascending);
+ *   - the `Depends on` cell must be exactly the em dash `—`, or a comma-separated
+ *     list of anchored `RA-NNN` tokens with no junk and no duplicates.
+ *
+ * Every problem is returned as an error string carrying the line number and the
+ * offending value; the accepted body rows carry their ORIGINAL 1-based line
+ * numbers so downstream diagnostics point at the real file location.
+ */
+const STRICT_DEP_TOKEN_RE = /^RA-\d{3}$/;
+
+/**
+ * A markdown alignment separator cell: at least three dashes with an optional
+ * leading and/or trailing colon. Requiring three dashes (not one) keeps the
+ * separator visually unambiguous and rejects a degenerate single-dash cell.
+ */
+const SEPARATOR_CELL_RE = /^:?-{3,}:?$/;
+
+const QUEUE_HEADING_RE = /^##\s+Queue\s*$/;
+const ANY_H2_RE = /^##\s+/;
+
+const QUEUE_HEADER_CELLS = ["Order", "Task", "Status", "Depends on", "Milestone"] as const;
+
+function isQueueHeader(cells: readonly string[]): boolean {
+  return (
+    cells.length === QUEUE_HEADER_CELLS.length &&
+    QUEUE_HEADER_CELLS.every((expected, i) => cells[i] === expected)
+  );
+}
+
+export interface QueueParse {
+  readonly rows: readonly TaskRow[];
+  readonly errors: readonly string[];
+}
+
+function checkQueueGrammar(content: string): QueueParse {
+  const errors: string[] = [];
+  const rows: TaskRow[] = [];
+  const lines = content.split(/\r?\n/);
+
+  // Anchor: exactly one `## Queue` heading. Zero or many is fail-closed so the
+  // operational list can never be ambiguous or absent.
+  const headingIdxs: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (QUEUE_HEADING_RE.test((lines[i] as string).trim())) headingIdxs.push(i);
+  }
+  if (headingIdxs.length === 0) {
+    errors.push("TASK_INDEX.md: no `## Queue` section found");
+    return { rows, errors };
+  }
+  if (headingIdxs.length > 1) {
+    errors.push(
+      `TASK_INDEX.md: ${headingIdxs.length} \`## Queue\` sections found; exactly one is allowed`,
+    );
+    return { rows, errors };
+  }
+  const headingIdx = headingIdxs[0] as number;
+
+  // Section end: the next `## ` heading after the Queue heading, or end of file.
+  let sectionEnd = lines.length;
+  for (let i = headingIdx + 1; i < lines.length; i += 1) {
+    if (ANY_H2_RE.test((lines[i] as string).trim())) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  // The header must be the FIRST non-empty line inside the section.
+  let headerIdx = -1;
+  for (let i = headingIdx + 1; i < sectionEnd; i += 1) {
+    const line = (lines[i] as string).trim();
+    if (line === "") continue;
+    // First non-empty content: it must be the exact Queue header row, bounded
+    // by leading AND trailing outer pipes so a header missing its closing pipe
+    // is rejected rather than silently accepted by cell-splitting.
+    if (!line.startsWith("|") || !line.endsWith("|") || !isQueueHeader(splitRow(line))) {
+      errors.push(
+        `TASK_INDEX.md:${i + 1}: the \`## Queue\` section must open with the header \`| Order | Task | Status | Depends on | Milestone |\``,
+      );
+      return { rows, errors };
+    }
+    headerIdx = i;
+    break;
+  }
+  if (headerIdx === -1) {
+    errors.push("TASK_INDEX.md: the `## Queue` section has no table");
+    return { rows, errors };
+  }
+
+  // The very next line must be a five-cell separator row with valid tokens,
+  // bounded by leading AND trailing outer pipes.
+  const sepIdx = headerIdx + 1;
+  const sepLine = (lines[sepIdx] ?? "").trim();
+  if (!sepLine.startsWith("|")) {
+    errors.push(
+      `TASK_INDEX.md:${sepIdx + 1}: Queue header is not followed by a separator row (---)`,
+    );
+    return { rows, errors };
+  }
+  const sepCells = splitRow(sepLine);
+  if (
+    !sepLine.endsWith("|") ||
+    sepCells.length !== 5 ||
+    !sepCells.every((c) => SEPARATOR_CELL_RE.test(c))
+  ) {
+    errors.push(
+      `TASK_INDEX.md:${sepIdx + 1}: Queue separator row must have exactly 5 cells of markdown separators (e.g. |---:|---|---|---|---|)`,
+    );
+    return { rows, errors };
+  }
+
+  // Body rows run from just after the separator up to the terminating blank line,
+  // the section end (next `## ` heading) or end of file. Every such line is a data
+  // row and must parse — nothing between the separator and the terminator may be
+  // silently skipped.
+  const orders: number[] = [];
+  let bodyRowCount = 0;
+  for (let i = sepIdx + 1; i < sectionEnd; i += 1) {
+    const raw = lines[i] as string;
+    const line = raw.trim();
+    if (line === "") break; // terminating blank line ends the table body
+    const where = `TASK_INDEX.md:${i + 1}`;
+    bodyRowCount += 1;
+
+    if (!line.startsWith("|")) {
+      errors.push(`${where}: Queue body row is not a table row: "${line}"`);
+      continue;
+    }
+    // Count real cells WITHOUT dropping empties, so a missing cell is detected.
+    const rawCells = line.split("|");
+    if (
+      rawCells.length < 2 ||
+      rawCells[0]?.trim() !== "" ||
+      rawCells[rawCells.length - 1]?.trim() !== ""
+    ) {
+      errors.push(`${where}: Queue body row must be bounded by outer pipes: "${line}"`);
+      continue;
+    }
+    const cells = rawCells.slice(1, -1).map((c) => c.trim());
+    if (cells.length !== 5) {
+      errors.push(
+        `${where}: Queue body row has ${cells.length} cells, expected exactly 5: "${line}"`,
+      );
+      continue;
+    }
+
+    let orderValue = -1;
+    const orderCell = cells[0] as string;
+    if (!/^\d+$/.test(orderCell)) {
+      errors.push(`${where}: Queue Order "${orderCell}" is not a positive integer`);
+    } else {
+      const order = Number(orderCell);
+      if (!Number.isInteger(order) || order < 1) {
+        errors.push(`${where}: Queue Order "${orderCell}" is not a positive integer`);
+      } else {
+        orderValue = order;
+        const expected = orders.length + 1;
+        if (order !== expected) {
+          errors.push(
+            `${where}: Queue Order ${order} is out of sequence; expected ${expected} (orders must be a contiguous 1..N in row order)`,
+          );
+        }
+        orders.push(order);
+      }
+    }
+
+    const dependsCell = cells[3] as string;
+    errors.push(...checkDependsCell(dependsCell, where));
+
+    // Emit the authoritative TaskRow with its ORIGINAL line number. A malformed
+    // order still yields a row (order = -1) so downstream id/status/link checks
+    // run; the grammar error above already reports the bad order.
+    rows.push(rowFromCells(cells, orderValue, i + 1));
+  }
+
+  if (bodyRowCount === 0) {
+    errors.push(
+      `TASK_INDEX.md:${sepIdx + 2}: the \`## Queue\` table has no body rows; at least one task is required`,
+    );
+  }
+
+  return { rows, errors };
+}
+
+/**
+ * Validate a single `Depends on` cell against the closed grammar: exactly the em
+ * dash placeholder, or a comma-separated list of anchored `RA-NNN` tokens with no
+ * junk text and no duplicates.
+ */
+function checkDependsCell(cell: string, where: string): string[] {
+  const errors: string[] = [];
+  const trimmed = cell.trim();
+  if (trimmed === "—") return errors; // em dash placeholder = no dependencies
+  if (trimmed === "") {
+    errors.push(`${where}: Queue Depends on cell is empty (use — for no dependencies)`);
+    return errors;
+  }
+
+  const tokens = trimmed.split(",").map((t) => t.trim());
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (!STRICT_DEP_TOKEN_RE.test(token)) {
+      errors.push(
+        `${where}: Queue Depends on contains an invalid token "${token}" (expected — or comma-separated RA-NNN)`,
+      );
+      continue;
+    }
+    if (seen.has(token)) {
+      errors.push(`${where}: Queue Depends on lists duplicate dependency "${token}"`);
+    }
+    seen.add(token);
+  }
+  return errors;
 }
 
 /**
@@ -426,7 +708,18 @@ export function validate(repoRoot: string): ValidationResult {
     return { ok: false, errors: [`missing task index: ${indexPath}`], rows: [] };
   }
 
-  const rows = parseTaskIndex(readFileSync(indexPath, "utf8"));
+  const indexContent = readFileSync(indexPath, "utf8");
+
+  // Derive the authoritative task rows ONLY from the `## Queue` section, enforcing
+  // its closed grammar (anchored header, valid separator, at least one body row,
+  // five-cell rows, positive contiguous 1..N orders and strict `Depends on`
+  // cells). This is deliberately NOT `parseTaskIndex`, whose leniency would let a
+  // dropped row or a numeric row in an unrelated table slip through. Rows carry
+  // their original line numbers.
+  const queue = checkQueueGrammar(indexContent);
+  errors.push(...queue.errors);
+
+  const rows = queue.rows;
   if (rows.length === 0) {
     errors.push("task index contains no parseable task rows");
   }
@@ -475,6 +768,30 @@ export function validate(repoRoot: string): ValidationResult {
       );
     }
 
+    // Revision causality: the NEWEST artifact must match the status's place in the
+    // audit cycle, otherwise a stale verdict could certify newer, unaudited work.
+    //   - AWAITING_AUDIT is entered by an implementer who just wrote a handoff, so
+    //     the latest handoff must post-date the latest audit;
+    //   - CHANGES_REQUESTED/AUDIT_PASSED/DONE are entered by an auditor, so the
+    //     latest audit must be no older than the latest handoff it judged.
+    // Compared by revision number (see {@link latestRevision}), not existence.
+    const latestHandoffRev = latestRevision(handoffScan.byRevision);
+    const latestAuditRev = latestRevision(auditScan.byRevision);
+    if (row.status === "AWAITING_AUDIT" && handoffs > 0 && latestHandoffRev <= latestAuditRev) {
+      errors.push(
+        `${where}: ${row.id} is AWAITING_AUDIT but latest handoff revision ${latestHandoffRev} is not newer than latest audit revision ${latestAuditRev}; a fresh handoff must post-date the last audit`,
+      );
+    }
+    if (
+      STATUS_TO_REQUIRED_VERDICT[row.status] !== undefined &&
+      audits > 0 &&
+      latestAuditRev < latestHandoffRev
+    ) {
+      errors.push(
+        `${where}: ${row.id} is ${row.status} but latest audit revision ${latestAuditRev} is older than latest handoff revision ${latestHandoffRev}; that handoff has not been audited`,
+      );
+    }
+
     // Auditor-only status must match the latest audit verdict. Those statuses are
     // in STATUSES_REQUIRING_AUDIT, so audits > 0 whenever the status is legal.
     const requiredVerdict = STATUS_TO_REQUIRED_VERDICT[row.status];
@@ -509,6 +826,45 @@ export function validate(repoRoot: string): ValidationResult {
       if (!seen.has(dep)) {
         errors.push(`TASK_INDEX.md:${row.line}: ${row.id} depends on unknown task ${dep}`);
       }
+    }
+  }
+
+  // Dependency-status gate, enforced in both directions once the full task map is
+  // known. Only dependencies that exist in the index are considered — unknown deps
+  // are reported above — and `BLOCKED` is exempt (a documented block from any
+  // state). A dependency counts as resolved only when it is `DONE`:
+  //   - an executable/terminal task must have every existing dependency `DONE`;
+  //   - a `BLOCKED_BY_DEPENDENCIES` task must still have at least one existing,
+  //     unfinished dependency, otherwise it is ready to start.
+  const statusById = new Map<string, string>();
+  for (const row of rows) {
+    if (STRICT_TASK_ID_RE.test(row.id) && !statusById.has(row.id)) {
+      statusById.set(row.id, row.status);
+    }
+  }
+  for (const row of rows) {
+    if (!STRICT_TASK_ID_RE.test(row.id) || row.status === "BLOCKED") continue;
+    const where = `TASK_INDEX.md:${row.line}`;
+    const unresolved = row.dependsOn.filter(
+      (dep) => statusById.has(dep) && statusById.get(dep) !== "DONE",
+    );
+    // An unknown dependency is reported above and its status is unknowable, so we
+    // cannot conclude anything about readiness from it. Suppress the "should be
+    // READY" hint whenever any dependency is unknown, otherwise a
+    // BLOCKED_BY_DEPENDENCIES task pointing at a missing id would get BOTH the
+    // correct unknown-dependency error and a misleading "no unfinished
+    // dependency" error for the same row.
+    const hasUnknownDep = row.dependsOn.some((dep) => !statusById.has(dep));
+    if (STATUSES_REQUIRING_DEPS_DONE.has(row.status) && unresolved.length > 0) {
+      const detail = unresolved.map((dep) => `${dep} (${statusById.get(dep)})`).join(", ");
+      errors.push(
+        `${where}: ${row.id} is ${row.status} but depends on unfinished task(s) ${detail}; every dependency must be DONE`,
+      );
+    }
+    if (row.status === "BLOCKED_BY_DEPENDENCIES" && unresolved.length === 0 && !hasUnknownDep) {
+      errors.push(
+        `${where}: ${row.id} is BLOCKED_BY_DEPENDENCIES but has no unfinished dependency; it should be READY`,
+      );
     }
   }
 

@@ -56,7 +56,25 @@ taska ma pierwszeństwo i rozszerza poniższe punkty.
 - Czy operator potrafi rozpoznać i naprawić stan bez ręcznej edycji DB?
 - Czy dokumentacja i runbook odpowiadają rzeczywistemu zachowaniu?
 
-## 8. Werdykt
+## 8. Inwarianty `workflow:validate`
+
+Sprawdź, że stan kolejki i artefaktów spełnia inwarianty egzekwowane przez
+`workflow:validate` (zob. `docs/workflow/EXECUTION_AND_AUDIT.md`):
+
+- Causality rewizji: `AWAITING_AUDIT` ma najnowszy handoff nowszy od najnowszego
+  audytu, a `CHANGES_REQUESTED`/`AUDIT_PASSED`/`DONE` mają audyt nie starszy niż
+  najnowszy handoff.
+- Werdykt najnowszego audytu zgadza się ze statusem
+  (`CHANGES_REQUESTED`→`CHANGES_REQUIRED`, `AUDIT_PASSED`/`DONE`→`PASS`) i jest
+  jednoznaczny.
+- Gating zależności: statusy wykonywalne/terminalne mają wszystkie istniejące
+  zależności `DONE`; `BLOCKED_BY_DEPENDENCIES` ma co najmniej jedną niedokończoną
+  zależność; `BLOCKED` jest wyjątkiem dopuszczonym z dowolnego stanu.
+- Gramatyka `## Queue`: pięć komórek na wiersz, `Order` ciągłe `1..N`, dokładne
+  tokeny `RA-NNN` w `Depends on`, zewnętrzne pipe’y i poprawny separator; żaden
+  wiersz danych nie jest cicho pomijany.
+
+## 9. Werdykt
 
 - `PASS`: wszystkie kryteria spełnione, brak unresolved BLOCKER/HIGH/MEDIUM.
 - `CHANGES_REQUIRED`: implementacja jest naprawialna w zakresie taska; findingi

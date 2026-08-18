@@ -160,6 +160,90 @@ fail-closed. Dzięki temu implementer może legalnie zatrzymać się z Decision
 Request po wcześniejszym `CHANGES_REQUIRED`, a przestarzały audyt nie jest brany
 za przyczynę bieżącej blokady.
 
+## Inwarianty walidatora kolejki (`workflow:validate`)
+
+`workflow:validate` deterministycznie egzekwuje poniższe inwarianty na podstawie
+`docs/tasks/TASK_INDEX.md` oraz artefaktów w `docs/handoffs/` i `docs/audits/`.
+Wszystkie kontrole są fail-closed, a każdy błąd wskazuje lokalizację (`linia`,
+task) i wartość naruszającą regułę.
+
+### Causality rewizji handoffu i audytu
+
+Najnowszy artefakt (po numerze rewizji `HANDOFF-NN`/`AUDIT-NN`, nie po kolejności
+katalogu) musi odpowiadać miejscu statusu w cyklu audytu, aby przestarzały
+werdykt nie mógł zatwierdzić nowszej, niezaudytowanej pracy:
+
+- `AWAITING_AUDIT` jest wejściem implementera, który właśnie zapisał handoff.
+  Najnowszy handoff musi więc mieć rewizję nowszą niż najnowszy audyt
+  (`rewizja_handoffu > rewizja_audytu`). Stary handoff nienowszy od audytu jest
+  błędem.
+- `CHANGES_REQUESTED`, `AUDIT_PASSED` i `DONE` są wejściami audytora. Najnowszy
+  audyt nie może być starszy od najnowszego handoffu, który ocenia
+  (`rewizja_audytu ≥ rewizja_handoffu`); handoff bez nowszego lub równego audytu
+  jest błędem.
+
+Poza samą rewizją najnowszy audyt musi mieć werdykt zgodny ze statusem
+(dodatkowo do wymogu istnienia handoffu i audytu):
+
+- `CHANGES_REQUESTED` → werdykt `CHANGES_REQUIRED`;
+- `AUDIT_PASSED` → werdykt `PASS`;
+- `DONE` → werdykt `PASS`.
+
+Werdykt jest odczytywany z jednej linii deklaracji `- Werdykt: \`PASS\`` z
+dokładnie jednym tokenem; brak deklaracji lub tokenu to błąd „missing”, a wiele
+deklaracji lub wiele tokenów to błąd „ambiguous”. `BLOCKED` nie ma tu
+przypisanego werdyktu — jego źródło rozstrzyga sekcja
+[Provenance blokady](#provenance-blokady-blocked).
+
+### Gating statusu zależności
+
+Kontrola działa dwukierunkowo po zbudowaniu pełnej mapy tasków. Uwzględniane są
+wyłącznie zależności istniejące w indeksie (nieznane zależności są raportowane
+osobno). Zależność jest rozstrzygnięta tylko wtedy, gdy ma status `DONE`:
+
+- statusy wykonywalne i terminalne — `READY`, `IN_PROGRESS`, `AWAITING_AUDIT`,
+  `CHANGES_REQUESTED`, `AUDIT_PASSED`, `DONE` — wymagają, aby każda istniejąca
+  zależność była `DONE`; niedokończona zależność jest błędem wskazującym task i
+  jej status;
+- `BLOCKED_BY_DEPENDENCIES` jest odwrotnością: musi mieć co najmniej jedną
+  istniejącą, niedokończoną zależność. Gdy wszystkie zależności są `DONE` (i żadna
+  nie jest nieznana), task powinien być `READY` — brak niedokończonej zależności
+  jest błędem;
+- `BLOCKED` jest jawnym wyjątkiem od gatingu zależności: udokumentowana blokada
+  jest dozwolona z dowolnego stanu, więc statusy zależności nie są dla niego
+  sprawdzane.
+
+Cykl w grafie zależności jest wykrywany osobno i raportowany jako błąd.
+
+### Gramatyka sekcji `## Queue`
+
+Operacyjna lista tasków żyje wyłącznie w sekcji `## Queue`, której tabela ma
+zamkniętą gramatykę (fail-closed). Numeryczne wiersze w innych tabelach nigdy nie
+stają się taskami, a żaden wiersz danych nie jest cicho pomijany:
+
+- musi istnieć dokładnie jedna sekcja `## Queue` (zero albo wiele to błąd);
+- pierwsza niepusta linia sekcji musi być dokładnym nagłówkiem
+  `| Order | Task | Status | Depends on | Milestone |`, ograniczonym zewnętrznymi
+  pipe’ami z obu stron (brak zamykającego pipe’a lub inna treść to błąd);
+- bezpośrednio po nagłówku musi wystąpić wiersz separatora o dokładnie pięciu
+  komórkach, ograniczony zewnętrznymi pipe’ami; każda komórka to token separatora
+  z co najmniej trzema myślnikami i opcjonalnym `:` z przodu/z tyłu (np.
+  `|---:|---|---|---|---|`); pojedynczy myślnik jest odrzucany;
+- po separatorze musi wystąpić co najmniej jeden wiersz danych; wiersze danych
+  biegną do terminującej pustej linii, następnego nagłówka `## ` albo końca
+  pliku;
+- każdy wiersz danych musi mieć dokładnie pięć komórek ograniczonych zewnętrznymi
+  pipe’ami (brakująca komórka jest wykrywana);
+- `Order` musi być dodatnią liczbą całkowitą, a napotkane wartości muszą tworzyć
+  dokładnie ciągłą, rosnącą, unikalną sekwencję `1..N` w kolejności wierszy;
+  wartość spoza sekwencji jest błędem wskazującym oczekiwaną liczbę;
+- komórka `Depends on` musi być dokładnie em dash `—` (brak zależności) albo listą
+  rozdzielonych przecinkami tokenów `RA-NNN` zakotwiczonych ściśle, bez śmieci i
+  bez duplikatów; pusta komórka, nieprawidłowy token lub duplikat to błąd.
+
+Każdy problem jest zwracany jako komunikat z numerem oryginalnej linii i wartością
+naruszającą regułę.
+
 ## Zasady dowodowe
 
 - Wynik testu to komenda, exit code i zwięzłe podsumowanie wyniku.
