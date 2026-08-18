@@ -7,18 +7,18 @@ US Claude Opus 4.8: input $5/M, output $25/M, cache read $0.50/M i cache write
 $6.25/M tokenów. Retry odrzucone przed zapisaniem telemetrii mogą nie być
 widoczne; ostateczne rozliczenie należy porównać z AWS Cost Explorer.
 
-2026-08-18 (Europe/Warsaw), aktualizacja 23:43 CEST
+2026-08-18 (Europe/Warsaw), aktualizacja 23:48 CEST
 ---------------------------------------------------
 
 Klient       Model                                              Wiadomości  Input  Output   Cache read  Cache write  Koszt USD
-OpenCode     amazon-bedrock/us.anthropic.claude-opus-4-8              145      286   87,199    7,064,510      477,722    8.699423
+OpenCode     amazon-bedrock/us.anthropic.claude-opus-4-8              150      296   88,081    7,124,681      494,020    8.853471
 OpenCode     amazon-bedrock/anthropic.claude-opus-4-8                    1        2       72            0       11,050    0.070873
 Claude CLI   claude-opus-4-8 (Bedrock US; estymacja)                   361      722  306,071   30,619,010    1,864,035   34.615109
-SUMA                                                                  507    1,010  393,342   37,683,520    2,352,807   43.385405
+SUMA                                                                  512    1,020  394,224   37,743,691    2,369,105   43.539453
 
 Budżet operacyjny OpenCode na 2026-08-18: maksymalnie 50.00 USD według
-lokalnego pola cost OpenCode. Migawka OpenCode: 8.770296 USD, pozostały margines
-41.229704 USD. Po każdym workerze trzeba odświeżyć licznik; ukończenie RA-001
+lokalnego pola cost OpenCode. Migawka OpenCode: 8.924344 USD, pozostały margines
+41.075656 USD. Po każdym workerze trzeba odświeżyć licznik; ukończenie RA-001
 kończy pracę wcześniej, a limit nie jest celem do sztucznego wykorzystania.
 
 Metoda pomiaru

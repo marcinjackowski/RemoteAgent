@@ -1,6 +1,6 @@
 # RA-001 — trwały stan sesji koordynatora
 
-Aktualizacja: 2026-08-18 23:43 CEST
+Aktualizacja: 2026-08-18 23:48 CEST — stan końcowy
 
 ## Cel i ograniczenie
 
@@ -20,9 +20,11 @@ Aktualizacja: 2026-08-18 23:43 CEST
 - Bazowy HEAD remediacji: `2561311 docs: resume RA-001 after AUDIT-06`.
 - Commit implementacji: `f513b9604573a365434627084ec242d56de73f17`.
 - Commit handoffu/statusu: `41ffcbdf6bce2278d6da6cad98f545e8ff29b287`.
-- `RA-001`: `AWAITING_AUDIT`.
-- Ostatni audyt: `docs/audits/RA-001/AUDIT-06.md`, werdykt
-  `CHANGES_REQUIRED`.
+- Commit audytu PASS: `f3c34b8`.
+- Commit finalizacji: `59aa1407b006168b87119adf10dd2d170c69cf22`.
+- `RA-001`: `DONE`.
+- `RA-002`: `READY`, ale nie został rozpoczęty.
+- Ostatni audyt: `docs/audits/RA-001/AUDIT-07.md`, werdykt `PASS`.
 - Ostatni handoff: `docs/handoffs/RA-001/HANDOFF-07.md`.
 - Zmodyfikowane przez bieżącą remediację: validator, jego testy oraz dwa
   kontrakty workflow (`EXECUTION_AND_AUDIT.md`, `AUDIT_CHECKLIST.md`).
@@ -102,13 +104,10 @@ Dzienne użycie wszystkich uruchomień zapisuje `docs/BEDROCK_USAGE.txt`.
 
 ## Następne kroki
 
-1. Zacommitować tę aktualizację licznika i checkpointu bez użycia Bedrocka.
-2. Codex wykonuje niezależny `AUDIT-07`. Przy findings wracamy do wąskich
-   poprawek OpenCode; przy `PASS` audytor ustawia `AUDIT_PASSED`.
-3. Implementer finalizuje `RA-001` jako `DONE` i aktualizuje status zależnego
-   `RA-002` zgodnie z validatorem, ale nie rozpoczyna RA-002.
-
-Nie uruchamiać implementera przed werdyktem AUDIT-07.
+1. Zacommitować tę końcową aktualizację licznika i checkpointu bez Bedrocka.
+2. Zatrzymać pracę. `RA-001` osiągnął Definition of Done.
+3. `RA-002` rozpocząć dopiero na nowe, jawne polecenie właściciela, najlepiej w
+   nowej sesji Codex, aby obowiązywał reasoning effort `high`.
 
 ## Ustawienia koordynatora
 
