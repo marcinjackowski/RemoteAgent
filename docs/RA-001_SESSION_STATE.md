@@ -1,6 +1,6 @@
 # RA-001 — trwały stan sesji koordynatora
 
-Aktualizacja: 2026-08-18 23:35 CEST
+Aktualizacja: 2026-08-18 23:43 CEST
 
 ## Cel i ograniczenie
 
@@ -18,10 +18,12 @@ Aktualizacja: 2026-08-18 23:35 CEST
 
 - Branch: `main`; repo nie ma remote ani push.
 - Bazowy HEAD remediacji: `2561311 docs: resume RA-001 after AUDIT-06`.
-- `RA-001`: `IN_PROGRESS`.
+- Commit implementacji: `f513b9604573a365434627084ec242d56de73f17`.
+- Commit handoffu/statusu: `41ffcbdf6bce2278d6da6cad98f545e8ff29b287`.
+- `RA-001`: `AWAITING_AUDIT`.
 - Ostatni audyt: `docs/audits/RA-001/AUDIT-06.md`, werdykt
   `CHANGES_REQUIRED`.
-- Ostatni handoff: `docs/handoffs/RA-001/HANDOFF-06.md`.
+- Ostatni handoff: `docs/handoffs/RA-001/HANDOFF-07.md`.
 - Zmodyfikowane przez bieżącą remediację: validator, jego testy oraz dwa
   kontrakty workflow (`EXECUTION_AND_AUDIT.md`, `AUDIT_CHECKLIST.md`).
 - Ten dokument oraz `docs/BEDROCK_USAGE.txt` zostały dodane na żądanie
@@ -60,6 +62,9 @@ Lokalna weryfikacja zmian jest zielona:
   ignorowanym, lokalnym `.claude/settings.local.json`; pliku nie ma w Git i nie
   należy go modyfikować. Wiążący pełny gate będzie uruchomiony z czystego
   archiwum commita.
+- Wiążący clean archive commita `f513b96` przeszedł na Node `v24.19.0` i pnpm
+  `10.26.1`: frozen install oraz pełne `pnpm run check` exit `0`, 84/84 testów,
+  typecheck i build 20/20 z `0 cached`, validator 26 tasków.
 
 ## Decyzja o runnerze Bedrock
 
@@ -81,6 +86,10 @@ opencode run --auto --variant low \
 w zaufanym repo i z wąskim promptem. Nie uruchamiać równolegle kilku writerów
 dla `RA-001`; wcześniejsze trzy sesje Claude powodowały resety API. Szeroki
 prompt również wydłużał pracę — zadania należy podawać sekwencyjnie.
+Próba połączenia tworzenia handoffu, statusu, testów i commita w jednym promptcie
+nie zapisała nic przez 3 minuty i została przerwana; dwa wąskie kroki zakończyły
+się poprawnie. Nie dodawać końcowego `sleep` do komendy Terminala — utrudniał
+automatyczne zamknięcie okna.
 
 Statystyki OpenCode:
 
@@ -93,18 +102,13 @@ Dzienne użycie wszystkich uruchomień zapisuje `docs/BEDROCK_USAGE.txt`.
 
 ## Następne kroki
 
-1. Zacommitować zreviewowaną implementację, testy, dokumentację i pliki stanu.
-2. Uruchomić pełny clean-archive gate na dokładnym
-   Node `24.19.0` i pnpm `10.26.1`.
-3. Implementer tworzy `HANDOFF-07`, przełącza `RA-001` na
-   `AWAITING_AUDIT`, uruchamia validator, commit i STOP.
-4. Codex wykonuje niezależny `AUDIT-07`. Przy findings wracamy do wąskich
+1. Zacommitować tę aktualizację licznika i checkpointu bez użycia Bedrocka.
+2. Codex wykonuje niezależny `AUDIT-07`. Przy findings wracamy do wąskich
    poprawek OpenCode; przy `PASS` audytor ustawia `AUDIT_PASSED`.
-5. Implementer finalizuje `RA-001` jako `DONE` i aktualizuje status zależnego
+3. Implementer finalizuje `RA-001` jako `DONE` i aktualizuje status zależnego
    `RA-002` zgodnie z validatorem, ale nie rozpoczyna RA-002.
 
-Najbliższy prompt dla implementera powinien obejmować wyłącznie krok 1: bez
-edycji treści, commit dokładnie jawnie wymienionych sześciu plików i STOP.
+Nie uruchamiać implementera przed werdyktem AUDIT-07.
 
 ## Ustawienia koordynatora
 
