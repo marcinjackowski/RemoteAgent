@@ -118,6 +118,14 @@ zapis (`10`, `11`, …, `100`). Bez `00` i bez nadmiarowych zer — `HANDOFF-1.m
 jak dwa pliki wskazujące ten sam numer (np. `AUDIT-01.md` i `AUDIT-001.md`).
 Najnowszy artefakt wybieramy po numerze rewizji, nie po kolejności katalogu.
 
+Katalogi `docs/handoffs/<TASK_ID>/` i `docs/audits/<TASK_ID>/` mają zamknięty
+kontrakt: mogą zawierać wyłącznie kanoniczne pliki danego prefiksu
+(`HANDOFF-NN.md`, `AUDIT-NN.md`). Każdy inny wpis — inny sufiks lub rozszerzenie
+(`AUDIT-02-final.md`, `AUDIT-02.txt`), literówka w prefiksie (`AUDITT-02.md`),
+plik pomocniczy czy podkatalog — jest twardym błędem walidatora, a nie cicho
+pomijany. Dzięki temu błędnie nazwany nowszy dokument nie może pozostawić
+starszego werdyktu jako obowiązującego.
+
 ## Decision Request
 
 Gdy konieczna jest decyzja właściciela, implementer zapisuje ją w najnowszym

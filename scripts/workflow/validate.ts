@@ -10,8 +10,10 @@
  *   - every dependency references an existing task;
  *   - the dependency graph has no cycles;
  *   - required handoff/audit artifacts exist for the declared status;
- *   - handoff/audit revision names are canonical and unique (no `AUDIT-001.md`
- *     shadowing `AUDIT-01.md`), so the latest artifact is unambiguous;
+ *   - a task's handoff/audit directory holds only canonical, unique
+ *     `<PREFIX>-NN.md` files — any disallowed entry (`AUDIT-02-final.md`,
+ *     `AUDIT-001.md` shadowing `AUDIT-01.md`) is an error, so the latest
+ *     artifact is unambiguous and a misnamed file can never be silently skipped;
  *   - auditor-only statuses match the latest audit verdict, and a `BLOCKED`
  *     status has a documented provenance (audit-driven or Decision Request).
  *
@@ -145,9 +147,9 @@ export function parseTaskIndex(content: string): TaskRow[] {
  * Result of scanning a directory for `<PREFIX>-NN.md` artifacts.
  *
  * `byRevision` maps each canonical revision number to its single file name. Any
- * non-canonical name or duplicate revision is reported in `errors` instead of
- * being silently accepted, so a conflicting file can never win by directory
- * iteration order.
+ * disallowed entry, non-canonical name or duplicate revision is reported in
+ * `errors` instead of being silently accepted, so a conflicting or misnamed file
+ * can never win by directory iteration order.
  */
 interface ArtifactScan {
   readonly byRevision: ReadonlyMap<number, string>;
@@ -174,12 +176,18 @@ function isCanonicalRevision(digits: string): boolean {
 }
 
 /**
- * Scan `dir` for `<PREFIX>-NN.md` artifacts, enforcing canonical, unique names.
+ * Scan `dir` for `<PREFIX>-NN.md` artifacts under a closed-contract naming rule.
  *
- * Two independent problems are rejected as hard errors so a conflicting file can
- * never win by directory-iteration order:
+ * A task's `docs/audits/<id>/` and `docs/handoffs/<id>/` directory may contain
+ * ONLY that prefix's canonical `<PREFIX>-NN.md` files. Every problem is reported
+ * as a hard error so a conflicting or misnamed file can never win by
+ * directory-iteration order:
  *
- *   - a non-canonical name (`AUDIT-1.md`, `AUDIT-001.md`, `AUDIT-00.md`);
+ *   - a disallowed entry that is not `<PREFIX>-<digits>.md` (`AUDIT-02-final.md`,
+ *     `AUDIT-02.txt`, `AUDITT-02.md`, a stray `README.md` or a subdirectory) is
+ *     rejected rather than silently skipped — otherwise a misnamed newer audit
+ *     could leave a stale older verdict as the effective latest;
+ *   - a non-canonical revision (`AUDIT-1.md`, `AUDIT-001.md`, `AUDIT-00.md`);
  *   - more than one file whose suffix resolves to the same numeric revision
  *     (`AUDIT-01.md` alongside `AUDIT-001.md` — both are revision 1).
  *
@@ -199,7 +207,13 @@ function scanArtifacts(dir: string, prefix: string, relBase: string, where: stri
   const filesByRevision = new Map<number, string[]>();
   for (const f of readdirSync(dir).sort()) {
     const m = f.match(nameRe);
-    if (!m) continue; // not a revision artifact for this prefix
+    if (!m) {
+      // Closed contract: anything that is not <PREFIX>-<digits>.md is disallowed.
+      errors.push(
+        `${where}: ${relBase}/${f} is not an allowed ${prefix} artifact (only ${prefix}-NN.md is permitted here, e.g. 01..09, 10, 100)`,
+      );
+      continue;
+    }
     const digits = m[1] as string;
     if (!isCanonicalRevision(digits)) {
       errors.push(

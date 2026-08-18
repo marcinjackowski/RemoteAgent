@@ -550,6 +550,68 @@ describe("validate — canonical artifact revision names", () => {
   });
 });
 
+describe("validate — disallowed (malformed) artifact entries", () => {
+  it("does not let a misnamed newer audit leave a stale older PASS as latest", () => {
+    // The canonical AUDIT-01 says PASS; the newer, misnamed AUDIT-02-final says
+    // CHANGES_REQUIRED. Silently skipping it would keep the stale PASS and pass an
+    // AUDIT_PASSED task; instead the disallowed entry must fail validation.
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [
+        { id: "RA-001", rev: 1, verdict: "PASS" },
+        { id: "RA-001", fileName: "AUDIT-02-final.md", verdict: "CHANGES_REQUIRED" },
+      ],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("AUDIT-02-final.md is not an allowed"))).toBe(true);
+  });
+
+  it("rejects a leading-suffix name AUDIT-final-02.md", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", fileName: "AUDIT-final-02.md" }],
+    });
+    const result = validate(root);
+    expect(result.errors.some((e) => e.includes("AUDIT-final-02.md is not an allowed"))).toBe(true);
+  });
+
+  it("rejects a wrong extension AUDIT-02.txt", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", fileName: "AUDIT-02.txt" }],
+    });
+    const result = validate(root);
+    expect(result.errors.some((e) => e.includes("AUDIT-02.txt is not an allowed"))).toBe(true);
+  });
+
+  it("rejects a malformed prefix AUDITT-02.md", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", fileName: "AUDITT-02.md" }],
+    });
+    const result = validate(root);
+    expect(result.errors.some((e) => e.includes("AUDITT-02.md is not an allowed"))).toBe(true);
+  });
+
+  it("rejects a stray non-artifact file in a handoff directory", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [
+        { id: "RA-001", rev: 1 },
+        { id: "RA-001", fileName: "README.md" },
+      ],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("README.md is not an allowed HANDOFF"))).toBe(true);
+  });
+});
+
 describe("validate — real repository", () => {
   it("passes against the actual repo task index", () => {
     const repoRoot = join(import.meta.dirname, "..", "..");
