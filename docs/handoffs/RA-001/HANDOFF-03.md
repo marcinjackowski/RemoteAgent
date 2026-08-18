@@ -9,7 +9,9 @@
 - Poprzedni handoff: `docs/handoffs/RA-001/HANDOFF-02.md`
 - Audyt naprawiany: `docs/audits/RA-001/AUDIT-02.md` (werdykt `CHANGES_REQUIRED`)
 - Bazowy commit: `d04a305bd061db8e78c748cda05d0a46df85d6cd` (baseline z HANDOFF-02).
-- Końcowy commit: patrz sekcja „Git” (nowy commit na `main`, bez remote, bez push).
+- Końcowy commit (fix): `9ac1116f09ccfd3fa9b9f1223f92902ca671a361` na `main`
+  (bez remote, bez push). Ten handoff wskazuje commit fixu; wskaźnik dopięto
+  drobnym follow-up commitem docs.
 
 ## Wynik
 
