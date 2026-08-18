@@ -18,7 +18,7 @@ zgodnie z `AGENTS.md`. Nie zmieniaj kolejności bez ADR albo decyzji właścicie
 
 | Order | Task | Status | Depends on | Milestone |
 |---:|---|---|---|---|
-| 1 | [RA-001](RA-001.md) Repo foundation | AWAITING_AUDIT | — | M0 |
+| 1 | [RA-001](RA-001.md) Repo foundation | AUDIT_PASSED | — | M0 |
 | 2 | [RA-002](RA-002.md) Domain contracts and state machines | BLOCKED_BY_DEPENDENCIES | RA-001 | M0 |
 | 3 | [RA-003](RA-003.md) PostgreSQL persistence | BLOCKED_BY_DEPENDENCIES | RA-001, RA-002 | M0 |
 | 4 | [RA-004](RA-004.md) Durable jobs, outbox and leases | BLOCKED_BY_DEPENDENCIES | RA-003 | M0 |
