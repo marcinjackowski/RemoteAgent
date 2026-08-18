@@ -49,15 +49,24 @@ export type AuditVerdict = (typeof AUDIT_VERDICTS)[number];
 /**
  * Status -> the verdict the latest audit MUST carry for that status to be legal.
  *
- * These are the statuses that are only reachable by an auditor's decision, so
- * the task status must match the newest audit verdict. `BLOCKED` is deliberately
- * excluded: a task can be blocked for procedural reasons (dependency, owner
- * decision) without an audit, so it carries no verdict obligation here.
+ * These entries are enforced only when the task already has at least one audit
+ * artifact (see the `audits > 0` guard in {@link validate}). That audit-presence
+ * check is the deterministic provenance distinction for `BLOCKED`:
+ *
+ *   - **procedural block** — a `BLOCKED` task with NO audit (dependency, owner
+ *     Decision Request) carries no verdict obligation and stays legal;
+ *   - **audit-driven block** — a `BLOCKED` task that DOES have an audit must have
+ *     a latest verdict of `BLOCKED`, so the blocking auditor's decision is bound
+ *     to the status.
+ *
+ * `CHANGES_REQUESTED`, `AUDIT_PASSED` and `DONE` are additionally listed in
+ * {@link STATUSES_REQUIRING_AUDIT}, so for them an audit must exist at all.
  */
 const STATUS_TO_REQUIRED_VERDICT: Readonly<Record<string, AuditVerdict>> = {
   CHANGES_REQUESTED: "CHANGES_REQUIRED",
   AUDIT_PASSED: "PASS",
   DONE: "PASS",
+  BLOCKED: "BLOCKED",
 };
 
 const VERDICT_TOKEN_RE = /\b(PASS|CHANGES_REQUIRED|BLOCKED)\b/g;
@@ -170,24 +179,37 @@ export type VerdictParse =
   | { readonly kind: "missing" }
   | { readonly kind: "ambiguous"; readonly found: readonly string[] };
 
+const VERDICT_DECLARATION_RE = /^\s*[-*]?\s*Werdykt\s*[:：]/i;
+
 /**
  * Extract the single declared verdict from an audit document.
  *
- * The verdict lives on the metadata line `- Werdykt: \`PASS\``. A line that still
- * carries the template's `PASS | CHANGES_REQUIRED | BLOCKED` placeholder (or any
- * line with more than one distinct token) is reported as ambiguous, and a file
- * with no verdict line is reported as missing. Both are rejected by the caller.
+ * A well-formed audit carries EXACTLY ONE declaration line `- Werdykt: \`PASS\``
+ * with EXACTLY ONE verdict token after the colon. Everything else is rejected so
+ * the audit gate cannot be bypassed by a malformed or conflicting document:
+ *
+ *   - zero declaration lines, or a declaration with no token -> `missing`;
+ *   - more than one declaration line (two `Werdykt:` lines) -> `ambiguous`;
+ *   - more than one token on the declaration line -> `ambiguous`. This covers
+ *     both the unfilled template `PASS | CHANGES_REQUIRED | BLOCKED` and a
+ *     repeated token such as `PASS PASS` (raw occurrences are counted, not
+ *     de-duplicated).
+ *
+ * The whole document is scanned, not just the first matching line.
  */
 export function parseAuditVerdict(content: string): VerdictParse {
-  const line = content.split(/\r?\n/).find((raw) => /^\s*[-*]?\s*Werdykt\s*[:：]/i.test(raw));
-  if (line === undefined) return { kind: "missing" };
+  const declarations = content.split(/\r?\n/).filter((raw) => VERDICT_DECLARATION_RE.test(raw));
+  if (declarations.length === 0) return { kind: "missing" };
+  if (declarations.length > 1) {
+    const found = declarations.flatMap((l) => l.match(VERDICT_TOKEN_RE) ?? []);
+    return { kind: "ambiguous", found };
+  }
 
-  const after = line.replace(/^\s*[-*]?\s*Werdykt\s*[:：]/i, "");
+  const after = (declarations[0] as string).replace(VERDICT_DECLARATION_RE, "");
   const tokens = after.match(VERDICT_TOKEN_RE) ?? [];
-  const distinct = [...new Set(tokens)];
-  if (distinct.length === 0) return { kind: "missing" };
-  if (distinct.length > 1) return { kind: "ambiguous", found: distinct };
-  return { kind: "ok", verdict: distinct[0] as AuditVerdict };
+  if (tokens.length === 0) return { kind: "missing" };
+  if (tokens.length > 1) return { kind: "ambiguous", found: tokens };
+  return { kind: "ok", verdict: tokens[0] as AuditVerdict };
 }
 
 /** Detect any cycle in the dependency graph; returns one cycle path or null. */

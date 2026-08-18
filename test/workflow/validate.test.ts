@@ -210,6 +210,17 @@ describe("parseAuditVerdict", () => {
   it("treats a document with no verdict line as missing", () => {
     expect(parseAuditVerdict("# audit\n\nsome prose\n")).toEqual({ kind: "missing" });
   });
+
+  it("rejects two separate verdict declaration lines as ambiguous", () => {
+    const parsed = parseAuditVerdict("- Werdykt: `PASS`\n- Werdykt: `CHANGES_REQUIRED`\n");
+    expect(parsed.kind).toBe("ambiguous");
+  });
+
+  it("rejects a repeated token on one declaration line as ambiguous", () => {
+    // Raw occurrences are counted, so `PASS PASS` must not collapse to a single PASS.
+    const parsed = parseAuditVerdict("- Werdykt: `PASS PASS`\n");
+    expect(parsed.kind).toBe("ambiguous");
+  });
 });
 
 describe("validate — audit verdict enforcement", () => {
@@ -296,6 +307,73 @@ describe("validate — audit verdict enforcement", () => {
     });
     const result = validate(root);
     expect(result.errors.some((e) => e.includes("ambiguous verdict"))).toBe(true);
+  });
+
+  it("rejects a status backed by an audit with two conflicting verdict lines", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", raw: "- Werdykt: `PASS`\n- Werdykt: `CHANGES_REQUIRED`\n" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("ambiguous verdict"))).toBe(true);
+  });
+
+  it("rejects a status backed by an audit with a repeated verdict token", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", raw: "- Werdykt: `PASS PASS`\n" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("ambiguous verdict"))).toBe(true);
+  });
+});
+
+describe("validate — BLOCKED verdict provenance", () => {
+  it("accepts a procedural BLOCKED task with no audit", () => {
+    // Blocking for procedural reasons (dependency / Decision Request) is legal
+    // without any audit artifact, so it carries no verdict obligation.
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts an audit-driven BLOCKED backed by a BLOCKED verdict", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", verdict: "BLOCKED" }],
+    });
+    expect(validate(root).ok).toBe(true);
+  });
+
+  it("rejects a BLOCKED task whose latest audit says PASS", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", verdict: "PASS" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("verdict is PASS (expected BLOCKED)"))).toBe(true);
+  });
+
+  it("rejects a BLOCKED task whose latest audit says CHANGES_REQUIRED", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: ["RA-001"],
+      audits: [{ id: "RA-001", verdict: "CHANGES_REQUIRED" }],
+    });
+    const result = validate(root);
+    expect(
+      result.errors.some((e) => e.includes("verdict is CHANGES_REQUIRED (expected BLOCKED)")),
+    ).toBe(true);
   });
 });
 
