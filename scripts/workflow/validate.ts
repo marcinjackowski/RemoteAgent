@@ -10,6 +10,8 @@
  *   - every dependency references an existing task;
  *   - the dependency graph has no cycles;
  *   - required handoff/audit artifacts exist for the declared status;
+ *   - handoff/audit revision names are canonical and unique (no `AUDIT-001.md`
+ *     shadowing `AUDIT-01.md`), so the latest artifact is unambiguous;
  *   - auditor-only statuses match the latest audit verdict, and a `BLOCKED`
  *     status has a documented provenance (audit-driven or Decision Request).
  *
@@ -139,44 +141,102 @@ export function parseTaskIndex(content: string): TaskRow[] {
   return rows;
 }
 
-/** List files matching `<PREFIX>-NN.md` in a directory, tolerating absence. */
-function listArtifacts(dir: string, prefix: string): string[] {
-  if (!existsSync(dir)) return [];
-  const re = new RegExp(`^${prefix}-\\d{2,}\\.md$`);
-  return readdirSync(dir).filter((f) => re.test(f));
-}
-
-/** Count files matching `<PREFIX>-NN.md` in a directory, tolerating absence. */
-function countArtifacts(dir: string, prefix: string): number {
-  return listArtifacts(dir, prefix).length;
-}
-
-/** Numeric revision suffix of a `<PREFIX>-NN.md` file name. */
-function artifactRevision(name: string): number {
-  const m = name.match(/-(\d+)\.md$/);
-  return m ? Number(m[1]) : -1;
+/**
+ * Result of scanning a directory for `<PREFIX>-NN.md` artifacts.
+ *
+ * `byRevision` maps each canonical revision number to its single file name. Any
+ * non-canonical name or duplicate revision is reported in `errors` instead of
+ * being silently accepted, so a conflicting file can never win by directory
+ * iteration order.
+ */
+interface ArtifactScan {
+  readonly byRevision: ReadonlyMap<number, string>;
+  readonly errors: readonly string[];
 }
 
 /**
- * Path of the numerically-latest `<PREFIX>-NN.md` in `dir`, or null if none.
- * Sorting is by the numeric revision, not lexicographically, so `-10` beats `-9`.
+ * The canonical text for revision `n`: two-digit zero padding up to `99`, then
+ * the natural decimal for `100`+ (`01`, `09`, `10`, `99`, `100`, …).
  */
-function latestArtifactPath(dir: string, prefix: string): string | null {
-  const files = listArtifacts(dir, prefix);
-  if (files.length === 0) return null;
-  let best = files[0] as string;
-  for (const f of files) {
-    if (artifactRevision(f) > artifactRevision(best)) best = f;
-  }
-  return join(dir, best);
+function canonicalRevision(n: number): string {
+  return String(n).padStart(2, "0");
 }
 
-/** Highest revision number among `<PREFIX>-NN.md` in `dir`, or 0 if none. */
-function latestArtifactRevision(dir: string, prefix: string): number {
-  const files = listArtifacts(dir, prefix);
+/**
+ * Whether `digits` is the one canonical spelling of its numeric value.
+ *
+ * Rejects `00` (revisions are 1-based) and every leading-zero variant such as
+ * `1`, `001` or `010`, so exactly one file name can denote a given revision.
+ */
+function isCanonicalRevision(digits: string): boolean {
+  const n = Number(digits);
+  return Number.isInteger(n) && n >= 1 && digits === canonicalRevision(n);
+}
+
+/**
+ * Scan `dir` for `<PREFIX>-NN.md` artifacts, enforcing canonical, unique names.
+ *
+ * Two independent problems are rejected as hard errors so a conflicting file can
+ * never win by directory-iteration order:
+ *
+ *   - a non-canonical name (`AUDIT-1.md`, `AUDIT-001.md`, `AUDIT-00.md`);
+ *   - more than one file whose suffix resolves to the same numeric revision
+ *     (`AUDIT-01.md` alongside `AUDIT-001.md` — both are revision 1).
+ *
+ * Only a canonical, uniquely-numbered file is added to `byRevision`, so any
+ * ambiguity fails the whole validation instead of being silently resolved. The
+ * directory is read in sorted order purely so error messages are stable;
+ * correctness never depends on iteration order.
+ */
+function scanArtifacts(dir: string, prefix: string, relBase: string, where: string): ArtifactScan {
+  const byRevision = new Map<number, string>();
+  const errors: string[] = [];
+  if (!existsSync(dir)) return { byRevision, errors };
+
+  const nameRe = new RegExp(`^${prefix}-(\\d+)\\.md$`);
+  // Group every matching file by its numeric value first, so `AUDIT-01` and
+  // `AUDIT-001` are seen as the same revision even though only one is canonical.
+  const filesByRevision = new Map<number, string[]>();
+  for (const f of readdirSync(dir).sort()) {
+    const m = f.match(nameRe);
+    if (!m) continue; // not a revision artifact for this prefix
+    const digits = m[1] as string;
+    if (!isCanonicalRevision(digits)) {
+      errors.push(
+        `${where}: ${relBase}/${f} has a non-canonical revision name (use ${prefix}-NN.md, e.g. 01..09, 10, 100)`,
+      );
+    }
+    const rev = Number(digits);
+    const group = filesByRevision.get(rev) ?? [];
+    group.push(f);
+    filesByRevision.set(rev, group);
+  }
+
+  for (const [rev, names] of filesByRevision) {
+    if (names.length > 1) {
+      errors.push(
+        `${where}: ${relBase}/ has ${names.length} files for revision ${rev} (${names.join(", ")})`,
+      );
+      continue; // ambiguous: select none of them
+    }
+    const only = names[0] as string;
+    if (isCanonicalRevision(only.match(nameRe)?.[1] ?? "")) byRevision.set(rev, only);
+  }
+  return { byRevision, errors };
+}
+
+/** Highest revision number in a scan, or 0 when there are none. */
+function latestRevision(byRevision: ReadonlyMap<number, string>): number {
   let best = 0;
-  for (const f of files) best = Math.max(best, artifactRevision(f));
+  for (const rev of byRevision.keys()) best = Math.max(best, rev);
   return best;
+}
+
+/** Path of the numerically-latest artifact in a scan, or null when empty. */
+function latestArtifactPath(dir: string, byRevision: ReadonlyMap<number, string>): string | null {
+  const rev = latestRevision(byRevision);
+  if (rev === 0) return null;
+  return join(dir, byRevision.get(rev) as string);
 }
 
 const DECISION_REQUEST_RE = /^decision request\b/;
@@ -293,12 +353,14 @@ function findCycle(rows: readonly TaskRow[]): string[] | null {
 function checkBlockedProvenance(
   handoffDir: string,
   auditsDir: string,
+  handoffScan: ArtifactScan,
+  auditScan: ArtifactScan,
   id: string,
   where: string,
 ): string[] {
   const errors: string[] = [];
-  const latestHandoffRev = latestArtifactRevision(handoffDir, "HANDOFF");
-  const latestAuditRev = latestArtifactRevision(auditsDir, "AUDIT");
+  const latestHandoffRev = latestRevision(handoffScan.byRevision);
+  const latestAuditRev = latestRevision(auditScan.byRevision);
 
   if (latestHandoffRev === 0 && latestAuditRev === 0) {
     errors.push(`${where}: ${id} is BLOCKED but no handoff or audit documents the block`);
@@ -307,7 +369,7 @@ function checkBlockedProvenance(
 
   if (latestAuditRev >= latestHandoffRev) {
     // Most recent action is the auditor's: the block must be their BLOCKED verdict.
-    const latest = latestArtifactPath(auditsDir, "AUDIT") as string;
+    const latest = latestArtifactPath(auditsDir, auditScan.byRevision) as string;
     const rel = `docs/audits/${id}/${latest.split("/").pop() ?? ""}`;
     const parsed = parseAuditVerdict(readFileSync(latest, "utf8"));
     if (parsed.kind === "missing") {
@@ -325,7 +387,7 @@ function checkBlockedProvenance(
   }
 
   // Most recent action is the implementer's handoff: it must be a Decision Request.
-  const latestHandoff = latestArtifactPath(handoffDir, "HANDOFF") as string;
+  const latestHandoff = latestArtifactPath(handoffDir, handoffScan.byRevision) as string;
   const rel = `docs/handoffs/${id}/${latestHandoff.split("/").pop() ?? ""}`;
   if (!hasDecisionRequest(readFileSync(latestHandoff, "utf8"))) {
     errors.push(
@@ -381,8 +443,13 @@ export function validate(repoRoot: string): ValidationResult {
 
     const auditsDir = join(repoRoot, "docs", "audits", row.id);
     const handoffDir = join(repoRoot, "docs", "handoffs", row.id);
-    const handoffs = countArtifacts(handoffDir, "HANDOFF");
-    const audits = countArtifacts(auditsDir, "AUDIT");
+    const handoffScan = scanArtifacts(handoffDir, "HANDOFF", `docs/handoffs/${row.id}`, where);
+    const auditScan = scanArtifacts(auditsDir, "AUDIT", `docs/audits/${row.id}`, where);
+    // Non-canonical or duplicated artifact names are rejected before anything
+    // else uses them, so an ambiguous revision can never select a verdict.
+    errors.push(...handoffScan.errors, ...auditScan.errors);
+    const handoffs = handoffScan.byRevision.size;
+    const audits = auditScan.byRevision.size;
     if (STATUSES_REQUIRING_HANDOFF.has(row.status) && handoffs === 0) {
       errors.push(
         `${where}: ${row.id} is ${row.status} but has no handoff in docs/handoffs/${row.id}/`,
@@ -398,7 +465,7 @@ export function validate(repoRoot: string): ValidationResult {
     // in STATUSES_REQUIRING_AUDIT, so audits > 0 whenever the status is legal.
     const requiredVerdict = STATUS_TO_REQUIRED_VERDICT[row.status];
     if (requiredVerdict !== undefined && audits > 0) {
-      const latest = latestArtifactPath(auditsDir, "AUDIT");
+      const latest = latestArtifactPath(auditsDir, auditScan.byRevision);
       // `latest` is non-null because audits > 0.
       const parsed = parseAuditVerdict(readFileSync(latest as string, "utf8"));
       const rel = `docs/audits/${row.id}/${(latest as string).split("/").pop() ?? ""}`;
@@ -417,7 +484,9 @@ export function validate(repoRoot: string): ValidationResult {
 
     // BLOCKED provenance is resolved by the most recent artifact, not audit count.
     if (row.status === "BLOCKED") {
-      errors.push(...checkBlockedProvenance(handoffDir, auditsDir, row.id, where));
+      errors.push(
+        ...checkBlockedProvenance(handoffDir, auditsDir, handoffScan, auditScan, row.id, where),
+      );
     }
   }
 

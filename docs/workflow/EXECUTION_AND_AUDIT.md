@@ -111,8 +111,12 @@ docs/handoffs/RA-007/HANDOFF-02.md
 docs/audits/RA-007/AUDIT-02.md
 ```
 
-Nie nadpisuj poprzednich handoffów ani audytów. Numeruj je dwucyfrowo i odczytuj
-najnowszy po sortowaniu nazwy.
+Nie nadpisuj poprzednich handoffów ani audytów. Każda rewizja ma dokładnie jedną
+kanoniczną nazwę: numer zero-paddowany do dwóch cyfr (`01`…`09`), potem naturalny
+zapis (`10`, `11`, …, `100`). Bez `00` i bez nadmiarowych zer — `HANDOFF-1.md`,
+`AUDIT-001.md` czy `AUDIT-010.md` są odrzucane przez `workflow:validate`, tak samo
+jak dwa pliki wskazujące ten sam numer (np. `AUDIT-01.md` i `AUDIT-001.md`).
+Najnowszy artefakt wybieramy po numerze rewizji, nie po kolejności katalogu.
 
 ## Decision Request
 

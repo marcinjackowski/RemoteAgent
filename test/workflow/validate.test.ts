@@ -25,6 +25,8 @@ interface AuditSpec {
   id: string;
   /** Revision number -> AUDIT-<NN>.md. Defaults to 1. */
   rev?: number;
+  /** Verbatim file name, bypassing the canonical `AUDIT-NN.md` naming. */
+  fileName?: string;
   /** Declared verdict; ignored when `raw` is set. Defaults to "PASS". */
   verdict?: string;
   /** Raw file body, bypassing the verdict template (for malformed cases). */
@@ -35,6 +37,8 @@ interface HandoffSpec {
   id: string;
   /** Revision number -> HANDOFF-<NN>.md. Defaults to 1. */
   rev?: number;
+  /** Verbatim file name, bypassing the canonical `HANDOFF-NN.md` naming. */
+  fileName?: string;
   /** Include an explicit Decision Request marker in the body. */
   decisionRequest?: boolean;
   /** Raw file body, bypassing the default template. */
@@ -82,7 +86,7 @@ function buildRepo(spec: RepoSpec): string {
     const nn = String(handoff.rev ?? 1).padStart(2, "0");
     const marker = handoff.decisionRequest ? "\n## Decision Request\n\nProszę o decyzję.\n" : "";
     const body = handoff.raw ?? `# ${handoff.id} handoff\n${marker}`;
-    writeFileSync(join(dir, `HANDOFF-${nn}.md`), body);
+    writeFileSync(join(dir, handoff.fileName ?? `HANDOFF-${nn}.md`), body);
   }
   for (const entry of spec.audits ?? []) {
     const audit: AuditSpec = typeof entry === "string" ? { id: entry } : entry;
@@ -90,7 +94,7 @@ function buildRepo(spec: RepoSpec): string {
     mkdirSync(dir, { recursive: true });
     const nn = String(audit.rev ?? 1).padStart(2, "0");
     const body = audit.raw ?? `# ${audit.id} audit\n\n- Werdykt: \`${audit.verdict ?? "PASS"}\`\n`;
-    writeFileSync(join(dir, `AUDIT-${nn}.md`), body);
+    writeFileSync(join(dir, audit.fileName ?? `AUDIT-${nn}.md`), body);
   }
   return root;
 }
@@ -441,6 +445,108 @@ describe("validate — BLOCKED provenance by newest artifact", () => {
     expect(
       result.errors.some((e) => e.includes("verdict is CHANGES_REQUIRED (expected BLOCKED)")),
     ).toBe(true);
+  });
+});
+
+describe("validate — canonical artifact revision names", () => {
+  it("rejects a conflicting AUDIT-01 / AUDIT-001 pair and does not silently pick one", () => {
+    // AUDIT-001 (PASS) must not be able to shadow AUDIT-01 (CHANGES_REQUIRED).
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [
+        { id: "RA-001", fileName: "AUDIT-01.md", verdict: "CHANGES_REQUIRED" },
+        { id: "RA-001", fileName: "AUDIT-001.md", verdict: "PASS" },
+      ],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("files for revision 1"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("non-canonical revision name"))).toBe(true);
+  });
+
+  it("rejects a conflicting HANDOFF-01 / HANDOFF-001 pair", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: [
+        { id: "RA-001", fileName: "HANDOFF-01.md" },
+        { id: "RA-001", fileName: "HANDOFF-001.md", decisionRequest: true },
+      ],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("files for revision 1"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("non-canonical revision name"))).toBe(true);
+  });
+
+  it("flags two files that resolve to the same numeric revision", () => {
+    // AUDIT-02 and AUDIT-002 both denote revision 2: an explicit duplicate error
+    // fires (plus a non-canonical error for AUDIT-002), and neither is selected.
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [
+        { id: "RA-001", fileName: "AUDIT-02.md", verdict: "PASS" },
+        { id: "RA-001", fileName: "AUDIT-002.md", verdict: "CHANGES_REQUIRED" },
+      ],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("files for revision 2"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("non-canonical revision name"))).toBe(true);
+  });
+
+  it("rejects revision 00", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [{ id: "RA-001", fileName: "HANDOFF-00.md" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("non-canonical revision name"))).toBe(true);
+    // 00 is not counted as a handoff, so the missing-handoff rule also fires.
+    expect(result.errors.some((e) => e.includes("has no handoff"))).toBe(true);
+  });
+
+  it("rejects a single-digit (unpadded) revision name", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [{ id: "RA-001", fileName: "HANDOFF-1.md" }],
+    });
+    const result = validate(root);
+    expect(result.errors.some((e) => e.includes("non-canonical revision name"))).toBe(true);
+  });
+
+  it("selects revision 10 over 09 by numeric value", () => {
+    // AUDIT-10 (PASS) is the latest; AUDIT-09 (CHANGES_REQUIRED) must not win.
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [
+        { id: "RA-001", rev: 9, verdict: "CHANGES_REQUIRED" },
+        { id: "RA-001", rev: 10, verdict: "PASS" },
+      ],
+    });
+    expect(validate(root).ok).toBe(true);
+
+    // Reverse the verdicts: 10 is CHANGES_REQUIRED, so AUDIT_PASSED is illegal.
+    const reversed = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AUDIT_PASSED" }],
+      handoffs: ["RA-001"],
+      audits: [
+        { id: "RA-001", rev: 9, verdict: "PASS" },
+        { id: "RA-001", rev: 10, verdict: "CHANGES_REQUIRED" },
+      ],
+    });
+    expect(validate(reversed).ok).toBe(false);
+  });
+
+  it("accepts a three-digit revision like 100", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "AWAITING_AUDIT" }],
+      handoffs: [{ id: "RA-001", fileName: "HANDOFF-100.md" }],
+    });
+    expect(validate(root).ok).toBe(true);
   });
 });
 
