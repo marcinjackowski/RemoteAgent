@@ -9,7 +9,9 @@
  *   - every status is a known status;
  *   - every dependency references an existing task;
  *   - the dependency graph has no cycles;
- *   - required handoff/audit artifacts exist for the declared status.
+ *   - required handoff/audit artifacts exist for the declared status;
+ *   - auditor-only statuses match the latest audit verdict, and a `BLOCKED`
+ *     status has a documented provenance (audit-driven or Decision Request).
  *
  * The module exports {@link validate} so it can be unit tested against fixture
  * repositories, and runs as a CLI when invoked directly.
@@ -49,24 +51,19 @@ export type AuditVerdict = (typeof AUDIT_VERDICTS)[number];
 /**
  * Status -> the verdict the latest audit MUST carry for that status to be legal.
  *
- * These entries are enforced only when the task already has at least one audit
- * artifact (see the `audits > 0` guard in {@link validate}). That audit-presence
- * check is the deterministic provenance distinction for `BLOCKED`:
+ * These are the auditor-only statuses: they are always reached by an auditor's
+ * decision, so an audit must exist (see {@link STATUSES_REQUIRING_AUDIT}) and its
+ * latest verdict must equal the mapped value.
  *
- *   - **procedural block** — a `BLOCKED` task with NO audit (dependency, owner
- *     Decision Request) carries no verdict obligation and stays legal;
- *   - **audit-driven block** — a `BLOCKED` task that DOES have an audit must have
- *     a latest verdict of `BLOCKED`, so the blocking auditor's decision is bound
- *     to the status.
- *
- * `CHANGES_REQUESTED`, `AUDIT_PASSED` and `DONE` are additionally listed in
- * {@link STATUSES_REQUIRING_AUDIT}, so for them an audit must exist at all.
+ * `BLOCKED` is intentionally NOT here: its provenance is ambiguous (a block can
+ * come from the auditor OR from an implementer's Decision Request), so it is
+ * resolved separately by {@link checkBlockedProvenance} using the most-recent
+ * artifact, not by the mere existence of any audit.
  */
 const STATUS_TO_REQUIRED_VERDICT: Readonly<Record<string, AuditVerdict>> = {
   CHANGES_REQUESTED: "CHANGES_REQUIRED",
   AUDIT_PASSED: "PASS",
   DONE: "PASS",
-  BLOCKED: "BLOCKED",
 };
 
 const VERDICT_TOKEN_RE = /\b(PASS|CHANGES_REQUIRED|BLOCKED)\b/g;
@@ -174,6 +171,31 @@ function latestArtifactPath(dir: string, prefix: string): string | null {
   return join(dir, best);
 }
 
+/** Highest revision number among `<PREFIX>-NN.md` in `dir`, or 0 if none. */
+function latestArtifactRevision(dir: string, prefix: string): number {
+  const files = listArtifacts(dir, prefix);
+  let best = 0;
+  for (const f of files) best = Math.max(best, artifactRevision(f));
+  return best;
+}
+
+const DECISION_REQUEST_RE = /^decision request\b/;
+
+/**
+ * Whether a handoff body declares a Decision Request.
+ *
+ * The marker is a line that begins with "Decision Request" once leading markdown
+ * decoration (heading hashes, list bullets, blockquotes, emphasis) is stripped —
+ * e.g. `## Decision Request`, `**Decision Request**` or `- Decision Request:`.
+ * This is the documented, deterministic signal for a procedural block; see
+ * `docs/workflow/EXECUTION_AND_AUDIT.md`.
+ */
+function hasDecisionRequest(content: string): boolean {
+  return content
+    .split(/\r?\n/)
+    .some((raw) => DECISION_REQUEST_RE.test(raw.replace(/^[\s>#*_-]+/, "").toLowerCase()));
+}
+
 export type VerdictParse =
   | { readonly kind: "ok"; readonly verdict: AuditVerdict }
   | { readonly kind: "missing" }
@@ -253,6 +275,67 @@ function findCycle(rows: readonly TaskRow[]): string[] | null {
 }
 
 /**
+ * Check that a `BLOCKED` status has a legitimate, documented provenance.
+ *
+ * The block's source is resolved by the MOST RECENT artifact, compared by
+ * revision number — not by the mere existence of any audit:
+ *
+ *   - newest artifact is an audit (rev >= newest handoff) -> audit-driven block;
+ *     that audit's verdict must be `BLOCKED`;
+ *   - newest artifact is a handoff -> procedural block; that handoff must declare
+ *     a Decision Request (see {@link hasDecisionRequest});
+ *   - no artifacts at all -> undocumented block.
+ *
+ * Every other shape is fail-closed (an error). This lets an implementer stop with
+ * a Decision Request after an earlier `CHANGES_REQUIRED` without the stale audit
+ * being mistaken for the block's cause.
+ */
+function checkBlockedProvenance(
+  handoffDir: string,
+  auditsDir: string,
+  id: string,
+  where: string,
+): string[] {
+  const errors: string[] = [];
+  const latestHandoffRev = latestArtifactRevision(handoffDir, "HANDOFF");
+  const latestAuditRev = latestArtifactRevision(auditsDir, "AUDIT");
+
+  if (latestHandoffRev === 0 && latestAuditRev === 0) {
+    errors.push(`${where}: ${id} is BLOCKED but no handoff or audit documents the block`);
+    return errors;
+  }
+
+  if (latestAuditRev >= latestHandoffRev) {
+    // Most recent action is the auditor's: the block must be their BLOCKED verdict.
+    const latest = latestArtifactPath(auditsDir, "AUDIT") as string;
+    const rel = `docs/audits/${id}/${latest.split("/").pop() ?? ""}`;
+    const parsed = parseAuditVerdict(readFileSync(latest, "utf8"));
+    if (parsed.kind === "missing") {
+      errors.push(`${where}: ${id} is BLOCKED but latest audit ${rel} declares no verdict`);
+    } else if (parsed.kind === "ambiguous") {
+      errors.push(
+        `${where}: ${id} is BLOCKED but latest audit ${rel} has an ambiguous verdict (${parsed.found.join(", ")})`,
+      );
+    } else if (parsed.verdict !== "BLOCKED") {
+      errors.push(
+        `${where}: ${id} is BLOCKED but latest audit ${rel} verdict is ${parsed.verdict} (expected BLOCKED); a procedural block needs a newer handoff with a Decision Request`,
+      );
+    }
+    return errors;
+  }
+
+  // Most recent action is the implementer's handoff: it must be a Decision Request.
+  const latestHandoff = latestArtifactPath(handoffDir, "HANDOFF") as string;
+  const rel = `docs/handoffs/${id}/${latestHandoff.split("/").pop() ?? ""}`;
+  if (!hasDecisionRequest(readFileSync(latestHandoff, "utf8"))) {
+    errors.push(
+      `${where}: ${id} is BLOCKED but latest handoff ${rel} declares no Decision Request`,
+    );
+  }
+  return errors;
+}
+
+/**
  * Validate the workflow state rooted at `repoRoot`.
  *
  * Pure with respect to the filesystem it reads; it never mutates anything and
@@ -297,7 +380,8 @@ export function validate(repoRoot: string): ValidationResult {
     }
 
     const auditsDir = join(repoRoot, "docs", "audits", row.id);
-    const handoffs = countArtifacts(join(repoRoot, "docs", "handoffs", row.id), "HANDOFF");
+    const handoffDir = join(repoRoot, "docs", "handoffs", row.id);
+    const handoffs = countArtifacts(handoffDir, "HANDOFF");
     const audits = countArtifacts(auditsDir, "AUDIT");
     if (STATUSES_REQUIRING_HANDOFF.has(row.status) && handoffs === 0) {
       errors.push(
@@ -310,7 +394,8 @@ export function validate(repoRoot: string): ValidationResult {
       );
     }
 
-    // Status reachable only by an auditor must match the latest audit verdict.
+    // Auditor-only status must match the latest audit verdict. Those statuses are
+    // in STATUSES_REQUIRING_AUDIT, so audits > 0 whenever the status is legal.
     const requiredVerdict = STATUS_TO_REQUIRED_VERDICT[row.status];
     if (requiredVerdict !== undefined && audits > 0) {
       const latest = latestArtifactPath(auditsDir, "AUDIT");
@@ -328,6 +413,11 @@ export function validate(repoRoot: string): ValidationResult {
           `${where}: ${row.id} is ${row.status} but latest audit ${rel} verdict is ${parsed.verdict} (expected ${requiredVerdict})`,
         );
       }
+    }
+
+    // BLOCKED provenance is resolved by the most recent artifact, not audit count.
+    if (row.status === "BLOCKED") {
+      errors.push(...checkBlockedProvenance(handoffDir, auditsDir, row.id, where));
     }
   }
 

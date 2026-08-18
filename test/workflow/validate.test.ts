@@ -31,12 +31,22 @@ interface AuditSpec {
   raw?: string;
 }
 
+interface HandoffSpec {
+  id: string;
+  /** Revision number -> HANDOFF-<NN>.md. Defaults to 1. */
+  rev?: number;
+  /** Include an explicit Decision Request marker in the body. */
+  decisionRequest?: boolean;
+  /** Raw file body, bypassing the default template. */
+  raw?: string;
+}
+
 interface RepoSpec {
   rows: RowSpec[];
   /** Task ids for which a docs/tasks/<id>.md file should be created. */
   taskFiles?: string[];
-  /** Task ids that should get a handoff file. */
-  handoffs?: string[];
+  /** Handoffs to create; a bare string means a single plain HANDOFF-01 for that id. */
+  handoffs?: Array<string | HandoffSpec>;
   /** Audits to create; a bare string means a single PASS audit for that id. */
   audits?: Array<string | AuditSpec>;
 }
@@ -65,10 +75,14 @@ function buildRepo(spec: RepoSpec): string {
   const taskFiles = spec.taskFiles ?? spec.rows.map((r) => r.id);
   for (const id of taskFiles) writeFileSync(join(tasksDir, `${id}.md`), `# ${id}\n`);
 
-  for (const id of spec.handoffs ?? []) {
-    const dir = join(root, "docs", "handoffs", id);
+  for (const entry of spec.handoffs ?? []) {
+    const handoff: HandoffSpec = typeof entry === "string" ? { id: entry } : entry;
+    const dir = join(root, "docs", "handoffs", handoff.id);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "HANDOFF-01.md"), `# ${id} handoff\n`);
+    const nn = String(handoff.rev ?? 1).padStart(2, "0");
+    const marker = handoff.decisionRequest ? "\n## Decision Request\n\nProszę o decyzję.\n" : "";
+    const body = handoff.raw ?? `# ${handoff.id} handoff\n${marker}`;
+    writeFileSync(join(dir, `HANDOFF-${nn}.md`), body);
   }
   for (const entry of spec.audits ?? []) {
     const audit: AuditSpec = typeof entry === "string" ? { id: entry } : entry;
@@ -332,43 +346,96 @@ describe("validate — audit verdict enforcement", () => {
   });
 });
 
-describe("validate — BLOCKED verdict provenance", () => {
-  it("accepts a procedural BLOCKED task with no audit", () => {
-    // Blocking for procedural reasons (dependency / Decision Request) is legal
-    // without any audit artifact, so it carries no verdict obligation.
+describe("validate — BLOCKED provenance by newest artifact", () => {
+  it("accepts a procedural block: newest handoff declares a Decision Request, no audit", () => {
     const root = buildRepo({
       rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: [{ id: "RA-001", rev: 1, decisionRequest: true }],
     });
     const result = validate(root);
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
   });
 
-  it("accepts an audit-driven BLOCKED backed by a BLOCKED verdict", () => {
+  it("accepts a procedural block raised after an earlier CHANGES_REQUIRED audit", () => {
+    // HANDOFF-01 -> AUDIT-01 CHANGES_REQUIRED -> HANDOFF-02 (Decision Request) -> BLOCKED.
+    // The newest artifact is the handoff, so the stale audit is not the block's cause.
     const root = buildRepo({
       rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
-      handoffs: ["RA-001"],
-      audits: [{ id: "RA-001", verdict: "BLOCKED" }],
+      handoffs: [
+        { id: "RA-001", rev: 1 },
+        { id: "RA-001", rev: 2, decisionRequest: true },
+      ],
+      audits: [{ id: "RA-001", rev: 1, verdict: "CHANGES_REQUIRED" }],
+    });
+    const result = validate(root);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts an audit-driven block: newest audit verdict is BLOCKED", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "BLOCKED" }],
     });
     expect(validate(root).ok).toBe(true);
   });
 
-  it("rejects a BLOCKED task whose latest audit says PASS", () => {
+  it("rejects a stale CHANGES_REQUIRED audit with a newer handoff that has no Decision Request", () => {
     const root = buildRepo({
       rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
-      handoffs: ["RA-001"],
-      audits: [{ id: "RA-001", verdict: "PASS" }],
+      handoffs: [
+        { id: "RA-001", rev: 1 },
+        { id: "RA-001", rev: 2 }, // no Decision Request marker
+      ],
+      audits: [{ id: "RA-001", rev: 1, verdict: "CHANGES_REQUIRED" }],
     });
     const result = validate(root);
     expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("declares no Decision Request"))).toBe(true);
+  });
+
+  it("rejects a conflict: an older BLOCKED audit cannot rescue a newer non-Decision-Request handoff", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: [
+        { id: "RA-001", rev: 1 },
+        { id: "RA-001", rev: 2 }, // newest, but no Decision Request
+      ],
+      audits: [{ id: "RA-001", rev: 1, verdict: "BLOCKED" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("declares no Decision Request"))).toBe(true);
+  });
+
+  it("rejects an undocumented block with no handoff and no audit (fail-closed)", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+    });
+    const result = validate(root);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("no handoff or audit documents the block"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects an audit-driven block whose newest audit says PASS", () => {
+    const root = buildRepo({
+      rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "PASS" }],
+    });
+    const result = validate(root);
     expect(result.errors.some((e) => e.includes("verdict is PASS (expected BLOCKED)"))).toBe(true);
   });
 
-  it("rejects a BLOCKED task whose latest audit says CHANGES_REQUIRED", () => {
+  it("rejects an audit-driven block whose newest audit says CHANGES_REQUIRED", () => {
     const root = buildRepo({
       rows: [{ order: 1, id: "RA-001", status: "BLOCKED" }],
-      handoffs: ["RA-001"],
-      audits: [{ id: "RA-001", verdict: "CHANGES_REQUIRED" }],
+      handoffs: [{ id: "RA-001", rev: 1 }],
+      audits: [{ id: "RA-001", rev: 1, verdict: "CHANGES_REQUIRED" }],
     });
     const result = validate(root);
     expect(

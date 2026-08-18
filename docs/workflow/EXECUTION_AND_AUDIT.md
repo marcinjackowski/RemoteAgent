@@ -116,8 +116,10 @@ najnowszy po sortowaniu nazwy.
 
 ## Decision Request
 
-Gdy konieczna jest decyzja właściciela, implementer zapisuje ją w handoffie i
-ustawia task na `BLOCKED`. Pytanie musi zawierać:
+Gdy konieczna jest decyzja właściciela, implementer zapisuje ją w najnowszym
+handoffie i ustawia task na `BLOCKED`. Handoff musi zawierać jawny marker
+`Decision Request` (nagłówek, pogrubienie lub pozycja listy zaczynająca się od
+`Decision Request`), a samo pytanie:
 
 - konkretną decyzję;
 - dlaczego jest potrzebna teraz;
@@ -127,6 +129,24 @@ ustawia task na `BLOCKED`. Pytanie musi zawierać:
 
 Drobne, lokalne decyzje implementacyjne nie wymagają zatrzymania, jeżeli nie
 zmieniają kontraktu, bezpieczeństwa, kosztu, danych ani zakresu.
+
+### Provenance blokady (`BLOCKED`)
+
+`workflow:validate` rozstrzyga źródło blokady deterministycznie, według
+NAJNOWSZEGO artefaktu (po numerze rewizji `HANDOFF-NN`/`AUDIT-NN`), a nie przez
+samo istnienie jakiegokolwiek audytu:
+
+- najnowszy artefakt to audyt (rewizja audytu ≥ rewizja handoffu) → blokada
+  audytowa; werdykt tego audytu musi być `BLOCKED`;
+- najnowszy artefakt to handoff → blokada proceduralna; ten handoff musi zawierać
+  marker `Decision Request`;
+- brak jakichkolwiek artefaktów → blokada nieudokumentowana.
+
+Każdy inny kształt (np. stary audyt `CHANGES_REQUIRED` bez nowszego handoffu z
+Decision Request, brak markera, niejednoznaczny lub brakujący werdykt) jest
+fail-closed. Dzięki temu implementer może legalnie zatrzymać się z Decision
+Request po wcześniejszym `CHANGES_REQUIRED`, a przestarzały audyt nie jest brany
+za przyczynę bieżącej blokady.
 
 ## Zasady dowodowe
 
