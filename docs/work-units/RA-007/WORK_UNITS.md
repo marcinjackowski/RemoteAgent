@@ -33,7 +33,7 @@
 | `RA-007-WU-07B` | `ACCEPTED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
 | `RA-007-WU-08` | `ACCEPTED` | zintegrowany runtime z pełną metryką completion | WU-04, WU-06B, WU-07B |
 | `RA-007-WU-09A` | `ACCEPTED` | cancellation nie czeka na wadliwy cleanup iteratora | WU-08 |
-| `RA-007-WU-09B` | `READY` | metadane każdego model completion są zachowane | WU-09A |
+| `RA-007-WU-09B` | `ACCEPTED` | metadane każdego model completion są zachowane | WU-09A |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -207,7 +207,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-09B` — Per-completion metadata trace
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Finding: `AUDIT-01 MEDIUM-02`.
 - Result: provider-neutralny trace pozwala zapisać identity i usage każdego
   zakończonego model call bez zachowywania promptu ani contentu.
