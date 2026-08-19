@@ -3,11 +3,11 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `01`
+- Plan revision: `02`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
-- Plan status: `DRAFT`; aktywacja dopiero po `RA-007 DONE`
-- Base commit/tree: ustala Sol przy aktywacji
+- Plan status: `ACTIVE`
+- Base commit/tree: `171d3c679dafd95cd0cdb1b52552a8594a5534b8`
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/agent-orchestrator/test packages/database/test`
 
 ## Global boundaries
@@ -21,7 +21,7 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-008-WU-01` | `DRAFT` | trwałe repozytorium decyzji i odpowiedzi | — |
+| `RA-008-WU-01` | `READY` | trwałe repozytorium decyzji i odpowiedzi | — |
 | `RA-008-WU-02` | `BLOCKED` | deterministyczny context builder i provenance | WU-01 |
 | `RA-008-WU-03` | `BLOCKED` | czysta aplikacja checkpoint patch | WU-02 |
 | `RA-008-WU-04` | `BLOCKED` | atomic completion apply | WU-03 |
@@ -32,15 +32,19 @@
 
 ## `RA-008-WU-01` — Decision repository
 
+- Status: `READY`
 - Result: typed repository zapisuje request i jedną związaną odpowiedź.
 - Allowed paths: `packages/database/src/repositories/decision.ts`,
   `repositories/index.ts`, `test/decision.integration.test.ts`,
   `packages/database/src/errors.ts`.
 - Context pack: `decision.ts` contract, migracje `005`/`010`, repository patterns.
-- Acceptance: request jest append-only; replay identycznej odpowiedzi jest
-  idempotentny; obcy case/revision/option jest odrzucony.
+- Acceptance: request jest walidowany kontraktem i append-only; replay dokładnie
+  identycznego `{answerId, answer}` zwraca istniejący rekord bez drugiego insertu,
+  a kolizja o innej semantyce failuje typed error; obcy case, revision i option
+  są odrzucone przed zapisem odpowiedzi.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/decision.integration.test.ts`.
-- Out of scope: checkpoint apply i Discord.
+- Out of scope: porównanie z bieżącą rewizją case (WU-05), checkpoint apply i
+  Discord.
 - Sol gate: realny PostgreSQL oraz cross-case negative test.
 
 ## `RA-008-WU-02` — Context builder
