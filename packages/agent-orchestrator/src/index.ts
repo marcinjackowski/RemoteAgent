@@ -8,3 +8,5 @@ export const packageName = "agent-orchestrator" as const;
 export * from "./context/types.js";
 export * from "./context/budget.js";
 export * from "./context/builder.js";
+export * from "./checkpoint/apply-patch.js";
+export * from "./checkpoint/errors.js";
