@@ -32,8 +32,8 @@
 | `RA-007-WU-07A` | `ACCEPTED` | retry policy i klasyfikacja błędów AWS | WU-03, WU-05 |
 | `RA-007-WU-07B` | `ACCEPTED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
 | `RA-007-WU-08` | `ACCEPTED` | zintegrowany runtime z pełną metryką completion | WU-04, WU-06B, WU-07B |
-| `RA-007-WU-09A` | `READY` | cancellation nie czeka na wadliwy cleanup iteratora | WU-08 |
-| `RA-007-WU-09B` | `BLOCKED` | metadane każdego model completion są zachowane | WU-09A |
+| `RA-007-WU-09A` | `ACCEPTED` | cancellation nie czeka na wadliwy cleanup iteratora | WU-08 |
+| `RA-007-WU-09B` | `READY` | metadane każdego model completion są zachowane | WU-09A |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -190,7 +190,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-09A` — Non-blocking stream cleanup
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Finding: `AUDIT-01 HIGH-01`.
 - Result: cancellation i pierwotny failure rozstrzygają się niezależnie od
   zachowania `iterator.return()`.
@@ -207,7 +207,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-09B` — Per-completion metadata trace
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Finding: `AUDIT-01 MEDIUM-02`.
 - Result: provider-neutralny trace pozwala zapisać identity i usage każdego
   zakończonego model call bez zachowywania promptu ani contentu.
