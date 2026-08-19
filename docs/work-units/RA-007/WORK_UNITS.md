@@ -22,8 +22,8 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-007-WU-01` | `RUNNING` | kontrakty runtime i konfiguracja modelu | — |
-| `RA-007-WU-02` | `BLOCKED` | fake transport i non-streaming Converse | WU-01 |
+| `RA-007-WU-01` | `ACCEPTED` | kontrakty runtime i konfiguracja modelu | — |
+| `RA-007-WU-02` | `READY` | fake transport i non-streaming Converse | WU-01 |
 | `RA-007-WU-03` | `BLOCKED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
 | `RA-007-WU-04` | `BLOCKED` | streaming i jednoznaczne cancellation | WU-02 |
 | `RA-007-WU-05` | `BLOCKED` | ograniczony client-side tool loop | WU-02 |
@@ -33,7 +33,7 @@
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
-- Status: `RUNNING`
+- Status: `ACCEPTED`
 - Result: model-neutralny publiczny interface, konfiguracja i typed errors.
 - Allowed paths: `packages/bedrock-runtime/src/types.ts`, `config.ts`, `errors.ts`,
   `index.ts`, `packages/bedrock-runtime/test/config.test.ts`.
@@ -54,6 +54,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-02` — Fake transport and Converse text
 
+- Status: `READY`
 - Result: deterministyczny transport testowy i pojedynczy non-streaming turn.
 - Allowed paths: `src/transport.ts`, `src/fake-transport.ts`, `src/converse.ts`,
   `test/converse.test.ts`, `src/index.ts` w pakiecie `bedrock-runtime`.
