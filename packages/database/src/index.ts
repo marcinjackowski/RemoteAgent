@@ -36,6 +36,8 @@ export {
   MigrationError,
   RunCompletionConflictError,
   RunCompletionStateError,
+  DecisionWaitingConflictError,
+  DecisionWaitingStateError,
 } from "./errors.js";
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";

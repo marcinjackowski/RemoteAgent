@@ -103,6 +103,18 @@ export class DecisionAnswerConflictError extends PersistenceError {
   }
 }
 
+/** A decision id was reused with different immutable waiting semantics. */
+export class DecisionWaitingConflictError extends PersistenceError {
+  public readonly decisionId: string;
+  public constructor(decisionId: string) {
+    super(`decision waiting conflict for ${decisionId}`);
+    this.decisionId = decisionId;
+  }
+}
+
+/** The source completion/case is not eligible for waiting materialization. */
+export class DecisionWaitingStateError extends PersistenceError {}
+
 /** A concurrent credential refresh already advanced the expected revision. */
 export class CredentialRefreshConflictError extends PersistenceError {
   public readonly connectionId: string;
