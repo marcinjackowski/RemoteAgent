@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `08`
+- Plan revision: `09`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -25,11 +25,12 @@
 | `RA-008-WU-02` | `ACCEPTED` | deterministyczny context builder i provenance | WU-01 |
 | `RA-008-WU-03` | `ACCEPTED` | czysta aplikacja checkpoint patch | WU-02 |
 | `RA-008-WU-04A` | `ACCEPTED` | czyste przygotowanie completion do zapisu | WU-03 |
-| `RA-008-WU-04B` | `READY` | atomic completion persistence | WU-04A |
-| `RA-008-WU-05` | `BLOCKED` | waiting/answer binding i stale rejection | WU-01, WU-04B |
+| `RA-008-WU-04B` | `ACCEPTED` | atomic completion persistence | WU-04A |
+| `RA-008-WU-05A` | `READY` | czyste przygotowanie request/answer | WU-01, WU-04B |
+| `RA-008-WU-05B` | `BLOCKED` | trwałe waiting i atomic answer resume | WU-05A |
 | `RA-008-WU-06` | `BLOCKED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07` | `BLOCKED` | bounded compaction bez utraty decyzji | WU-02, WU-03 |
-| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05, WU-06, WU-07 |
+| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05B, WU-06, WU-07 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -138,7 +139,7 @@
 
 ## `RA-008-WU-04B` — Atomic completion persistence
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: jedna publiczna operacja i jedna transakcja zapisują completion,
   checkpoint revision, terminalny run state, zwolnienie `active_run_id` i outbox.
 - Allowed paths: `packages/database/src/repositories/run-completion.ts`,
@@ -169,18 +170,58 @@
 - Sol gate: real-PG exact/conflicting replay, two-run revision race oraz fault
   matrix po completion/checkpoint/run/active-run/outbox writes.
 
-## `RA-008-WU-05` — Waiting and answer resume
+## `RA-008-WU-05A` — Decision preparation
 
-- Result: `WAITING_FOR_USER` zwalnia run/lease, a ważna odpowiedź tworzy nowy resume intent.
-- Allowed paths: `packages/agent-orchestrator/src/decisions/service.ts`,
-  `decisions/errors.ts`, `test/decisions.test.ts`,
-  `packages/database/test/decision-resume.integration.test.ts`, `src/index.ts`.
-- Context pack: WU-01/WU-04B, DecisionRequest contracts, queue/outbox APIs.
-- Acceptance: stale/foreign answer odrzucony; replay nie tworzy drugiego resume;
-  waiting nie utrzymuje aktywnego lease.
+- Status: `READY`
+- Result: czyste funkcje normalizują modelowy `DecisionRequest` do rewizji
+  zatwierdzonego checkpointu oraz budują systemowo związany `DecisionAnswer`.
+- Allowed paths: `packages/agent-orchestrator/src/decisions/prepare.ts`,
+  `decisions/errors.ts`, `test/decision-preparation.test.ts`, `src/index.ts`.
+- Context pack: Decision contracts, WU-04A/B output i case state machine.
+- Acceptance:
+  - request powstaje wyłącznie z runtime-valid `WAITING_FOR_USER` completion oraz
+    zatwierdzonego checkpointu tego samego case/run; `case_id` i
+    `checkpoint_revision` są nadpisywane autorytatywnie z checkpointu, nigdy
+    przyjmowane z modelowej rewizji;
+  - answer przyjmuje nieufną selekcję `{decisionId, selectedOptionId, note?}` i
+    systemowe `{caseId, currentRevision, answeredBy, answeredAt}`; wynik przechodzi
+    pełny kontrakt i wybór musi istnieć w request;
+  - obcy decision/case, zmieniona bieżąca rewizja, wygasły request, nieznana opcja
+    albo wadliwy system time/identity dają rozróżnialny typed error;
+  - input nie jest mutowany, a identyczne inputy dają identyczny output.
+- Verification: `pnpm vitest run packages/agent-orchestrator/test/decision-preparation.test.ts`.
+- Out of scope: DB, Discord parsing i utworzenie resume job.
+- Sol gate: modelowa dowolna rewizja zostaje zastąpiona committed revision;
+  exhaustive mismatch/stale/expiry/option matrix oraz trust-safe error messages.
+
+## `RA-008-WU-05B` — Durable waiting and answer resume
+
+- Status: `BLOCKED`
+- Result: waiting jest materializowane idempotentnie, a odpowiedź i dokładnie
+  jeden resume job commitują się atomowo.
+- Allowed paths: `packages/database/src/repositories/decision-resume.ts`,
+  `repositories/index.ts`, `src/errors.ts`, `src/index.ts`,
+  `test/decision-resume.integration.test.ts`.
+- Context pack: WU-01, WU-04B, WU-05A, `JobStore`, `OutboxRepository` i case CAS.
+- Acceptance:
+  - `materializeWaiting` lockuje source run completion i case, wymaga
+    `WAITING_FOR_USER`, terminalnego runa, committed checkpointu wskazującego run,
+    braku active run i semantycznej zgodności requestu; zapisuje request, ustawia
+    `WAITING_FOR_USER` i enqueue'uje zredagowany `decision.requested` w jednej
+    transakcji;
+  - identyczna materializacja jest write-free replay, a kolizja decision ID o
+    innej semantyce typed conflict; luka crash między completion a materializacją
+    pozostaje wykrywalna z append-only completion i jest domykana przez WU-08;
+  - `answerAndResume` lockuje decision/case, ponownie sprawdza case/revision/status,
+    zapisuje odpowiedź przez WU-01, przełącza case do `PLANNING` i enqueue'uje
+    per-case `case.resume` job w tej samej transakcji;
+  - exact double-answer replay nie tworzy drugiego answer/job; conflicting,
+    stale, foreign albo expired answer zapisuje zero; waiting nie ma active run
+    ani lease.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/decision-resume.integration.test.ts`.
-- Out of scope: Discord interaction parsing z RA-006.
-- Sol gate: receipt/idempotency test dla podwójnej odpowiedzi.
+- Out of scope: Discord interaction parsing i uruchomienie nowego model call.
+- Sol gate: real-PG crash/fault przed każdym commit point, concurrent double answer,
+  exact/conflicting replay, stale revision i jeden PENDING job z case serialization.
 
 ## `RA-008-WU-06` — Checkpoint projections
 
