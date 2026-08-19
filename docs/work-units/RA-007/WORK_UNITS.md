@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-007`
-- Plan revision: `01`
+- Plan revision: `02`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `Qwen3.8-27B-oQ6e-mtp / LOCAL_IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -45,6 +45,19 @@
 - Out of scope: AWS SDK, sieć, streaming i tool loop.
 - Sol gate: zgodność API z kontraktami RA-002 i brak provider-specific types na
   publicznej granicy.
+
+### Execution slices
+
+| Slice | Status | Result | Allowed paths |
+|---|---|---|---|
+| `RA-007-WU-01A` | `RUNNING` | typed config errors i walidowana konfiguracja | `src/config.ts`, `src/errors.ts`, `test/config.test.ts` |
+| `RA-007-WU-01B` | `BLOCKED` | model-neutral runtime types i public exports | `src/types.ts`, `src/index.ts` |
+
+`WU-01A` nie importuje `@remoteagent/contracts` ani zewnętrznego walidatora.
+`WU-01B` utrzymuje zgodność strukturalną z RA-002 bez kopiowania pełnych schemas;
+zależność pakietowa może zostać dodana dopiero w unicie dopuszczającym zmianę
+manifestu. Podział wprowadzono po dwóch sesjach, które zużywały kontekst na
+rozstrzyganie zależności zamiast dostarczyć zmianę.
 
 ## `RA-007-WU-02` — Fake transport and Converse text
 
