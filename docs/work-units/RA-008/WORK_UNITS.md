@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `05`
+- Plan revision: `06`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -22,8 +22,8 @@
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
 | `RA-008-WU-01` | `ACCEPTED` | trwałe repozytorium decyzji i odpowiedzi | — |
-| `RA-008-WU-02` | `READY` | deterministyczny context builder i provenance | WU-01 |
-| `RA-008-WU-03` | `BLOCKED` | czysta aplikacja checkpoint patch | WU-02 |
+| `RA-008-WU-02` | `ACCEPTED` | deterministyczny context builder i provenance | WU-01 |
+| `RA-008-WU-03` | `READY` | czysta aplikacja checkpoint patch | WU-02 |
 | `RA-008-WU-04` | `BLOCKED` | atomic completion apply | WU-03 |
 | `RA-008-WU-05` | `BLOCKED` | waiting/answer binding i stale rejection | WU-01, WU-04 |
 | `RA-008-WU-06` | `BLOCKED` | Markdown/pinned-status projection | WU-03 |
@@ -49,7 +49,7 @@
 
 ## `RA-008-WU-02` — Context builder
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: czysty builder wybiera materiały według budżetu, priorytetu i scope.
 - Allowed paths: `packages/agent-orchestrator/src/context/types.ts`,
   `context/builder.ts`, `context/budget.ts`, `test/context-builder.test.ts`,
@@ -86,15 +86,30 @@
 
 ## `RA-008-WU-03` — Checkpoint patch application
 
+- Status: `READY`
 - Result: czysta funkcja tworzy następną pełną rewizję z validated patch.
 - Allowed paths: `packages/agent-orchestrator/src/checkpoint/apply-patch.ts`,
   `checkpoint/errors.ts`, `test/checkpoint-patch.test.ts`, `src/index.ts`.
 - Context pack: `checkpoint.ts`, `agent-completion.ts`, WU-02 provenance rules.
-- Acceptance: niezmienne pola nie są nadpisywane; append nie gubi historii;
-  revision pochodzi od systemu, nie od modelu.
+- Acceptance:
+  - funkcja przyjmuje bieżący checkpoint i proponowany patch jako runtime input,
+    waliduje je odpowiednio przez `caseCheckpoint` i `checkpointPatch`, a błędy
+    current/patch/result rozróżnia typed error codes;
+  - `case_id` i wszystkie pola nieobecne w `CheckpointPatch` są zachowane,
+    `revision` zawsze wynosi `current.revision + 1`, a `updated_at` pochodzi z
+    jawnego system input; patch z dodatkowymi polami autorytatywnymi failuje;
+  - pola `*_append` dopisują elementy w kolejności bez deduplikacji i bez utraty
+    historii; `summary`, `current_phase`, `open_questions`, `next_actions` oraz
+    `blockers` zastępują stare wartości tylko gdy są obecne w patchu;
+  - wynik ponownie przechodzi pełny kontrakt `caseCheckpoint`, więc przekroczenie
+    limitów po append nie zwraca częściowego checkpointu;
+  - current i patch nie są mutowane, a identyczne dane wejściowe oraz systemowy
+    timestamp dają strukturalnie identyczny wynik.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/checkpoint-patch.test.ts`.
 - Out of scope: transakcja DB i compaction.
-- Sol gate: property tests dla zachowania decisions/evidence.
+- Sol gate: table/property-style fixtures zachowujące decisions, evidence i
+  wszystkie pola autorytatywne; strict rejection prób nadpisania revision/case;
+  combined-array overflow oraz invalid timestamp.
 
 ## `RA-008-WU-04` — Atomic completion apply
 
