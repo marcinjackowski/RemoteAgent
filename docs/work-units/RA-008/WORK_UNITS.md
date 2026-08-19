@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `02`
+- Plan revision: `03`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -36,7 +36,7 @@
 - Result: typed repository zapisuje request i jedną związaną odpowiedź.
 - Allowed paths: `packages/database/src/repositories/decision.ts`,
   `repositories/index.ts`, `test/decision.integration.test.ts`,
-  `packages/database/src/errors.ts`.
+  `packages/database/src/errors.ts`, `packages/database/src/index.ts`.
 - Context pack: `decision.ts` contract, migracje `005`/`010`, repository patterns.
 - Acceptance: request jest walidowany kontraktem i append-only; replay dokładnie
   identycznego `{answerId, answer}` zwraca istniejący rekord bez drugiego insertu,
