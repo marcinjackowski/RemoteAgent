@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "3.1113.0"
+    "@aws-sdk/client-bedrock-runtime": "3.1113.0",
+    "@remoteagent/contracts": "workspace:*"
   }
 }

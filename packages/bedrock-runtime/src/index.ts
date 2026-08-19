@@ -8,3 +8,4 @@ export * from "./types.js";
 export * from "./stream.js";
 export * from "./aws-stream-transport.js";
 export * from "./tool-loop.js";
+export * from "./structured-completion.js";

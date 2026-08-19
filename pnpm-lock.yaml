@@ -70,6 +70,9 @@ importers:
       '@aws-sdk/client-bedrock-runtime':
         specifier: 3.1113.0
         version: 3.1113.0
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/connector-calendar: {}
 

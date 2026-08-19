@@ -4,6 +4,7 @@ import type {
   RuntimeContent,
   RuntimeJsonValue,
   RuntimeMessage,
+  RuntimeOutputSchema,
   RuntimeResponse,
   RuntimeTransport,
   RuntimeToolDefinition,
@@ -20,11 +21,13 @@ export interface ToolLoopRequest {
   readonly tools: readonly RuntimeToolDefinition[];
   readonly execute: ToolExecutor;
   readonly signal?: AbortSignal;
+  readonly outputSchema?: RuntimeOutputSchema;
 }
 
 export interface ToolLoopResult extends RuntimeResponse {
   readonly iterations: number;
   readonly calls: number;
+  readonly history: readonly RuntimeMessage[];
 }
 
 function toolUses(content: readonly RuntimeContent[]) {
@@ -52,17 +55,23 @@ export async function runToolLoop(
 
   for (;;) {
     response = await transport.converse(
-      request.signal === undefined
-        ? enabledTools === undefined
-          ? { messages }
-          : { messages, tools: enabledTools }
-        : enabledTools === undefined
-          ? { messages, signal: request.signal }
-          : { messages, tools: enabledTools, signal: request.signal },
+      {
+        messages,
+        ...(enabledTools === undefined ? {} : { tools: enabledTools }),
+        ...(request.outputSchema === undefined ? {} : { outputSchema: request.outputSchema }),
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      },
       config,
     );
     const uses = toolUses(response.content);
-    if (uses.length === 0) return { ...response, iterations, calls };
+    if (uses.length === 0) {
+      return {
+        ...response,
+        iterations,
+        calls,
+        history: [...messages, { role: "assistant", content: [...response.content] }],
+      };
+    }
 
     // Validate the entire batch before invoking even the first executor.
     if (config.toolLimits.maxIterations === 0 || config.toolLimits.maxCalls === 0) {
