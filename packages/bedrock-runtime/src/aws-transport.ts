@@ -12,7 +12,9 @@ import { TransportError } from "./errors.js";
 import type {
   RuntimeConfig,
   RuntimeContent,
+  RuntimeJsonValue,
   RuntimeMessage,
+  RuntimeOutputSchema,
   RuntimeRequest,
   RuntimeResponse,
   RuntimeToolDefinition,
@@ -38,6 +40,25 @@ export interface AwsTransportOptions {
 }
 
 type BedrockToolConfig = NonNullable<ConverseCommandInput["toolConfig"]>;
+type BedrockOutputConfig = NonNullable<ConverseCommandInput["outputConfig"]>;
+
+function canonicalJson(value: RuntimeJsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`);
+    return `{${entries.join(",")}}`;
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new TransportError("Unsupported non-finite JSON schema number");
+  }
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new TransportError("Unsupported JSON schema value");
+  return serialized;
+}
 
 function toolDefinitions(
   tools: readonly RuntimeToolDefinition[] | undefined,
@@ -52,6 +73,22 @@ function toolDefinitions(
       },
     })),
   } satisfies BedrockToolConfig;
+}
+
+function outputConfig(schema: RuntimeOutputSchema | undefined): BedrockOutputConfig | undefined {
+  if (schema === undefined) return undefined;
+  return {
+    textFormat: {
+      type: "json_schema",
+      structure: {
+        jsonSchema: {
+          name: schema.name,
+          schema: canonicalJson(schema.schema),
+          ...(schema.description === undefined ? {} : { description: schema.description }),
+        },
+      },
+    },
+  };
 }
 
 function textContent(content: readonly RuntimeContent[], messageIndex: number): Message["content"] {
@@ -127,10 +164,12 @@ export class AwsBedrockTransport implements RuntimeTransport {
   public async converse(request: RuntimeRequest, config: RuntimeConfig): Promise<RuntimeResponse> {
     const messages = mapMessages(request.messages);
     const mappedToolConfig = toolDefinitions(request.tools);
+    const mappedOutputConfig = outputConfig(request.outputSchema);
     const commandInput: ConverseCommandInput = {
       modelId: config.model.model_id,
       messages,
       ...(mappedToolConfig === undefined ? {} : { toolConfig: mappedToolConfig }),
+      ...(mappedOutputConfig === undefined ? {} : { outputConfig: mappedOutputConfig }),
     };
     const command = new ConverseCommand(commandInput);
     try {

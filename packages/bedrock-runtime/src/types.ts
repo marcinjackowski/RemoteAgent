@@ -38,6 +38,12 @@ export interface RuntimeToolDefinition {
   readonly inputSchema: RuntimeJsonValue;
 }
 
+export interface RuntimeOutputSchema {
+  readonly name: string;
+  readonly description?: string;
+  readonly schema: RuntimeJsonValue;
+}
+
 export type RuntimeContent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "json"; readonly value: RuntimeJsonValue }
@@ -52,6 +58,7 @@ export type RuntimeContent =
 export interface RuntimeRequest {
   readonly messages: readonly RuntimeMessage[];
   readonly tools?: readonly RuntimeToolDefinition[];
+  readonly outputSchema?: RuntimeOutputSchema;
   readonly signal?: AbortSignal;
 }
 

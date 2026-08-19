@@ -176,4 +176,121 @@ describe("AwsBedrockTransport", () => {
     );
     expect(input).not.toHaveProperty("toolConfig");
   });
+
+  it("maps a named output schema alongside existing tool configuration", async () => {
+    let input: Record<string, unknown> | undefined;
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async (command) => {
+          input = command.input;
+          return {
+            output: { message: { role: "assistant", content: [{ text: "ok" }] } },
+            $metadata: {},
+          };
+        },
+      },
+    });
+
+    await transport.converse(
+      {
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+        tools: [{ name: "lookup", inputSchema: { type: "object" } }],
+        outputSchema: {
+          name: "answer",
+          description: "The answer payload",
+          schema: { type: "object", properties: { answer: { type: "string" } } },
+        },
+      },
+      config,
+    );
+
+    expect(input).toMatchObject({
+      toolConfig: { tools: [{ toolSpec: { name: "lookup" } }] },
+      outputConfig: {
+        textFormat: {
+          type: "json_schema",
+          structure: {
+            jsonSchema: {
+              name: "answer",
+              description: "The answer payload",
+              schema: '{"properties":{"answer":{"type":"string"}},"type":"object"}',
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("serializes semantically identical schemas canonically", async () => {
+    const inputs: Record<string, unknown>[] = [];
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async (command) => {
+          inputs.push(command.input);
+          return {
+            output: { message: { role: "assistant", content: [{ text: "ok" }] } },
+            $metadata: {},
+          };
+        },
+      },
+    });
+    const messages = [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }] }];
+
+    await transport.converse(
+      {
+        messages,
+        outputSchema: { name: "answer", schema: { b: 2, a: [3, { d: 4, c: 5 }] } },
+      },
+      config,
+    );
+    await transport.converse(
+      {
+        messages,
+        outputSchema: { name: "answer", schema: { a: [3, { c: 5, d: 4 }], b: 2 } },
+      },
+      config,
+    );
+
+    expect(inputs[0]).toMatchObject({
+      outputConfig: {
+        textFormat: {
+          structure: {
+            jsonSchema: {
+              schema: '{"a":[3,{"c":5,"d":4}],"b":2}',
+            },
+          },
+        },
+      },
+    });
+    expect(inputs[1]).toEqual(inputs[0]);
+  });
+
+  it.each([NaN, Infinity, -Infinity])(
+    "rejects non-finite schema numbers before sending (%s)",
+    async (value) => {
+      let sends = 0;
+      const transport = new AwsBedrockTransport({
+        client: {
+          send: async () => {
+            sends += 1;
+            return {
+              output: { message: { role: "assistant", content: [{ text: "ok" }] } },
+              $metadata: {},
+            };
+          },
+        },
+      });
+
+      await expect(
+        transport.converse(
+          {
+            messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+            outputSchema: { name: "answer", schema: { value } },
+          },
+          config,
+        ),
+      ).rejects.toThrow("Unsupported non-finite JSON schema number");
+      expect(sends).toBe(0);
+    },
+  );
 });
