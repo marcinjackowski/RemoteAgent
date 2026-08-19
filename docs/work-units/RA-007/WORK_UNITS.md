@@ -26,8 +26,8 @@
 | `RA-007-WU-02` | `ACCEPTED` | fake transport i non-streaming Converse | WU-01 |
 | `RA-007-WU-03` | `ACCEPTED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
 | `RA-007-WU-04` | `ACCEPTED` | streaming i jednoznaczne cancellation | WU-02 |
-| `RA-007-WU-05` | `READY` | ograniczony client-side tool loop | WU-02, WU-03 |
-| `RA-007-WU-06` | `BLOCKED` | schema validation i tools-disabled repair | WU-05 |
+| `RA-007-WU-05` | `ACCEPTED` | ograniczony client-side tool loop | WU-02, WU-03 |
+| `RA-007-WU-06` | `READY` | schema validation i tools-disabled repair | WU-05 |
 | `RA-007-WU-07` | `BLOCKED` | bezpieczna klasyfikacja retry i limitów | WU-03, WU-05 |
 | `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06, WU-07 |
 
@@ -93,7 +93,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-05` — Client-side tool loop
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: pętla `toolUse`/`toolResult` z limitem iteracji i wywołań.
 - Allowed paths: `src/tool-loop.ts`, `src/types.ts`, `src/aws-transport.ts`,
   `test/tool-loop.test.ts`, `test/aws-transport.test.ts`, `src/index.ts`.
@@ -107,6 +107,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-06` — Structured completion repair
 
+- Status: `READY`
 - Result: walidacja `AgentCompletion` i pojedynczy repair call bez tools.
 - Allowed paths: `src/structured-completion.ts`, `src/tool-loop.ts`,
   `test/structured-completion.test.ts`, `src/index.ts`,
