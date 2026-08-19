@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `07`
+- Plan revision: `08`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -24,8 +24,8 @@
 | `RA-008-WU-01` | `ACCEPTED` | trwałe repozytorium decyzji i odpowiedzi | — |
 | `RA-008-WU-02` | `ACCEPTED` | deterministyczny context builder i provenance | WU-01 |
 | `RA-008-WU-03` | `ACCEPTED` | czysta aplikacja checkpoint patch | WU-02 |
-| `RA-008-WU-04A` | `READY` | czyste przygotowanie completion do zapisu | WU-03 |
-| `RA-008-WU-04B` | `BLOCKED` | atomic completion persistence | WU-04A |
+| `RA-008-WU-04A` | `ACCEPTED` | czyste przygotowanie completion do zapisu | WU-03 |
+| `RA-008-WU-04B` | `READY` | atomic completion persistence | WU-04A |
 | `RA-008-WU-05` | `BLOCKED` | waiting/answer binding i stale rejection | WU-01, WU-04B |
 | `RA-008-WU-06` | `BLOCKED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07` | `BLOCKED` | bounded compaction bez utraty decyzji | WU-02, WU-03 |
@@ -114,7 +114,7 @@
 
 ## `RA-008-WU-04A` — Completion preparation
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: czysta funkcja wiąże runtime-validated completion z autorytatywnym
   run/case/revision i przygotowuje następny checkpoint oraz bezpieczny outbox event.
 - Allowed paths: `packages/agent-orchestrator/src/checkpoint/apply-completion.ts`,
@@ -138,7 +138,7 @@
 
 ## `RA-008-WU-04B` — Atomic completion persistence
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: jedna publiczna operacja i jedna transakcja zapisują completion,
   checkpoint revision, terminalny run state, zwolnienie `active_run_id` i outbox.
 - Allowed paths: `packages/database/src/repositories/run-completion.ts`,
@@ -151,12 +151,16 @@
   - repository posiada `Database` i sam otwiera dokładnie jedną transakcję;
     lockuje autorytatywny run/case przed odczytem i wymaga run `STARTED`, zgodnych
     case/revision oraz `active_run_id` wskazującego ten run;
+  - publiczna granica ponownie waliduje completion/checkpoint i wszystkie relacje
+    przygotowanego wyniku (case/run/revision/last_run/time/state/outbox); caller
+    nie może podmienić prepared payloadu samym typem TypeScript;
   - commit zapisuje append-only `run_completions`, checkpoint przez istniejący
     CAS, terminalny run state/time, czyści aktywny run i enqueue'uje zredagowany
     event w istniejącym transactional outbox;
   - identyczny replay po commicie zwraca istniejący rezultat bez drugiego
-    checkpointu/outbox; inna semantyka dla tego run/completionId daje typed
-    conflict i zero nowych zapisów;
+    checkpointu/outbox i porównuje JSON semantycznie jako `jsonb`, nie przez
+    kolejność kluczy; inna semantyka dla tego run/completionId daje typed conflict
+    i zero nowych zapisów;
   - konkurencyjne runy tej samej sprawy na tej samej rewizji: dokładnie jeden
     może wygrać; rollback/fault na dowolnym późniejszym kroku nie pozostawia
     completion, checkpointu, terminalnego run state ani outbox.
