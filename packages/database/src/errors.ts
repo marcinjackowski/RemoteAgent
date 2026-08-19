@@ -74,6 +74,25 @@ export class ScopeViolationError extends PersistenceError {}
  */
 export class ContractViolationError extends PersistenceError {}
 
+/** A completion id/run was reused with different immutable semantics. */
+export class RunCompletionConflictError extends PersistenceError {
+  public readonly runId: string;
+  public readonly completionId: string;
+
+  public constructor(runId: string, completionId: string) {
+    super(`run completion conflict for run ${runId} or completion ${completionId}`);
+    this.runId = runId;
+    this.completionId = completionId;
+  }
+}
+
+/** A prepared completion cannot be applied to the current authoritative state. */
+export class RunCompletionStateError extends PersistenceError {
+  public constructor(message: string) {
+    super(message);
+  }
+}
+
 /** A decision already has an answer with different immutable semantics. */
 export class DecisionAnswerConflictError extends PersistenceError {
   public readonly decisionId: string;

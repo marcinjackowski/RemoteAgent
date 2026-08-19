@@ -26,6 +26,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@remoteagent/agent-orchestrator": "workspace:*",
     "@remoteagent/policy": "workspace:*",
     "@types/pg": "8.15.6"
   }

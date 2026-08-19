@@ -108,6 +108,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@remoteagent/agent-orchestrator':
+        specifier: workspace:*
+        version: link:../agent-orchestrator
       '@remoteagent/policy':
         specifier: workspace:*
         version: link:../policy

@@ -34,6 +34,8 @@ export {
   CheckpointConflictError,
   NotFoundError,
   MigrationError,
+  RunCompletionConflictError,
+  RunCompletionStateError,
 } from "./errors.js";
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";

@@ -7,3 +7,4 @@ export * from "./checkpoint.js";
 export * from "./decision.js";
 export * from "./audit-log.js";
 export * from "./discord.js";
+export * from "./run-completion.js";
