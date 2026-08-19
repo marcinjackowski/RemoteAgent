@@ -31,7 +31,7 @@
 | `RA-007-WU-06B` | `ACCEPTED` | walidacja completion i tools-disabled repair | WU-06A |
 | `RA-007-WU-07A` | `ACCEPTED` | retry policy i klasyfikacja błędów AWS | WU-03, WU-05 |
 | `RA-007-WU-07B` | `ACCEPTED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
-| `RA-007-WU-08` | `READY` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06B, WU-07B |
+| `RA-007-WU-08` | `ACCEPTED` | zintegrowany runtime z pełną metryką completion | WU-04, WU-06B, WU-07B |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -174,7 +174,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-08` — Runtime integration and metadata
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: jeden publiczny runtime łączy text/stream/tools/repair/retry i zwraca
   pełną identity, usage, latency i request metadata przy każdym completion.
 - Allowed paths: `src/runtime.ts`, `src/index.ts`, `test/runtime.contract.test.ts`,
