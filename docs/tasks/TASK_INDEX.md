@@ -29,7 +29,7 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 | 4 | [RA-004](RA-004.md) Durable jobs, outbox and leases | DONE | RA-003 | M0 |
 | 5 | [RA-005](RA-005.md) Connections, secrets and scope isolation | DONE | RA-003 | M0 |
 | 6 | [RA-006](RA-006.md) Discord case interface | DONE | RA-002, RA-003, RA-004, RA-005 | M1 |
-| 7 | [RA-007](RA-007.md) Bedrock Converse runtime | READY | RA-001, RA-002, RA-005 | M1 |
+| 7 | [RA-007](RA-007.md) Bedrock Converse runtime | IN_PROGRESS | RA-001, RA-002, RA-005 | M1 |
 | 8 | [RA-008](RA-008.md) Checkpoints, context and decisions | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-007 | M1 |
 | 9 | [RA-009](RA-009.md) Multi-agent orchestrator | BLOCKED_BY_DEPENDENCIES | RA-004, RA-006, RA-007, RA-008 | M1 |
 | 10 | [RA-010](RA-010.md) Isolated workspace runner | READY | RA-001, RA-003, RA-004, RA-005 | M2 |

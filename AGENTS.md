@@ -39,7 +39,8 @@ Nie zaczynaj implementacji na podstawie samej wiadomości użytkownika.
 - Interaktywna rozmowa z właścicielem domyślnie oznacza rolę
   `COORDINATOR_AUDITOR` i jest wykonywana przez Sol.
 - Wiadomość `continue` jest komendą wyłącznie dla Sol. Oznacza wykonanie
-  algorytmu wznowienia z `docs/workflow/EXECUTION_AND_AUDIT.md`.
+  algorytmu wznowienia z `docs/workflow/EXECUTION_AND_AUDIT.md` i rozpoczęcie
+  ciągłego przebiegu aż do polecenia pauzy albo realnej blokady.
 - Prośba o plan, podział taska, audyt albo review jest zawsze pracą Sol.
 - Tryb `LOCAL_IMPLEMENTER` jest ważny tylko wtedy, gdy prompt przekazany przez Sol
   zawiera task ID, work-unit ID, jeden cel, dozwolone ścieżki i komendę
@@ -99,22 +100,20 @@ implementacji; dokumentuje blokadę albo prosi właściciela o jawny wyjątek.
 
 ## Obowiązkowa bramka audytowa
 
-Po wykonaniu wszystkich work units Sol musi:
+Po wykonaniu wszystkich work units Sol musi bez zatrzymywania przebiegu:
 
 1. niezależnie uruchomić wymagane testy i kontrole taska;
 2. utworzyć kolejny handoff w
    `docs/handoffs/<TASK_ID>/HANDOFF-<NN>.md` zgodnie z szablonem;
 3. zmienić status taska w `docs/tasks/TASK_INDEX.md` na `AWAITING_AUDIT`;
 4. wykonać niezależny audyt według checklisty i zapisać dokument audytu;
-5. ustawić wynikający status i zatrzymać się przed następnym taskiem;
-6. po `PASS` zakończyć odpowiedź dokładnie blokiem:
+5. dla `CHANGES_REQUIRED` utworzyć fix units i wrócić do implementacji;
+6. dla `PASS` ustawić `DONE`, odblokować zależności i od razu rozpocząć
+   następny kwalifikujący się task.
 
-```text
-STOP — <TASK_ID> przeszedł audyt Sol.
-Handoff: <ścieżka>
-Audit: <ścieżka>
-Napisz: continue
-```
+Handoff, audyt, `PASS` i granica taska nie są punktami pauzy dla właściciela.
+Sol zatrzymuje ciągły przebieg wyłącznie po poleceniu pauzy, przy materialnym
+`Decision Request` albo realnej zewnętrznej blokadzie.
 
 Handoff jest sporządzaną przez Sol syntezą raportów work units, diffu i dowodów.
 Nie jest audytem ani substytutem niezależnego sprawdzenia implementacji.
@@ -133,9 +132,10 @@ Sol:
    - `CHANGES_REQUIRED` -> `CHANGES_REQUESTED`
    - `BLOCKED` -> `BLOCKED`
 4. nie edytuje implementacji;
-5. dla `CHANGES_REQUIRED` rozpisuje findingi na nowe małe work units, ale nie
-   wykonuje ich w ramach audytu;
-6. dla `PASS` zatrzymuje się i czeka na `continue` właściciela.
+5. dla `CHANGES_REQUIRED` zamyka audyt, rozpisuje findingi na nowe małe work
+   units i kontynuuje ich wykonanie;
+6. dla `PASS` ustawia task na `DONE`, odblokowuje zależności i kontynuuje od
+   pierwszego kwalifikującego się taska.
 
 `PASS` jest dozwolony wyłącznie, gdy spełnione są wszystkie kryteria akceptacji
 i nie pozostały findingi klasy BLOCKER, HIGH ani MEDIUM.

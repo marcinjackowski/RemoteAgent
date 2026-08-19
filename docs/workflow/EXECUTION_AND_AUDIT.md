@@ -24,8 +24,9 @@ workflow i nie wykonuje remote writes.
 
 ### OWNER
 
-Podejmuje materialne decyzje i uruchamia kolejny makro-task prostą komendą
-`continue`. Nie musi ręcznie przełączać się między implementerem i audytorem.
+Podejmuje materialne decyzje, uruchamia ciągły przebieg komendą `continue` i
+zatrzymuje go jawnym poleceniem pauzy. Nie musi ręcznie przełączać się między
+implementerem, audytem ani kolejnymi taskami.
 
 ## Statusy taska
 
@@ -56,7 +57,7 @@ Sol wykonuje poniższe kroki bez proszenia użytkownika o wskazanie taska:
 2. Jeżeli istnieje `CHANGES_REQUESTED`, wybierz go, przeczytaj najnowszy audyt,
    zmień status na `IN_PROGRESS`, rozpisz każdy finding na mały fix work unit i
    zlecaj je Qwenowi pojedynczo.
-3. W przeciwnym razie, jeżeli istnieje `AUDIT_PASSED`, zmień go na `DONE`,
+3. Jeżeli po audycie istnieje `AUDIT_PASSED`, natychmiast zmień go na `DONE`,
    odblokuj taski, których wszystkie zależności są `DONE`, i rozpocznij pierwszy
    z nich według kolejności indeksu.
 4. W przeciwnym razie, jeżeli istnieje `IN_PROGRESS`, wznów go na podstawie
@@ -66,7 +67,12 @@ Sol wykonuje poniższe kroki bez proszenia użytkownika o wskazanie taska:
    uruchom pierwszy unit.
 6. Jeżeli istnieje `AWAITING_AUDIT`, Sol wykonuje audyt; nie uruchamia nowego
    work unit przed wydaniem werdyktu.
-7. Jeżeli nie ma taska możliwego do rozpoczęcia, przedstaw konkretną blokadę.
+7. Po `PASS` albo zakończeniu fix loop wróć do kroku 1 bez oczekiwania na
+   kolejną wiadomość właściciela.
+8. Jeżeli nie ma taska możliwego do rozpoczęcia, przedstaw konkretną blokadę.
+
+Pętla kończy się wyłącznie po jawnym poleceniu pauzy, przy materialnym Decision
+Request albo realnej zewnętrznej blokadzie.
 
 Jeżeli właściciel odpowiada bezpośrednio na zapisany `Decision Request`, agent
 weryfikuje, że odpowiedź dotyczy najnowszej decyzji, zapisuje jej rezultat (oraz
@@ -131,8 +137,9 @@ W audycie Sol:
 
 Finding zawiera: severity, lokalizację, dowód, wpływ i wymaganą zmianę. Samo
 stwierdzenie „to może być lepsze” nie jest findingiem blokującym. Dla
-`CHANGES_REQUIRED` Sol po zamknięciu audytu tworzy małe fix work units; nie
-naprawia kodu w roli audytora.
+`CHANGES_REQUIRED` Sol po zamknięciu audytu tworzy małe fix work units i
+kontynuuje; nie naprawia kodu w roli audytora. `PASS` powoduje `DONE`,
+odblokowanie zależności i automatyczny start kolejnego taska.
 
 ## Handoff revisions
 

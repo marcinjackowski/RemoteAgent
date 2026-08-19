@@ -31,6 +31,9 @@ kontekstu i osłabia kontrolę zakresu.
   `docs/work-units/<TASK_ID>/WORK_UNITS.md`.
 - Sol używa Qwena do wszystkich zmian kodu produktowego i fixów. Nie przejmuje
   implementacji bez jawnego wyjątku właściciela.
+- Audyty i granice makro-tasków są obowiązkowymi bramkami jakości, ale nie
+  punktami pauzy. Po `PASS` Sol zamyka task i automatycznie rozpoczyna następny;
+  przebieg trwa do polecenia pauzy, Decision Request albo realnej blokady.
 
 ## Limity work unit
 

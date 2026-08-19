@@ -32,13 +32,16 @@ wyłącznie bootstrapem legacy i przekierowuje `continue` do Sol.
 
 ## Najprostszy cykl użytkownika
 
-1. Napisz Solowi `continue`.
+1. Napisz Solowi `continue`, aby rozpocząć ciągły przebieg.
 2. Sol wybiera makro-task, rozpisuje lub aktualizuje małe work units i uruchamia
    lokalnego Qwena dla jednego unit naraz.
 3. Sol po każdym unit sprawdza diff i test, a po całym tasku sam wykonuje
    niezależny audyt.
-4. Po `PASS` Sol zatrzymuje się. Następne `continue` zamyka task i rozpoczyna
-   kolejny zgodnie z zależnościami.
+4. Po `PASS` Sol oznacza task jako `DONE`, odblokowuje zależności i automatycznie
+   rozpoczyna kolejny task.
+
+Przebieg trwa do jawnego polecenia pauzy, Decision Request wymagającego decyzji
+właściciela albo realnej zewnętrznej blokady.
 
 Qwen nie otrzymuje komendy `continue`, całego makro-taska ani roli audytora.
 
