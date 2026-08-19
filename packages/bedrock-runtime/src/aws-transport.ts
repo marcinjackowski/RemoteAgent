@@ -1,8 +1,11 @@
 import {
   BedrockRuntimeClient,
   ConverseCommand,
+  type ConverseCommandInput,
   type ConverseCommandOutput,
+  type ContentBlock,
   type Message,
+  type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 
 import { TransportError } from "./errors.js";
@@ -12,6 +15,7 @@ import type {
   RuntimeMessage,
   RuntimeRequest,
   RuntimeResponse,
+  RuntimeToolDefinition,
   RuntimeTransport,
 } from "./types.js";
 
@@ -33,23 +37,55 @@ export interface AwsTransportOptions {
   readonly logger?: BedrockLogger;
 }
 
+type BedrockToolConfig = NonNullable<ConverseCommandInput["toolConfig"]>;
+
+function toolDefinitions(
+  tools: readonly RuntimeToolDefinition[] | undefined,
+): BedrockToolConfig | undefined {
+  if (tools === undefined || tools.length === 0) return undefined;
+  return {
+    tools: tools.map((tool) => ({
+      toolSpec: {
+        name: tool.name,
+        ...(tool.description === undefined ? {} : { description: tool.description }),
+        inputSchema: { json: tool.inputSchema },
+      },
+    })),
+  } satisfies BedrockToolConfig;
+}
+
 function textContent(content: readonly RuntimeContent[], messageIndex: number): Message["content"] {
   return content.map((item, contentIndex) => {
-    if (item.type !== "text") {
-      throw new TransportError(
-        `Unsupported Bedrock content at message ${messageIndex}, item ${contentIndex}`,
-      );
+    if (item.type === "text") return { text: item.text };
+    if (item.type === "tool-use") {
+      const toolUse: ContentBlock.ToolUseMember = {
+        toolUse: {
+          toolUseId: item.id,
+          name: item.name,
+          input: item.input,
+        },
+      };
+      return toolUse;
     }
-    return { text: item.text };
+    if (item.type === "tool-result") {
+      const result: ToolResultContentBlock.JsonMember = { json: item.output };
+      return {
+        toolResult: {
+          toolUseId: item.id,
+          content: [result],
+        },
+      } satisfies ContentBlock.ToolResultMember;
+    }
+    throw new TransportError(
+      `Unsupported Bedrock content at message ${messageIndex}, item ${contentIndex}`,
+    );
   });
 }
 
 function mapMessages(messages: readonly RuntimeMessage[]): Message[] {
   return messages.map((message, messageIndex) => {
-    if (message.role === "tool") {
-      throw new TransportError(`Unsupported Bedrock message role at index ${messageIndex}`);
-    }
-    return { role: message.role, content: textContent(message.content, messageIndex) };
+    const role = message.role === "tool" ? "user" : message.role;
+    return { role, content: textContent(message.content, messageIndex) };
   });
 }
 
@@ -59,10 +95,20 @@ function responseContent(output: ConverseCommandOutput): RuntimeResponse["conten
     throw new TransportError("Bedrock response did not contain a message");
   }
   return (message.content ?? []).map((block, index) => {
-    if (block.text === undefined) {
-      throw new TransportError(`Unsupported Bedrock response content at item ${index}`);
+    if (block.text !== undefined) return { type: "text" as const, text: block.text };
+    if (
+      block.toolUse !== undefined &&
+      block.toolUse.toolUseId !== undefined &&
+      block.toolUse.name !== undefined
+    ) {
+      return {
+        type: "tool-use" as const,
+        id: block.toolUse.toolUseId,
+        name: block.toolUse.name,
+        input: block.toolUse.input ?? null,
+      };
     }
-    return { type: "text" as const, text: block.text };
+    throw new TransportError(`Unsupported Bedrock response content at item ${index}`);
   });
 }
 
@@ -80,7 +126,13 @@ export class AwsBedrockTransport implements RuntimeTransport {
 
   public async converse(request: RuntimeRequest, config: RuntimeConfig): Promise<RuntimeResponse> {
     const messages = mapMessages(request.messages);
-    const command = new ConverseCommand({ modelId: config.model.model_id, messages });
+    const mappedToolConfig = toolDefinitions(request.tools);
+    const commandInput: ConverseCommandInput = {
+      modelId: config.model.model_id,
+      messages,
+      ...(mappedToolConfig === undefined ? {} : { toolConfig: mappedToolConfig }),
+    };
+    const command = new ConverseCommand(commandInput);
     try {
       this.#logger?.debug?.({ operation: "bedrock.converse" });
       const output =

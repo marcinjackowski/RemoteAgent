@@ -95,4 +95,85 @@ describe("AwsBedrockTransport", () => {
     ).rejects.toThrow("Unsupported Bedrock content");
     expect(sent).toBe(false);
   });
+
+  it("maps tool definitions, tool use responses, and tool results", async () => {
+    const inputs: Record<string, unknown>[] = [];
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async (command) => {
+          inputs.push(command.input);
+          return {
+            output: {
+              message: {
+                role: "assistant",
+                content: [{ toolUse: { toolUseId: "call-1", name: "lookup", input: { q: "x" } } }],
+              },
+            },
+            $metadata: {},
+          };
+        },
+      },
+    });
+
+    const result = await transport.converse(
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "tool-use", id: "call-0", name: "lookup", input: { q: "old" } }],
+          },
+          { role: "tool", content: [{ type: "tool-result", id: "call-0", output: { value: 1 } }] },
+        ],
+        tools: [{ name: "lookup", description: "Find a value", inputSchema: { type: "object" } }],
+      },
+      config,
+    );
+
+    expect(inputs[0]).toMatchObject({
+      toolConfig: {
+        tools: [
+          {
+            toolSpec: {
+              name: "lookup",
+              description: "Find a value",
+              inputSchema: { json: { type: "object" } },
+            },
+          },
+        ],
+      },
+      messages: [
+        {
+          role: "assistant",
+          content: [{ toolUse: { toolUseId: "call-0", name: "lookup", input: { q: "old" } } }],
+        },
+        {
+          role: "user",
+          content: [{ toolResult: { toolUseId: "call-0", content: [{ json: { value: 1 } }] } }],
+        },
+      ],
+    });
+    expect(result.content).toEqual([
+      { type: "tool-use", id: "call-1", name: "lookup", input: { q: "x" } },
+    ]);
+  });
+
+  it("omits toolConfig when no tools are configured", async () => {
+    let input: Record<string, unknown> | undefined;
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async (command) => {
+          input = command.input;
+          return {
+            output: { message: { role: "assistant", content: [{ text: "ok" }] } },
+            $metadata: {},
+          };
+        },
+      },
+    });
+    await transport.converse(
+      { messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }], tools: [] },
+      config,
+    );
+    expect(input).not.toHaveProperty("toolConfig");
+  });
 });

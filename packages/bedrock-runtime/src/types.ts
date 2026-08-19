@@ -23,19 +23,35 @@ export interface RuntimeMessage {
   readonly content: readonly RuntimeContent[];
 }
 
+export type RuntimeJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | RuntimeJsonValue[]
+  | { readonly [key: string]: RuntimeJsonValue };
+
+export interface RuntimeToolDefinition {
+  readonly name: string;
+  readonly description?: string;
+  /** Provider-neutral JSON Schema for the tool input. */
+  readonly inputSchema: RuntimeJsonValue;
+}
+
 export type RuntimeContent =
   | { readonly type: "text"; readonly text: string }
-  | { readonly type: "json"; readonly value: unknown }
+  | { readonly type: "json"; readonly value: RuntimeJsonValue }
   | {
       readonly type: "tool-use";
       readonly id: string;
       readonly name: string;
-      readonly input: unknown;
+      readonly input: RuntimeJsonValue;
     }
-  | { readonly type: "tool-result"; readonly id: string; readonly output: unknown };
+  | { readonly type: "tool-result"; readonly id: string; readonly output: RuntimeJsonValue };
 
 export interface RuntimeRequest {
   readonly messages: readonly RuntimeMessage[];
+  readonly tools?: readonly RuntimeToolDefinition[];
   readonly signal?: AbortSignal;
 }
 
