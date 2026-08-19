@@ -44,7 +44,7 @@ Jeśli brak findingów, wpisz `Brak`.
 |---|---:|---|
 | | | |
 
-Raporty Qwena i unit gates nie zastępują powyższych, ponowionych kontroli.
+Raporty Luny i unit gates nie zastępują powyższych, ponowionych kontroli.
 
 ## Ryzyka przekrojowe
 
@@ -57,7 +57,7 @@ Raporty Qwena i unit gates nie zastępują powyższych, ponowionych kontroli.
 ## Fix work units po `CHANGES_REQUIRED`
 
 Lista jest obowiązkowa dla `CHANGES_REQUIRED`; każdy finding musi zostać
-zamieniony przez Sol na mały unit dla Qwena. Dla `PASS` wskaż kolejny makro-task.
+zamieniony przez Sol na unit dla Luny. Dla `PASS` wskaż kolejny makro-task.
 
 1. ...
 

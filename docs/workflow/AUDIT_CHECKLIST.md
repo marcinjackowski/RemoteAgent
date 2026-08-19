@@ -1,6 +1,6 @@
 # Checklist audytora
 
-Checklist wykonuje Sol po implementacji Qwena i jest wspólna dla wszystkich
+Checklist wykonuje Sol po implementacji Luny i jest wspólna dla wszystkich
 tasków. Specyficzny `Audit focus` w pliku taska ma pierwszeństwo i rozszerza
 poniższe punkty.
 
@@ -47,7 +47,7 @@ poniższe punkty.
 ## 6. Test evidence
 
 - Uruchom wymagane testy samodzielnie.
-- Nie traktuj raportu Qwena ani unit gate jako końcowego dowodu.
+- Nie traktuj raportu Luny ani unit gate jako końcowego dowodu.
 - Potwierdź, że test sprawdza zachowanie, a nie tylko mock implementation detail.
 - Sprawdź negatywne ścieżki, concurrency, retry, cancellation i recovery.
 - Zweryfikuj snapshot diff zamiast automatycznie go akceptować.
@@ -60,11 +60,11 @@ poniższe punkty.
 - Czy operator potrafi rozpoznać i naprawić stan bez ręcznej edycji DB?
 - Czy dokumentacja i runbook odpowiadają rzeczywistemu zachowaniu?
 
-## 8. Niezależność Sol/Qwen
+## 8. Niezależność Sol/Luna
 
 - Czy plan i kryteria powstały przed implementacją i były autorstwa Sol?
-- Czy Qwen edytował wyłącznie dozwolone ścieżki jednego work unit?
-- Czy Qwen nie zmienił task index, planu, handoffu, audytu ani decyzji?
+- Czy Luna edytowała wyłącznie dozwolone ścieżki jednego work unit?
+- Czy Luna nie zmieniła task index, planu, handoffu, audytu ani decyzji?
 - Czy Sol przeczytał pełny diff od bazowego tree, a nie tylko raport modelu?
 - Czy Sol ponowił celowane testy i pełną weryfikację taska?
 - Czy findingi są opisane przed utworzeniem fix units, bez edycji kodu podczas

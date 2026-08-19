@@ -4,10 +4,10 @@ Ten plik jest nadrzędnym kontraktem pracy dla całego repozytorium. Rozdziela
 planowanie i audyt od implementacji:
 
 - rolę `COORDINATOR_AUDITOR` wykonuje Sol;
-- rolę `LOCAL_IMPLEMENTER` wykonuje lokalny Qwen uruchamiany przez oMLX;
+- rolę `IMPLEMENTER` wykonuje `GPT-5.6 Luna` z reasoning effort `medium`;
 - model identity jest konfiguracją, a powyższe role są stabilnym kontraktem.
 
-Sol nie deleguje Qwenowi planowania ani audytu. Qwen nie wybiera sobie taska,
+Sol nie deleguje Lunie planowania ani audytu. Luna nie wybiera sobie taska,
 nie rozszerza zakresu i nie zatwierdza własnej pracy.
 
 ## Dokumenty obowiązkowe
@@ -23,13 +23,13 @@ Sol przed planowaniem albo audytem czyta w całości:
 7. najnowszy handoff i audyt dla aktualnego taska, jeżeli istnieją;
 8. podczas audytu `docs/workflow/AUDIT_CHECKLIST.md`.
 
-Lokalny implementer czyta wyłącznie:
+Implementer czyta wyłącznie:
 
 1. `AGENTS.md`;
 2. wskazany przez Sol work unit;
 3. zamknięty context pack zapisany w tym unit.
 
-Qwen nie ma samodzielnie wczytywać całego `MASTER_PLAN.md`, task index, innych
+Luna nie ma samodzielnie wczytywać całego `MASTER_PLAN.md`, task index, innych
 tasków ani historii handoffów/audytów.
 
 Nie zaczynaj implementacji na podstawie samej wiadomości użytkownika.
@@ -42,36 +42,36 @@ Nie zaczynaj implementacji na podstawie samej wiadomości użytkownika.
   algorytmu wznowienia z `docs/workflow/EXECUTION_AND_AUDIT.md` i rozpoczęcie
   ciągłego przebiegu aż do polecenia pauzy albo realnej blokady.
 - Prośba o plan, podział taska, audyt albo review jest zawsze pracą Sol.
-- Tryb `LOCAL_IMPLEMENTER` jest ważny tylko wtedy, gdy prompt przekazany przez Sol
+- Tryb `IMPLEMENTER` jest ważny tylko wtedy, gdy prompt przekazany przez Sol
   zawiera task ID, work-unit ID, jeden cel, dozwolone ścieżki i komendę
   weryfikacyjną. Samo `continue` nigdy nie uruchamia lokalnego implementera.
 - Gdy w rozmowie z Sol nie wskazano taska, Sol wybiera pierwszy task możliwy do
   rozpoczęcia zgodnie z kolejnością i zależnościami indeksu.
 
-Sol może planować, sterować osobnymi uruchomieniami Qwena i następnie
+Sol może planować, sterować osobnymi uruchomieniami Luny i następnie
 audytować ich rezultat, ponieważ sam nie implementuje kodu produktowego. W ramach
 audytu Sol nie poprawia implementacji: finding zamienia na nowy, mały work unit i
-przekazuje go Qwenowi dopiero po zakończeniu audytu.
+przekazuje go Lunie dopiero po zakończeniu audytu.
 
-## Kontrakt małego work unit
+## Kontrakt work unit
 
 Każdy work unit dla lokalnego implementera musi spełniać wszystkie warunki:
 
 1. Jeden konkretny rezultat i najwyżej trzy kryteria akceptacji.
-2. Jawna lista dozwolonych ścieżek; domyślnie najwyżej pięć plików łącznie
+2. Jawna lista dozwolonych ścieżek; domyślnie najwyżej osiem plików łącznie
    z testami. Szerszy zakres wymaga uzasadnienia Sol albo dalszego podziału.
 3. Jeden context pack obejmujący tylko wymagane instrukcje, kontrakty i kod.
-   Prompt wraz z załączonym kontekstem powinien pozostać poniżej 24k tokenów.
+   Prompt wraz z załączonym kontekstem powinien pozostać poniżej 80k tokenów.
 4. Jedna celowana komenda weryfikacyjna oraz oczekiwany wynik.
 5. Jawne `Out of scope`, zakaz remote writes i zakaz edycji planów, statusów,
    handoffów oraz audytów.
-6. Nowa, ephemeryczna sesja dla każdego work unit. Concurrency lokalnego modelu
-   wynosi `1`; work units są wykonywane sekwencyjnie.
+6. Nowa, ephemeryczna sesja Luny dla każdego work unit. Concurrency implementera
+   wynosi `1`, aby zachować single-writer; work units są wykonywane sekwencyjnie.
 
 Jeżeli work unit nie mieści się w tych granicach, Sol dzieli go ponownie przed
-uruchomieniem Qwena. Lokalny implementer nie wykonuje tego podziału samodzielnie.
+uruchomieniem Luny. Implementer nie wykonuje tego podziału samodzielnie.
 
-## Zasady implementacji lokalnego Qwena
+## Zasady implementacji Luny
 
 1. Pracuj wyłącznie w zakresie przekazanego work unit, nie całego taska.
 2. Nie zmieniaj zaakceptowanych kontraktów ani architektury bez zapisanej decyzji.
@@ -92,11 +92,11 @@ uruchomieniem Qwena. Lokalny implementer nie wykonuje tego podziału samodzielni
     `docs/audits/` ani `docs/decisions/`, chyba że pojedynczy work unit jawnie
     wskazuje konkretny plik dokumentacji jako swój rezultat.
 12. Nie wykonuj `git commit`, `git push`, tworzenia MR ani innych zewnętrznych
-    zapisów. Qwen zwraca wynik Solowi, który kontroluje diff i dalszy lifecycle.
+    zapisów. Luna zwraca wynik Solowi, który kontroluje diff i dalszy lifecycle.
 
-Sol używa lokalnego implementera do wszystkich zmian kodu produktowego i
-napraw. Jeżeli transport albo model są niedostępne, Sol nie przejmuje cicho
-implementacji; dokumentuje blokadę albo prosi właściciela o jawny wyjątek.
+Sol używa Luny do wszystkich zmian kodu produktowego i napraw. Jeżeli model jest
+niedostępny, Sol nie przejmuje cicho implementacji; dokumentuje blokadę albo
+prosi właściciela o jawny wyjątek.
 
 ## Obowiązkowa bramka audytowa
 
@@ -121,7 +121,7 @@ Nie jest audytem ani substytutem niezależnego sprawdzenia implementacji.
 ## Zasady audytu
 
 Sol jako audytor musi niezależnie sprawdzić kod, pełny diff od bazowego stanu,
-testy i kryteria akceptacji. Nie może polegać na raporcie Qwena ani handoffie.
+testy i kryteria akceptacji. Nie może polegać na raporcie Luny ani handoffie.
 
 Sol:
 

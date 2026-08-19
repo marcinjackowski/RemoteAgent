@@ -17,13 +17,13 @@ Jira -> Discord thread -> decyzje -> plan -> branch/workspace -> implementacja
 
 Agent rozpoczynający lub wznawiający pracę musi zacząć od `AGENTS.md`.
 
-Codex/Qwen otrzymuje nadrzędne instrukcje z `AGENTS.md`. `CLAUDE.md` pozostaje
+Codex otrzymuje nadrzędne instrukcje z `AGENTS.md`. `CLAUDE.md` pozostaje
 wyłącznie bootstrapem legacy i przekierowuje `continue` do Sol.
 
 - Plan systemu: `docs/MASTER_PLAN.md`
 - Kolejka tasków: `docs/tasks/TASK_INDEX.md`
 - Protokół wykonania i audytu: `docs/workflow/EXECUTION_AND_AUDIT.md`
-- Lokalny implementer Qwen przez oMLX + Codex: `docs/workflow/QWEN_IMPLEMENTER.md`
+- Implementer GPT-5.6 Luna: `docs/workflow/LUNA_IMPLEMENTER.md`
 - Legacy worker Bedrock Opus 4.8: `docs/workflow/BEDROCK_WORKER.md`
 - Plany małych work units: `docs/work-units/`
 - Handoffs: `docs/handoffs/`
@@ -33,8 +33,8 @@ wyłącznie bootstrapem legacy i przekierowuje `continue` do Sol.
 ## Najprostszy cykl użytkownika
 
 1. Napisz Solowi `continue`, aby rozpocząć ciągły przebieg.
-2. Sol wybiera makro-task, rozpisuje lub aktualizuje małe work units i uruchamia
-   lokalnego Qwena dla jednego unit naraz.
+2. Sol wybiera makro-task, rozpisuje lub aktualizuje skupione work units i
+   uruchamia Lunę dla jednego unit naraz.
 3. Sol po każdym unit sprawdza diff i test, a po całym tasku sam wykonuje
    niezależny audyt.
 4. Po `PASS` Sol oznacza task jako `DONE`, odblokowuje zależności i automatycznie
@@ -43,7 +43,7 @@ wyłącznie bootstrapem legacy i przekierowuje `continue` do Sol.
 Przebieg trwa do jawnego polecenia pauzy, Decision Request wymagającego decyzji
 właściciela albo realnej zewnętrznej blokady.
 
-Qwen nie otrzymuje komendy `continue`, całego makro-taska ani roli audytora.
+Luna nie otrzymuje komendy `continue`, całego makro-taska ani roli audytora.
 
 ## Rozwój (foundation)
 

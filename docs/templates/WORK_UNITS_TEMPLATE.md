@@ -5,7 +5,7 @@
 - Task: `<TASK_ID>`
 - Plan revision: `01`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
-- Implementer: `Qwen3.8-27B-oQ6e-mtp / LOCAL_IMPLEMENTER`
+- Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `DRAFT | ACTIVE | COMPLETE | BLOCKED`
 - Base commit/tree:
 - Full-task verification:
@@ -15,7 +15,7 @@
 - In scope:
 - Out of scope:
 - Shared risks:
-- Qwen may not edit this plan, task status, handoffs, audits or decisions.
+- Luna may not edit this plan, task status, handoffs, audits or decisions.
 
 ## Unit index
 
@@ -28,8 +28,8 @@
 - Status: `DRAFT`
 - Result: jeden konkretny rezultat.
 - Depends on: `—`
-- Allowed paths: maksymalnie pięć plików razem z testami.
-- Context pack: zamknięta lista instrukcji, kontraktów i kodu; <24k tokenów.
+- Allowed paths: domyślnie maksymalnie osiem plików razem z testami.
+- Context pack: zamknięta lista instrukcji, kontraktów i kodu; <80k tokenów.
 - Acceptance:
   1. ...
 - Verification: jedna celowana komenda i oczekiwany wynik.

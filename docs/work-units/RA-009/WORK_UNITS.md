@@ -5,7 +5,7 @@
 - Task: `RA-009`
 - Plan revision: `01`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
-- Implementer: `Qwen3.8-27B-oQ6e-mtp / LOCAL_IMPLEMENTER`
+- Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `DRAFT`; aktywacja po `RA-004`, `RA-006`, `RA-007`, `RA-008 DONE`
 - Base commit/tree: ustala Sol przy aktywacji
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/agent-orchestrator/test`
@@ -14,7 +14,7 @@
 
 - In scope: trwały Case Supervisor, scheduling ról, writer fencing i recovery.
 - Out of scope: prawdziwe coding tools, Jira, GitLab i workspace implementation.
-- Role names produktu pozostają model-neutralne; nie hardcoduj Sol/Qwen w runtime.
+- Role names produktu pozostają model-neutralne; nie hardcoduj modeli workflow w runtime.
 
 ## Unit index
 

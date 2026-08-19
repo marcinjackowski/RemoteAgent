@@ -2,8 +2,8 @@
 
 ## Cel
 
-Protokół pozwala Solowi sterować sekwencją małych, jednorazowych uruchomień
-lokalnego implementera. Źródłem prawdy są repozytorium, task, plan work units,
+Protokół pozwala Solowi sterować sekwencją skupionych, jednorazowych uruchomień
+implementera. Źródłem prawdy są repozytorium, task, plan work units,
 wersjonowane handoffy i audyty — nie pamięć sesji modelu.
 
 ## Role
@@ -15,7 +15,7 @@ je lokalnemu implementerowi pojedynczo, kontroluje working tree, odtwarza testy 
 wydaje niezależny werdykt. Jest jedynym autorem planów, statusów kolejki i audytów.
 Nie implementuje kodu produktowego, który następnie audytuje.
 
-### LOCAL_IMPLEMENTER (Qwen)
+### IMPLEMENTER (GPT-5.6 Luna medium)
 
 Realizuje dokładnie jeden work unit w ephemerycznej sesji. Może edytować tylko
 dozwolone ścieżki i uruchomić wskazaną weryfikację. Nie wybiera taska, nie
@@ -52,11 +52,11 @@ Dowolny stan -> BLOCKED po udokumentowaniu realnej blokady.
 
 Sol wykonuje poniższe kroki bez proszenia użytkownika o wskazanie taska:
 
-1. Odczytaj `docs/tasks/TASK_INDEX.md`. Lokalnemu Qwenowi nigdy nie przekazuj
+1. Odczytaj `docs/tasks/TASK_INDEX.md`. Lunie nigdy nie przekazuj
    samego `continue`.
 2. Jeżeli istnieje `CHANGES_REQUESTED`, wybierz go, przeczytaj najnowszy audyt,
    zmień status na `IN_PROGRESS`, rozpisz każdy finding na mały fix work unit i
-   zlecaj je Qwenowi pojedynczo.
+   zlecaj je Lunie pojedynczo.
 3. Jeżeli po audycie istnieje `AUDIT_PASSED`, natychmiast zmień go na `DONE`,
    odblokuj taski, których wszystkie zależności są `DONE`, i rozpocznij pierwszy
    z nich według kolejności indeksu.
@@ -81,26 +81,29 @@ kontynuuje. Sama komenda `continue` nie jest odpowiedzią na nierozstrzygnięte
 pytanie decyzyjne.
 
 Kolejność w indeksie rozstrzyga remis. Nie uruchamiaj dwóch makro-tasków w
-jednym przebiegu. Concurrency lokalnego implementera wynosi `1` niezależnie od
+jednym przebiegu. Concurrency implementera wynosi `1` niezależnie od
 tego, czy implementowany produkt testuje współbieżność.
 
 ## Cykl planowania Sol
 
 1. Przeczytaj wymagane dokumenty, task i aktualny kod bez delegowania tej analizy
-   Qwenowi.
+   Lunie.
 2. Sprawdź working tree, zapisz bazowy commit/tree i zachowaj cudze zmiany.
 3. Zapisz `docs/work-units/<TASK_ID>/WORK_UNITS.md` według szablonu.
 4. Upewnij się, że każdy unit ma jeden rezultat, maksymalnie trzy kryteria,
-   zamknięte ścieżki, context pack poniżej 24k tokenów i jedną weryfikację.
+   domyślnie do ośmiu plików, context pack poniżej 80k tokenów i jedną
+   weryfikację. Dziel dalej tylko wtedy, gdy unit łączy niezależne zachowania,
+   przekracza te granice albo pierwsza próba ujawni rzeczywiste przeciążenie.
 5. Zidentyfikuj zależności między units i tylko jeden oznacz jako `READY`.
 6. Materialną niejasność zapisz jako Decision Request przed uruchomieniem
    implementera.
 
 ## Cykl pojedynczego work unit
 
-1. Sol wykonuje preflight z `docs/workflow/QWEN_IMPLEMENTER.md`.
-2. Sol uruchamia Qwena w nowej ephemerycznej sesji z rolą `LOCAL_IMPLEMENTER`.
-3. Qwen czyta tylko context pack, edytuje dozwolone ścieżki, uruchamia wskazaną
+1. Sol wykonuje preflight z `docs/workflow/LUNA_IMPLEMENTER.md`.
+2. Sol uruchamia `GPT-5.6 Luna` z effort `medium` w nowej ephemerycznej sesji z
+   rolą `IMPLEMENTER`.
+3. Luna czyta tylko context pack, edytuje dozwolone ścieżki, uruchamia wskazaną
    komendę i zwraca krótki raport.
 4. Sol porównuje rzeczywisty diff z allowlistą. Zmiana poza zakresem oznacza
    odrzucenie unit albo Decision Request, nie cichą akceptację.
@@ -110,7 +113,7 @@ tego, czy implementowany produkt testuje współbieżność.
 7. Po dwóch nieudanych próbach tego samego celu Sol zatrzymuje automatyczne
    ponawianie i dokumentuje blokadę.
 
-Qwen nie rozpoczyna następnego unit, nawet jeżeli widzi go w planie.
+Luna nie rozpoczyna następnego unit, nawet jeżeli widzi go w planie.
 
 ## Handoff i audyt całego taska
 
@@ -127,7 +130,7 @@ W audycie Sol:
 1. Potwierdź, że task ma status `AWAITING_AUDIT`.
 2. Przeczytaj specyfikację taska, plan work units, handoff i wcześniejsze audyty.
 3. Sprawdź pełny diff i wszystkie dotknięte przepływy, nie tylko wskazane pliki.
-4. Uruchom testy samodzielnie. Raport Qwena i wcześniejszy unit gate nie są
+4. Uruchom testy samodzielnie. Raport Luny i wcześniejszy unit gate nie są
    dowodem końcowym.
 5. Sprawdź każde kryterium akceptacji osobno.
 6. Oceń bezpieczeństwo, izolację kont, idempotencję, recovery, observability i
@@ -169,7 +172,7 @@ starszego werdyktu jako obowiązującego.
 
 ## Decision Request
 
-Gdy Qwen zgłosi materialną niejasność albo Sol wykryje ją przed dispatch, Sol
+Gdy Luna zgłosi materialną niejasność albo Sol wykryje ją przed dispatch, Sol
 zapisuje decyzję w najnowszym handoffie i ustawia task na `BLOCKED`. Handoff musi
 zawierać jawny marker
 `Decision Request` (nagłówek, pogrubienie lub pozycja listy zaczynająca się od

@@ -1,6 +1,6 @@
 # ADR-0003 — Sol koordynuje, lokalny Qwen implementuje
 
-- Status: Accepted
+- Status: Superseded by `ADR-0004`
 - Date: 2026-08-19
 - Scope: workflow budowy RemoteAgent, nie role runtime produktu
 

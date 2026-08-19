@@ -120,9 +120,9 @@ właścicielem. Supervisor uruchamia w razie potrzeby role:
 Role są one-shot. Ich ciągłość zapewniają kontrakty i checkpointy.
 
 Powyższe role opisują docelowy runtime produktu. Proces budowy tego repozytorium
-ma osobny kontrakt z ADR-0003: Sol pełni rolę koordynatora, planisty i audytora,
-a lokalny Qwen wykonuje małe work units. To rozdzielenie nie hardcoduje Sol ani
-Qwena w kontraktach runtime RemoteAgent.
+ma osobny kontrakt z ADR-0004: Sol high pełni rolę koordynatora, planisty i
+audytora, a GPT-5.6 Luna medium wykonuje work units. To rozdzielenie nie
+hardcoduje modeli w kontraktach runtime RemoteAgent.
 
 ### 3.6 Proces budowy repozytorium
 
@@ -132,7 +132,7 @@ Qwena w kontraktach runtime RemoteAgent.
   `docs/work-units/<TASK_ID>/WORK_UNITS.md`.
 - Jeden work unit ma jeden rezultat, mały context pack, ograniczone ścieżki i
   jedną celowaną weryfikację.
-- Qwen wykonuje units sekwencyjnie w ephemerycznych sesjach; nie planuje, nie
+- Luna wykonuje units sekwencyjnie w ephemerycznych sesjach; nie planuje, nie
   audytuje i nie zmienia artefaktów workflow.
 - Sol po każdym unit sprawdza diff i ponawia celowany test, a po całym tasku
   wykonuje pełny niezależny audyt.

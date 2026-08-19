@@ -3,9 +3,9 @@
 ## Metadata
 
 - Task: `RA-007`
-- Plan revision: `02`
+- Plan revision: `03`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
-- Implementer: `Qwen3.8-27B-oQ6e-mtp / LOCAL_IMPLEMENTER`
+- Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
 - Base commit/tree: `7b68cc45e5aeff88d02296b38692a054dbc985d8`
 - Full-task verification: `pnpm vitest run packages/bedrock-runtime/test && pnpm --filter @remoteagent/bedrock-runtime typecheck`
@@ -15,7 +15,7 @@
 - In scope: wyłącznie `@remoteagent/bedrock-runtime`, jego testy oraz konieczne
   deklaracje zależności.
 - Out of scope: business tools, MCP, role prompts, orchestrator i AgentCore.
-- Każdy unit używa nowej sesji; Qwen nie edytuje tego planu ani statusu taska.
+- Każdy unit używa nowej sesji; Luna nie edytuje tego planu ani statusu taska.
 - Sol przed aktywacją potwierdza publiczny runtime interface i nazwy plików.
 
 ## Unit index
@@ -46,18 +46,11 @@
 - Sol gate: zgodność API z kontraktami RA-002 i brak provider-specific types na
   publicznej granicy.
 
-### Execution slices
-
-| Slice | Status | Result | Allowed paths |
-|---|---|---|---|
-| `RA-007-WU-01A` | `RUNNING` | typed config errors i walidowana konfiguracja | `src/config.ts`, `src/errors.ts`, `test/config.test.ts` |
-| `RA-007-WU-01B` | `BLOCKED` | model-neutral runtime types i public exports | `src/types.ts`, `src/index.ts` |
-
-`WU-01A` nie importuje `@remoteagent/contracts` ani zewnętrznego walidatora.
-`WU-01B` utrzymuje zgodność strukturalną z RA-002 bez kopiowania pełnych schemas;
-zależność pakietowa może zostać dodana dopiero w unicie dopuszczającym zmianę
-manifestu. Podział wprowadzono po dwóch sesjach, które zużywały kontekst na
-rozstrzyganie zależności zamiast dostarczyć zmianę.
+Luna realizuje `WU-01` jako jeden spójny slice. Tymczasowy podział `WU-01A/B`
+wprowadzony dla ograniczeń lokalnego modelu został wycofany: pięć plików i jeden
+kontrakt konfiguracji mieszczą się w granicach Luny. Unit nie importuje
+`@remoteagent/contracts` ani zewnętrznego walidatora; zgodność z RA-002 pozostaje
+strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-02` — Fake transport and Converse text
 

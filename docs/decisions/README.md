@@ -13,4 +13,5 @@ Aktualne decyzje:
 
 - `ADR-0001` — foundation tooling i przypięte wersje;
 - `ADR-0002` — SQL i migracje trwałego stanu;
-- `ADR-0003` — Sol koordynuje/audytuje, lokalny Qwen wykonuje małe work units.
+- `ADR-0003` — historyczny workflow lokalnego implementera; zastąpiony przez ADR-0004.
+- `ADR-0004` — Sol high koordynuje/audytuje, GPT-5.6 Luna medium implementuje.

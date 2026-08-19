@@ -6,8 +6,8 @@
 i stosuj przed rozpoczęciem jakiejkolwiek pracy.
 
 Ten plik pozostaje dla legacy Claude Code/Bedrock workera. Domyślny workflow
-budowy repozytorium prowadzi Sol, a implementację małych work units wykonuje Qwen
-przez oMLX + Codex CLI. Claude nie może sam przejąć roli implementera.
+budowy repozytorium prowadzi Sol, a implementację work units wykonuje GPT-5.6
+Luna z reasoning effort `medium`. Claude nie może sam przejąć tej roli.
 
 ## Specjalne znaczenie `continue`
 

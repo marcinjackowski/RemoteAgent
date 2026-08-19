@@ -5,7 +5,7 @@
 - Task: `RA-010`
 - Plan revision: `01`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
-- Implementer: `Qwen3.8-27B-oQ6e-mtp / LOCAL_IMPLEMENTER`
+- Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `DRAFT`; task jest `READY`, ale kolejność makro-tasków nadal obowiązuje
 - Base commit/tree: ustala Sol przy aktywacji
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/workspace-runner/test`
