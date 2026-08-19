@@ -27,8 +27,8 @@
 | `RA-007-WU-03` | `ACCEPTED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
 | `RA-007-WU-04` | `ACCEPTED` | streaming i jednoznaczne cancellation | WU-02 |
 | `RA-007-WU-05` | `ACCEPTED` | ograniczony client-side tool loop | WU-02, WU-03 |
-| `RA-007-WU-06A` | `READY` | model-neutralny JSON Schema output i mapowanie AWS | WU-05 |
-| `RA-007-WU-06B` | `BLOCKED` | walidacja completion i tools-disabled repair | WU-06A |
+| `RA-007-WU-06A` | `ACCEPTED` | model-neutralny JSON Schema output i mapowanie AWS | WU-05 |
+| `RA-007-WU-06B` | `READY` | walidacja completion i tools-disabled repair | WU-06A |
 | `RA-007-WU-07` | `BLOCKED` | bezpieczna klasyfikacja retry i limitów | WU-03, WU-05 |
 | `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06B, WU-07 |
 
@@ -108,7 +108,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-06A` — Structured output transport contract
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: model-neutralny JSON Schema output mapowany do Bedrock `outputConfig`.
 - Allowed paths: `src/types.ts`, `src/aws-transport.ts`,
   `test/aws-transport.test.ts` w pakiecie `bedrock-runtime`.
@@ -122,7 +122,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-06B` — Structured completion validation and repair
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: walidacja `AgentCompletion` i pojedynczy repair call bez tools.
 - Allowed paths: `src/structured-completion.ts`, `src/tool-loop.ts`,
   `test/structured-completion.test.ts`, `src/index.ts`,
