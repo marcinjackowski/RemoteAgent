@@ -23,8 +23,8 @@
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
 | `RA-007-WU-01` | `ACCEPTED` | kontrakty runtime i konfiguracja modelu | — |
-| `RA-007-WU-02` | `READY` | fake transport i non-streaming Converse | WU-01 |
-| `RA-007-WU-03` | `BLOCKED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
+| `RA-007-WU-02` | `ACCEPTED` | fake transport i non-streaming Converse | WU-01 |
+| `RA-007-WU-03` | `READY` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
 | `RA-007-WU-04` | `BLOCKED` | streaming i jednoznaczne cancellation | WU-02 |
 | `RA-007-WU-05` | `BLOCKED` | ograniczony client-side tool loop | WU-02 |
 | `RA-007-WU-06` | `BLOCKED` | schema validation i tools-disabled repair | WU-05 |
@@ -54,7 +54,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-02` — Fake transport and Converse text
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: deterministyczny transport testowy i pojedynczy non-streaming turn.
 - Allowed paths: `src/transport.ts`, `src/fake-transport.ts`, `src/converse.ts`,
   `test/converse.test.ts`, `src/index.ts` w pakiecie `bedrock-runtime`.
@@ -67,6 +67,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-03` — AWS SDK adapter
 
+- Status: `READY`
 - Result: produkcyjny transport `Converse` korzystający z default credential chain.
 - Allowed paths: `packages/bedrock-runtime/package.json`, `pnpm-lock.yaml`,
   `src/aws-transport.ts`, `test/aws-transport.test.ts`, `src/index.ts`.
