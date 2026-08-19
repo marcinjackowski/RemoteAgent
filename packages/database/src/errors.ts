@@ -115,6 +115,18 @@ export class DecisionWaitingConflictError extends PersistenceError {
 /** The source completion/case is not eligible for waiting materialization. */
 export class DecisionWaitingStateError extends PersistenceError {}
 
+/** An answer/resume operation conflicts with an existing immutable decision state. */
+export class DecisionResumeConflictError extends PersistenceError {
+  public readonly decisionId: string;
+  public constructor(decisionId: string) {
+    super(`decision resume conflict for ${decisionId}`);
+    this.decisionId = decisionId;
+  }
+}
+
+/** The decision or case is not eligible for a new answer/resume operation. */
+export class DecisionResumeStateError extends PersistenceError {}
+
 /** A concurrent credential refresh already advanced the expected revision. */
 export class CredentialRefreshConflictError extends PersistenceError {
   public readonly connectionId: string;

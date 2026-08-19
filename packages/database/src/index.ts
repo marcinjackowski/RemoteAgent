@@ -38,6 +38,8 @@ export {
   RunCompletionStateError,
   DecisionWaitingConflictError,
   DecisionWaitingStateError,
+  DecisionResumeConflictError,
+  DecisionResumeStateError,
 } from "./errors.js";
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";
