@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-007`
-- Plan revision: `03`
+- Plan revision: `04`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -32,6 +32,8 @@
 | `RA-007-WU-07A` | `ACCEPTED` | retry policy i klasyfikacja błędów AWS | WU-03, WU-05 |
 | `RA-007-WU-07B` | `ACCEPTED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
 | `RA-007-WU-08` | `ACCEPTED` | zintegrowany runtime z pełną metryką completion | WU-04, WU-06B, WU-07B |
+| `RA-007-WU-09A` | `READY` | cancellation nie czeka na wadliwy cleanup iteratora | WU-08 |
+| `RA-007-WU-09B` | `READY` | metadane każdego model completion są zachowane | WU-08 |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -185,6 +187,44 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 - Verification: `pnpm vitest run packages/bedrock-runtime/test`.
 - Out of scope: orkiestrator i persistence runtime calls.
 - Sol gate: pełna macierz kryteriów RA-007 i typecheck pakietu.
+
+## `RA-007-WU-09A` — Non-blocking stream cleanup
+
+- Status: `READY`
+- Finding: `AUDIT-01 HIGH-01`.
+- Result: cancellation i pierwotny failure rozstrzygają się niezależnie od
+  zachowania `iterator.return()`.
+- Allowed paths: `packages/bedrock-runtime/src/stream.ts`,
+  `packages/bedrock-runtime/test/cancellation.test.ts`.
+- Context pack: `AUDIT-01 HIGH-01`, zaakceptowany WU-04 i publiczny kontrakt
+  cancellation.
+- Acceptance: `return()` jest wywołany najwyżej raz best-effort; pending cleanup
+  nie opóźnia `RuntimeCancelledError`; rejecting cleanup nie nadpisuje pierwotnego
+  błędu i nie tworzy unhandled rejection; zwykły success bez regresji.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/cancellation.test.ts packages/bedrock-runtime/test/stream.test.ts`.
+- Out of scope: fasada runtime, retry i metadane.
+- Sol gate: kontrolowane deferred bez wall-clock jako warunek poprawności testu.
+
+## `RA-007-WU-09B` — Per-completion metadata trace
+
+- Status: `READY`
+- Finding: `AUDIT-01 MEDIUM-02`.
+- Result: provider-neutralny trace pozwala zapisać identity i usage każdego
+  zakończonego model call bez zachowywania promptu ani contentu.
+- Allowed paths: `packages/bedrock-runtime/src/types.ts`, `src/tool-loop.ts`,
+  `src/structured-completion.ts`, `src/runtime.ts`, `test/tool-loop.test.ts`,
+  `test/structured-completion.test.ts`, `test/runtime.contract.test.ts`,
+  `test/runtime.integration.test.ts`.
+- Context pack: `AUDIT-01 MEDIUM-02`, WU-05/06B/08 contracts i
+  `MASTER_PLAN.md` §3.3.
+- Acceptance: wspólny typ elementu trace zawiera model, opcjonalne usage/request
+  ID i attempts danego zakończonego calla; text i stream zwracają jeden element;
+  tool→invalid→repair zwraca trzy elementy w kolejności; trace nie zawiera
+  messages/content/tool input; finalne skrótowe metadata pozostają kompatybilne.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/tool-loop.test.ts packages/bedrock-runtime/test/structured-completion.test.ts packages/bedrock-runtime/test/runtime.contract.test.ts packages/bedrock-runtime/test/runtime.integration.test.ts`.
+- Out of scope: persistence, agregacja kosztu i zmiana retry semantics.
+- Sol gate: distinct request IDs i usage dla wszystkich trzech calls; dokładna
+  kolejność i attempts per call.
 
 ## Final task gate
 
