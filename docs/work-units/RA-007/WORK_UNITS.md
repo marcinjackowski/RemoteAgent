@@ -25,8 +25,8 @@
 | `RA-007-WU-01` | `ACCEPTED` | kontrakty runtime i konfiguracja modelu | — |
 | `RA-007-WU-02` | `ACCEPTED` | fake transport i non-streaming Converse | WU-01 |
 | `RA-007-WU-03` | `ACCEPTED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
-| `RA-007-WU-04` | `READY` | streaming i jednoznaczne cancellation | WU-02 |
-| `RA-007-WU-05` | `BLOCKED` | ograniczony client-side tool loop | WU-02 |
+| `RA-007-WU-04` | `ACCEPTED` | streaming i jednoznaczne cancellation | WU-02 |
+| `RA-007-WU-05` | `READY` | ograniczony client-side tool loop | WU-02 |
 | `RA-007-WU-06` | `BLOCKED` | schema validation i tools-disabled repair | WU-05 |
 | `RA-007-WU-07` | `BLOCKED` | bezpieczna klasyfikacja retry i limitów | WU-03, WU-05 |
 | `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06, WU-07 |
@@ -80,7 +80,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-04` — Stream and cancellation
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: `ConverseStream` składany do jednoznacznego success/cancel/failure.
 - Allowed paths: `src/stream.ts`, `src/aws-stream-transport.ts`,
   `test/stream.test.ts`, `test/cancellation.test.ts`, `src/index.ts`.
@@ -93,6 +93,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-05` — Client-side tool loop
 
+- Status: `READY`
 - Result: pętla `toolUse`/`toolResult` z limitem iteracji i wywołań.
 - Allowed paths: `src/tool-loop.ts`, `src/types.ts`, `test/tool-loop.test.ts`,
   `src/index.ts`.
