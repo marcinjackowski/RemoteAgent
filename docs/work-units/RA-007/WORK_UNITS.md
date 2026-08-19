@@ -131,7 +131,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 - Acceptance: poprawny output nie jest naprawiany; wadliwy uruchamia jeden repair;
   repair request zachowuje pełną historię, nie zawiera tools i nie odtwarza side
   effectów; drugi wadliwy output kończy się typed error.
-- Verification: frozen-lockfile install, następnie
+- Verification: frozen-lockfile install, build `@remoteagent/contracts`, następnie
   `pnpm vitest run packages/bedrock-runtime/test/structured-completion.test.ts packages/bedrock-runtime/test/tool-loop.test.ts`.
 - Out of scope: retry transportu i streaming.
 - Sol gate: test z licznikiem tool execution pozostaje równy jeden, a repair jest
