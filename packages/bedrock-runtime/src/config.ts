@@ -1,0 +1,66 @@
+import { ConfigurationError } from "./errors.js";
+import type { ModelIdentity, RuntimeConfig, ToolLimits } from "./types.js";
+
+export const MAX_TIMEOUT_MS = 86_400_000;
+export const MAX_TOOL_ITERATIONS = 100;
+export const MAX_TOOL_CALLS = 1_000;
+
+export interface RuntimeConfigInput {
+  readonly model: ModelIdentity;
+  readonly timeoutMs: number;
+  readonly toolLimits: ToolLimits;
+}
+
+function requireText(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ConfigurationError(`${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function requireBoundedInteger(value: unknown, field: string, maximum: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new ConfigurationError(`${field} must be an integer between 0 and ${maximum}`);
+  }
+  return value;
+}
+
+/** Validate and copy the safe, provider-neutral portion of runtime settings. */
+export function createRuntimeConfig(input: RuntimeConfigInput): RuntimeConfig {
+  if (input === null || typeof input !== "object") {
+    throw new ConfigurationError("runtime configuration must be an object");
+  }
+
+  const model = {
+    provider: requireText(input.model?.provider, "model.provider"),
+    model_id: requireText(input.model?.model_id, "model.model_id"),
+  } as const;
+
+  if (
+    typeof input.timeoutMs !== "number" ||
+    !Number.isInteger(input.timeoutMs) ||
+    input.timeoutMs <= 0 ||
+    input.timeoutMs > MAX_TIMEOUT_MS
+  ) {
+    throw new ConfigurationError(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}`);
+  }
+
+  const toolLimits = {
+    maxIterations: requireBoundedInteger(
+      input.toolLimits?.maxIterations,
+      "toolLimits.maxIterations",
+      MAX_TOOL_ITERATIONS,
+    ),
+    maxCalls: requireBoundedInteger(
+      input.toolLimits?.maxCalls,
+      "toolLimits.maxCalls",
+      MAX_TOOL_CALLS,
+    ),
+  } as const;
+
+  return Object.freeze({
+    model: Object.freeze(model),
+    timeoutMs: input.timeoutMs,
+    toolLimits: Object.freeze(toolLimits),
+  });
+}
