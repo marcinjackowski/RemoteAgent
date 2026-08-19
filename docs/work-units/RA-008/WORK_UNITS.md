@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `12`
+- Plan revision: `13`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -254,9 +254,11 @@
 - Result: deterministyczny Markdown i pinned status są read-only projections JSON.
 - Allowed paths: `packages/agent-orchestrator/src/checkpoint/render.ts`,
   `test/checkpoint-render.test.ts`, `packages/discord/src/status.ts`,
-  `packages/discord/test/status.test.ts`, `src/index.ts`.
+  `packages/discord/test/status.test.ts`, oba `src/index.ts`,
+  `packages/agent-orchestrator/package.json`, `pnpm-lock.yaml`.
 - Context pack: CaseCheckpoint, RA-006 status gateway, WU-03 output.
 - Acceptance: renderer nie mutuje checkpointu; output jest bounded/redacted;
+  oba renderery korzystają ze wspólnego `@remoteagent/observability` redaktora;
   starsza projekcja nie nadpisuje nowszej.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/checkpoint-render.test.ts packages/discord/test/status.test.ts`.
 - Out of scope: Discord gateway lifecycle.
