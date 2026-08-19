@@ -4,6 +4,7 @@ import { executeTransportDetailed, type TransportExecutionDependencies } from ".
 import { runToolLoop, type ToolExecutor } from "./tool-loop.js";
 import type {
   RuntimeConfig,
+  RuntimeCompletionMetadata,
   RuntimeContent,
   RuntimeJsonValue,
   RuntimeMessage,
@@ -37,6 +38,7 @@ export interface StructuredCompletionResult {
   readonly transportCalls: number;
   readonly toolIterations: number;
   readonly toolCalls: number;
+  readonly modelCompletions: readonly RuntimeCompletionMetadata[];
 }
 
 function normalizeJson(value: unknown): RuntimeJsonValue {
@@ -111,6 +113,7 @@ export async function runStructuredCompletion(
       transportCalls: loop.transportAttempts,
       toolIterations: loop.iterations,
       toolCalls: loop.calls,
+      modelCompletions: loop.modelCompletions,
     };
   } catch {
     const repairExecution = await executeTransportDetailed(
@@ -124,6 +127,12 @@ export async function runStructuredCompletion(
       request.execution,
     );
     const repair = repairExecution.response;
+    const repairMetadata: RuntimeCompletionMetadata = {
+      model: repair.model,
+      ...(repair.usage === undefined ? {} : { usage: repair.usage }),
+      ...(repair.requestId === undefined ? {} : { requestId: repair.requestId }),
+      transportAttempts: repairExecution.attempts,
+    };
     try {
       return {
         completion: validate(repair),
@@ -134,6 +143,7 @@ export async function runStructuredCompletion(
         transportCalls: loop.transportAttempts + repairExecution.attempts,
         toolIterations: loop.iterations,
         toolCalls: loop.calls,
+        modelCompletions: [...loop.modelCompletions, repairMetadata],
       };
     } catch {
       throw new StructuredCompletionError();

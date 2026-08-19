@@ -76,11 +76,13 @@ describe("runStructuredCompletion", () => {
           return {
             model: config.model,
             content: [{ type: "tool-use" as const, id: "u1", name: "lookup", input: {} }],
+            requestId: "tool",
+            usage: { totalTokens: 1 },
           };
-        if (calls === 2) return invalid;
+        if (calls === 2) return { ...invalid, usage: { totalTokens: 2 } };
         repairAttempts += 1;
         if (repairAttempts === 1) throw new TransportError("transient", "TRANSIENT");
-        return response(completion, "repair");
+        return { ...response(completion, "repair"), usage: { totalTokens: 3 } };
       },
     };
     let executions = 0;
@@ -103,6 +105,11 @@ describe("runStructuredCompletion", () => {
     expect(delays).toEqual([5]);
     expect(result).toMatchObject({ repaired: true, requestId: "repair" });
     expect(result.transportCalls).toBe(4);
+    expect(result.modelCompletions).toEqual([
+      { model: config.model, requestId: "tool", usage: { totalTokens: 1 }, transportAttempts: 1 },
+      { model: config.model, requestId: "bad", usage: { totalTokens: 2 }, transportAttempts: 1 },
+      { model: config.model, requestId: "repair", usage: { totalTokens: 3 }, transportAttempts: 2 },
+    ]);
     expect(requests[2]?.tools).toBeUndefined();
     expect(requests[3]?.tools).toBeUndefined();
     expect(requests[2]?.outputSchema).toEqual(requests[3]?.outputSchema);
@@ -192,6 +199,11 @@ describe("runStructuredCompletion", () => {
     expect(result.usage?.totalTokens).toBe(9);
     expect(result.transportCalls).toBe(3);
     expect(result.toolCalls).toBe(1);
+    expect(result.modelCompletions).toEqual([
+      { model: config.model, transportAttempts: 1 },
+      { model: config.model, requestId: "bad", transportAttempts: 1 },
+      { model: config.model, requestId: "repair", usage: { totalTokens: 9 }, transportAttempts: 1 },
+    ]);
   });
 
   it("repairs mixed content exactly once", async () => {

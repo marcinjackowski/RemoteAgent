@@ -33,9 +33,20 @@ describe("runToolLoop", () => {
       converse: async (request: RuntimeRequest) => {
         requests.push(request);
         transportCalls += 1;
-        if (transportCalls === 1) return { model: retryConfig.model, content: [use("u1")] };
+        if (transportCalls === 1)
+          return {
+            model: retryConfig.model,
+            content: [use("u1")],
+            requestId: "tool",
+            usage: { totalTokens: 1 },
+          };
         if (transportCalls === 2) throw new TransportError("transient", "TRANSIENT");
-        return { model: retryConfig.model, content: [{ type: "text" as const, text: "done" }] };
+        return {
+          model: retryConfig.model,
+          content: [{ type: "text" as const, text: "done" }],
+          requestId: "success",
+          usage: { totalTokens: 2 },
+        };
       },
     };
     let executions = 0;
@@ -57,6 +68,20 @@ describe("runToolLoop", () => {
     expect(executions).toBe(1);
     expect(transportCalls).toBe(3);
     expect(result.transportAttempts).toBe(3);
+    expect(result.modelCompletions).toEqual([
+      {
+        model: retryConfig.model,
+        requestId: "tool",
+        usage: { totalTokens: 1 },
+        transportAttempts: 1,
+      },
+      {
+        model: retryConfig.model,
+        requestId: "success",
+        usage: { totalTokens: 2 },
+        transportAttempts: 2,
+      },
+    ]);
     expect(delays).toEqual([7]);
     expect(requests[1]?.messages).toEqual(requests[2]?.messages);
     expect(requests[1]?.tools).toEqual([tool]);

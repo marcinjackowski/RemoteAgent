@@ -76,6 +76,14 @@ export interface RuntimeUsage {
   readonly totalTokens?: number;
 }
 
+/** Provider-neutral metadata for one successfully completed model call. */
+export interface RuntimeCompletionMetadata {
+  readonly model: ModelIdentity;
+  readonly usage?: RuntimeUsage;
+  readonly requestId?: string;
+  readonly transportAttempts: number;
+}
+
 export interface RuntimeResponse {
   readonly model: ModelIdentity;
   readonly content: readonly RuntimeContent[];

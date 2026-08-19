@@ -64,6 +64,18 @@ describe("Runtime public contract", () => {
       expect(result.requestId).toBe("request-1");
       expect(result.latencyMs).toBe(0);
       expect(result.transportAttempts).toBe(1);
+      expect(result.modelCompletions).toHaveLength(1);
+      expect(result.modelCompletions[0]).toEqual({
+        model: config.model,
+        usage: response.usage,
+        requestId: "request-1",
+        transportAttempts: 1,
+      });
+      const traceKeys = Object.keys(result.modelCompletions[0] ?? {});
+      expect(traceKeys).not.toContain("messages");
+      expect(traceKeys).not.toContain("content");
+      expect(traceKeys).not.toContain("input");
+      expect(traceKeys).not.toContain("tools");
     }
     expect(results[0]).toMatchObject({ mode: "text", text: "" });
     expect(results[1]).toMatchObject({ mode: "stream", text: "hello" });

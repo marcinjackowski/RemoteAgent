@@ -2,6 +2,7 @@ import { ToolLimitError, TransportError } from "./errors.js";
 import { executeTransportDetailed, type TransportExecutionDependencies } from "./retry.js";
 import type {
   RuntimeConfig,
+  RuntimeCompletionMetadata,
   RuntimeContent,
   RuntimeJsonValue,
   RuntimeMessage,
@@ -31,6 +32,7 @@ export interface ToolLoopResult extends RuntimeResponse {
   readonly calls: number;
   readonly history: readonly RuntimeMessage[];
   readonly transportAttempts: number;
+  readonly modelCompletions: readonly RuntimeCompletionMetadata[];
 }
 
 function toolUses(content: readonly RuntimeContent[]) {
@@ -51,6 +53,7 @@ export async function runToolLoop(
   let iterations = 0;
   let calls = 0;
   let transportAttempts = 0;
+  const modelCompletions: RuntimeCompletionMetadata[] = [];
   let response: RuntimeResponse;
   const enabledTools =
     config.toolLimits.maxIterations === 0 || config.toolLimits.maxCalls === 0
@@ -71,6 +74,12 @@ export async function runToolLoop(
     );
     response = execution.response;
     transportAttempts += execution.attempts;
+    modelCompletions.push({
+      model: response.model,
+      ...(response.usage === undefined ? {} : { usage: response.usage }),
+      ...(response.requestId === undefined ? {} : { requestId: response.requestId }),
+      transportAttempts: execution.attempts,
+    });
     const uses = toolUses(response.content);
     if (uses.length === 0) {
       return {
@@ -79,6 +88,7 @@ export async function runToolLoop(
         calls,
         history: [...messages, { role: "assistant", content: [...response.content] }],
         transportAttempts,
+        modelCompletions,
       };
     }
 

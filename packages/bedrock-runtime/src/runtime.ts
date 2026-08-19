@@ -7,6 +7,7 @@ import {
 } from "./structured-completion.js";
 import type {
   ModelIdentity,
+  RuntimeCompletionMetadata,
   RuntimeConfig,
   RuntimeMessage,
   RuntimeResponse,
@@ -47,6 +48,7 @@ export interface RuntimeMetadata {
   readonly requestId?: string;
   readonly latencyMs: number;
   readonly transportAttempts: number;
+  readonly modelCompletions: readonly RuntimeCompletionMetadata[];
 }
 
 export interface RuntimeTextResult extends RuntimeMetadata {
@@ -154,6 +156,16 @@ export class Runtime {
             ? {}
             : { requestId: result.response.requestId }),
           transportAttempts: result.attempts,
+          modelCompletions: [
+            {
+              model: result.response.model,
+              ...(result.response.usage === undefined ? {} : { usage: result.response.usage }),
+              ...(result.response.requestId === undefined
+                ? {}
+                : { requestId: result.response.requestId }),
+              transportAttempts: result.attempts,
+            },
+          ],
         }),
       };
     }
@@ -176,6 +188,7 @@ export class Runtime {
           ...(result.usage === undefined ? {} : { usage: result.usage }),
           ...(result.requestId === undefined ? {} : { requestId: result.requestId }),
           transportAttempts: result.transportCalls,
+          modelCompletions: result.modelCompletions,
         }),
       };
     }
@@ -239,6 +252,14 @@ export class Runtime {
                 ...(stream.usage === undefined ? {} : { usage: stream.usage }),
                 ...(stream.requestId === undefined ? {} : { requestId: stream.requestId }),
                 transportAttempts: 1,
+                modelCompletions: [
+                  {
+                    model: stream.model,
+                    ...(stream.usage === undefined ? {} : { usage: stream.usage }),
+                    ...(stream.requestId === undefined ? {} : { requestId: stream.requestId }),
+                    transportAttempts: 1,
+                  },
+                ],
               }),
             },
           }),

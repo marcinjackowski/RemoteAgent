@@ -71,9 +71,12 @@ describe("Runtime integration", () => {
             return {
               model: config.model,
               content: [{ type: "tool-use", id: "u1", name: "lookup", input: {} }],
+              requestId: "tool",
+              usage: { totalTokens: 1 },
             };
-          if (calls === 2) return jsonResponse({ invalid: true }, "invalid");
-          return jsonResponse(valid, "repair");
+          if (calls === 2)
+            return { ...jsonResponse({ invalid: true }, "invalid"), usage: { totalTokens: 2 } };
+          return { ...jsonResponse(valid, "repair"), usage: { totalTokens: 3 } };
         },
       },
     });
@@ -91,8 +94,23 @@ describe("Runtime integration", () => {
       toolCalls: 1,
       transportAttempts: 3,
       requestId: "repair",
-      usage: { totalTokens: 10 },
+      usage: { totalTokens: 3 },
     });
+    expect(result.modelCompletions).toEqual([
+      { model: config.model, requestId: "tool", usage: { totalTokens: 1 }, transportAttempts: 1 },
+      {
+        model: config.model,
+        requestId: "invalid",
+        usage: { totalTokens: 2 },
+        transportAttempts: 1,
+      },
+      {
+        model: config.model,
+        requestId: "repair",
+        usage: { totalTokens: 3 },
+        transportAttempts: 1,
+      },
+    ]);
     expect(executions).toBe(1);
   });
 
