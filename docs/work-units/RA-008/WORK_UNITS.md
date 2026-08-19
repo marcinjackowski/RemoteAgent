@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `06`
+- Plan revision: `07`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -23,12 +23,13 @@
 |---|---|---|---|
 | `RA-008-WU-01` | `ACCEPTED` | trwałe repozytorium decyzji i odpowiedzi | — |
 | `RA-008-WU-02` | `ACCEPTED` | deterministyczny context builder i provenance | WU-01 |
-| `RA-008-WU-03` | `READY` | czysta aplikacja checkpoint patch | WU-02 |
-| `RA-008-WU-04` | `BLOCKED` | atomic completion apply | WU-03 |
-| `RA-008-WU-05` | `BLOCKED` | waiting/answer binding i stale rejection | WU-01, WU-04 |
+| `RA-008-WU-03` | `ACCEPTED` | czysta aplikacja checkpoint patch | WU-02 |
+| `RA-008-WU-04A` | `READY` | czyste przygotowanie completion do zapisu | WU-03 |
+| `RA-008-WU-04B` | `BLOCKED` | atomic completion persistence | WU-04A |
+| `RA-008-WU-05` | `BLOCKED` | waiting/answer binding i stale rejection | WU-01, WU-04B |
 | `RA-008-WU-06` | `BLOCKED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07` | `BLOCKED` | bounded compaction bez utraty decyzji | WU-02, WU-03 |
-| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04, WU-05, WU-06, WU-07 |
+| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05, WU-06, WU-07 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -86,7 +87,7 @@
 
 ## `RA-008-WU-03` — Checkpoint patch application
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: czysta funkcja tworzy następną pełną rewizję z validated patch.
 - Allowed paths: `packages/agent-orchestrator/src/checkpoint/apply-patch.ts`,
   `checkpoint/errors.ts`, `test/checkpoint-patch.test.ts`, `src/index.ts`.
@@ -111,19 +112,58 @@
   wszystkie pola autorytatywne; strict rejection prób nadpisania revision/case;
   combined-array overflow oraz invalid timestamp.
 
-## `RA-008-WU-04` — Atomic completion apply
+## `RA-008-WU-04A` — Completion preparation
 
-- Result: jedna transakcja zapisuje completion, checkpoint revision, run state i outbox.
+- Status: `READY`
+- Result: czysta funkcja wiąże runtime-validated completion z autorytatywnym
+  run/case/revision i przygotowuje następny checkpoint oraz bezpieczny outbox event.
+- Allowed paths: `packages/agent-orchestrator/src/checkpoint/apply-completion.ts`,
+  `checkpoint/completion-errors.ts`, `test/completion-preparation.test.ts`, `src/index.ts`.
+- Context pack: `AgentCompletion`, `RunSafetyState`, WU-03 oraz zasada, że model
+  nie ustala run/case/revision ani czasu zakończenia.
+- Acceptance:
+  - completion jest parsowany runtime kontraktem i musi odpowiadać systemowym
+    `runId`/`caseId`; bieżący checkpoint musi mieć ten case i expected revision;
+  - `applyCheckpointPatch` tworzy checkpoint, a `last_run_id` jest ustawiany
+    deterministycznie na autorytatywny run dopiero po aplikacji model patcha;
+  - `completionId` i `finishedAt` są wymaganym system input; wynik zawiera
+    zredagowany outbox payload wyłącznie z IDs, statusem i nową rewizją;
+  - potwierdzone `FAILED`/`CANCELLED` mapują run na `FAILED`, pozostałe statusy na
+    `SUCCEEDED`; model nie przekazuje `safety_state`;
+  - input nie jest mutowany, a mismatch/invalid input daje typed error bez zapisu.
+- Verification: `pnpm vitest run packages/agent-orchestrator/test/completion-preparation.test.ts`.
+- Out of scope: baza danych, publikacja outbox i answer handling.
+- Sol gate: wszystkie statusy completion, cross-run/case/revision, invalid
+  completion/time oraz dowód braku raw summary/decision text w outbox payload.
+
+## `RA-008-WU-04B` — Atomic completion persistence
+
+- Status: `BLOCKED`
+- Result: jedna publiczna operacja i jedna transakcja zapisują completion,
+  checkpoint revision, terminalny run state, zwolnienie `active_run_id` i outbox.
 - Allowed paths: `packages/database/src/repositories/run-completion.ts`,
   `repositories/index.ts`, `test/completion-apply.integration.test.ts`,
-  `packages/agent-orchestrator/src/checkpoint/apply-completion.ts`,
-  `packages/agent-orchestrator/src/index.ts`.
-- Context pack: checkpoint repository, transaction API, outbox, WU-03.
-- Acceptance: crash przed commit nic nie publikuje; commit zapisuje komplet;
-  konkurencyjna revision failuje bez partial state.
+  `packages/database/src/errors.ts`, `packages/database/src/index.ts`,
+  `packages/database/package.json`, `pnpm-lock.yaml`.
+- Context pack: output WU-04A, checkpoint repository, branded transaction,
+  `OutboxRepository` i run/case constraints.
+- Acceptance:
+  - repository posiada `Database` i sam otwiera dokładnie jedną transakcję;
+    lockuje autorytatywny run/case przed odczytem i wymaga run `STARTED`, zgodnych
+    case/revision oraz `active_run_id` wskazującego ten run;
+  - commit zapisuje append-only `run_completions`, checkpoint przez istniejący
+    CAS, terminalny run state/time, czyści aktywny run i enqueue'uje zredagowany
+    event w istniejącym transactional outbox;
+  - identyczny replay po commicie zwraca istniejący rezultat bez drugiego
+    checkpointu/outbox; inna semantyka dla tego run/completionId daje typed
+    conflict i zero nowych zapisów;
+  - konkurencyjne runy tej samej sprawy na tej samej rewizji: dokładnie jeden
+    może wygrać; rollback/fault na dowolnym późniejszym kroku nie pozostawia
+    completion, checkpointu, terminalnego run state ani outbox.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/completion-apply.integration.test.ts`.
-- Out of scope: answer handling i rendering.
-- Sol gate: fault injection po każdym zapisie w transakcji.
+- Out of scope: materializacja DecisionRequest/answer resume i rendering.
+- Sol gate: real-PG exact/conflicting replay, two-run revision race oraz fault
+  matrix po completion/checkpoint/run/active-run/outbox writes.
 
 ## `RA-008-WU-05` — Waiting and answer resume
 
@@ -131,7 +171,7 @@
 - Allowed paths: `packages/agent-orchestrator/src/decisions/service.ts`,
   `decisions/errors.ts`, `test/decisions.test.ts`,
   `packages/database/test/decision-resume.integration.test.ts`, `src/index.ts`.
-- Context pack: WU-01/WU-04, DecisionRequest contracts, queue/outbox APIs.
+- Context pack: WU-01/WU-04B, DecisionRequest contracts, queue/outbox APIs.
 - Acceptance: stale/foreign answer odrzucony; replay nie tworzy drugiego resume;
   waiting nie utrzymuje aktywnego lease.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/decision-resume.integration.test.ts`.
