@@ -27,9 +27,10 @@
 | `RA-007-WU-03` | `ACCEPTED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
 | `RA-007-WU-04` | `ACCEPTED` | streaming i jednoznaczne cancellation | WU-02 |
 | `RA-007-WU-05` | `ACCEPTED` | ograniczony client-side tool loop | WU-02, WU-03 |
-| `RA-007-WU-06` | `READY` | schema validation i tools-disabled repair | WU-05 |
+| `RA-007-WU-06A` | `READY` | model-neutralny JSON Schema output i mapowanie AWS | WU-05 |
+| `RA-007-WU-06B` | `BLOCKED` | walidacja completion i tools-disabled repair | WU-06A |
 | `RA-007-WU-07` | `BLOCKED` | bezpieczna klasyfikacja retry i limitów | WU-03, WU-05 |
-| `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06, WU-07 |
+| `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06B, WU-07 |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -105,20 +106,36 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 - Out of scope: business tool implementation, retry i repair.
 - Sol gate: test licznika side effectów, nie tylko liczby requestów modelu.
 
-## `RA-007-WU-06` — Structured completion repair
+## `RA-007-WU-06A` — Structured output transport contract
 
 - Status: `READY`
+- Result: model-neutralny JSON Schema output mapowany do Bedrock `outputConfig`.
+- Allowed paths: `src/types.ts`, `src/aws-transport.ts`,
+  `test/aws-transport.test.ts` w pakiecie `bedrock-runtime`.
+- Context pack: WU-03/05, AWS `OutputConfig` types, JSON Schema eksport kontraktów.
+- Acceptance: request może wskazać nazwany JSON Schema; adapter serializuje schema
+  deterministycznie do `json_schema`; brak schema nie wysyła `outputConfig`.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/aws-transport.test.ts`.
+- Out of scope: walidacja wyniku, repair, retry i streaming.
+- Sol gate: publiczny kontrakt pozostaje provider-neutralny i nie przyjmuje
+  gotowych typów AWS.
+
+## `RA-007-WU-06B` — Structured completion validation and repair
+
+- Status: `BLOCKED`
 - Result: walidacja `AgentCompletion` i pojedynczy repair call bez tools.
 - Allowed paths: `src/structured-completion.ts`, `src/tool-loop.ts`,
   `test/structured-completion.test.ts`, `src/index.ts`,
   `packages/bedrock-runtime/package.json`, `pnpm-lock.yaml`.
-- Context pack: WU-05, `agent-completion.ts`, JSON Schema eksport kontraktów.
+- Context pack: WU-05/06A, `agent-completion.ts`, JSON Schema eksport kontraktów.
 - Acceptance: poprawny output nie jest naprawiany; wadliwy uruchamia jeden repair;
-  repair request nie zawiera tools i nie odtwarza side effectów.
+  repair request zachowuje pełną historię, nie zawiera tools i nie odtwarza side
+  effectów; drugi wadliwy output kończy się typed error.
 - Verification: frozen-lockfile install, następnie
-  `pnpm vitest run packages/bedrock-runtime/test/structured-completion.test.ts`.
+  `pnpm vitest run packages/bedrock-runtime/test/structured-completion.test.ts packages/bedrock-runtime/test/tool-loop.test.ts`.
 - Out of scope: retry transportu i streaming.
-- Sol gate: test z licznikiem tool execution pozostaje równy jeden.
+- Sol gate: test z licznikiem tool execution pozostaje równy jeden, a repair jest
+  dokładnie jednym dodatkowym wywołaniem transportu.
 
 ## `RA-007-WU-07` — Retry classification and limits
 
