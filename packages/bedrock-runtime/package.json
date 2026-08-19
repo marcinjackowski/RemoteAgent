@@ -14,5 +14,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.1113.0"
   }
 }
