@@ -8,7 +8,8 @@ import {
   type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 
-import { TransportError } from "./errors.js";
+import { RuntimeCancelledError, TransportError } from "./errors.js";
+import { classifyTransportFailure } from "./retry.js";
 import type {
   RuntimeConfig,
   RuntimeContent,
@@ -197,10 +198,12 @@ export class AwsBedrockTransport implements RuntimeTransport {
       };
     } catch (error) {
       if (error instanceof TransportError) throw error;
+      const kind = classifyTransportFailure(error);
+      if (kind === "CANCELLED") throw new RuntimeCancelledError();
       this.#logger?.error?.({
         operation: "bedrock.converse.failure",
       });
-      throw new TransportError("Bedrock Converse request failed");
+      throw new TransportError("Bedrock Converse request failed", kind);
     }
   }
 }

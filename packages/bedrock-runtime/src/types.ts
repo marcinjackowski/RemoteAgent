@@ -12,10 +12,18 @@ export interface ToolLimits {
   readonly maxCalls: number;
 }
 
+export interface RetryPolicy {
+  /** Maximum transport attempts, including the initial attempt. */
+  readonly maxAttempts: number;
+  /** Base delay for a future retry. Execution of retries is out of scope here. */
+  readonly baseDelayMs: number;
+}
+
 export interface RuntimeConfig {
   readonly model: ModelIdentity;
   readonly timeoutMs: number;
   readonly toolLimits: ToolLimits;
+  readonly retryPolicy: RetryPolicy;
 }
 
 export interface RuntimeMessage {

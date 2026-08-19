@@ -1,14 +1,19 @@
 import { ConfigurationError } from "./errors.js";
-import type { ModelIdentity, RuntimeConfig, ToolLimits } from "./types.js";
+import type { ModelIdentity, RetryPolicy, RuntimeConfig, ToolLimits } from "./types.js";
 
 export const MAX_TIMEOUT_MS = 86_400_000;
 export const MAX_TOOL_ITERATIONS = 100;
 export const MAX_TOOL_CALLS = 1_000;
+export const DEFAULT_MAX_ATTEMPTS = 2;
+export const DEFAULT_BASE_DELAY_MS = 100;
+export const MAX_RETRY_ATTEMPTS = 5;
+export const MAX_RETRY_DELAY_MS = 60_000;
 
 export interface RuntimeConfigInput {
   readonly model: ModelIdentity;
   readonly timeoutMs: number;
   readonly toolLimits: ToolLimits;
+  readonly retryPolicy?: Partial<RetryPolicy>;
 }
 
 function requireText(value: unknown, field: string): string {
@@ -58,9 +63,26 @@ export function createRuntimeConfig(input: RuntimeConfigInput): RuntimeConfig {
     ),
   } as const;
 
+  const retryPolicy = {
+    maxAttempts: requireBoundedInteger(
+      input.retryPolicy?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+      "retryPolicy.maxAttempts",
+      MAX_RETRY_ATTEMPTS,
+    ),
+    baseDelayMs: requireBoundedInteger(
+      input.retryPolicy?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS,
+      "retryPolicy.baseDelayMs",
+      MAX_RETRY_DELAY_MS,
+    ),
+  } as const;
+  if (retryPolicy.maxAttempts < 1) {
+    throw new ConfigurationError("retryPolicy.maxAttempts must be at least 1");
+  }
+
   return Object.freeze({
     model: Object.freeze(model),
     timeoutMs: input.timeoutMs,
     toolLimits: Object.freeze(toolLimits),
+    retryPolicy: Object.freeze(retryPolicy),
   });
 }

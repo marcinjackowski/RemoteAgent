@@ -1,6 +1,8 @@
 export type RuntimeErrorCode =
   "CONFIGURATION_INVALID" | "TIMEOUT" | "CANCELLED" | "LIMIT_EXCEEDED" | "TRANSPORT_ERROR";
 
+export type TransportFailureKind = "THROTTLING" | "TRANSIENT" | "FATAL";
+
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;
   readonly retryable: boolean;
@@ -42,8 +44,17 @@ export class ToolLimitError extends RuntimeError {
 }
 
 export class TransportError extends RuntimeError {
-  constructor(message: string, retryable = false) {
-    super("TRANSPORT_ERROR", message, retryable);
+  readonly kind: TransportFailureKind;
+
+  constructor(message: string, kind: TransportFailureKind | boolean = "FATAL") {
+    const normalizedKind: TransportFailureKind =
+      typeof kind === "boolean" ? (kind ? "TRANSIENT" : "FATAL") : kind;
+    super(
+      "TRANSPORT_ERROR",
+      message,
+      normalizedKind === "THROTTLING" || normalizedKind === "TRANSIENT",
+    );
     this.name = "TransportError";
+    this.kind = normalizedKind;
   }
 }

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { AwsBedrockTransport } from "../src/index.js";
+import { AwsBedrockTransport, RuntimeCancelledError, TransportError } from "../src/index.js";
 import type { RuntimeConfig } from "../src/types.js";
 
 const config: RuntimeConfig = {
   model: { provider: "aws-bedrock", model_id: "amazon.nova-lite-v1:0" },
   timeoutMs: 5_000,
   toolLimits: { maxIterations: 0, maxCalls: 0 },
+  retryPolicy: { maxAttempts: 2, baseDelayMs: 100 },
 };
 
 describe("AwsBedrockTransport", () => {
@@ -74,6 +75,50 @@ describe("AwsBedrockTransport", () => {
     );
     await expect(transport.converse(request, config)).rejects.not.toThrow(canary);
     expect(JSON.stringify(logs)).not.toContain(canary);
+  });
+
+  it.each([
+    [{ name: "ThrottlingException", message: "canary" }, "THROTTLING", true],
+    [{ $metadata: { httpStatusCode: 503 }, message: "canary" }, "TRANSIENT", true],
+    [{ name: "ValidationException", message: "canary" }, "FATAL", false],
+  ] as const)("maps SDK failure to %s", async (failure, kind, retryable) => {
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async () => {
+          throw failure;
+        },
+      },
+    });
+    const result = transport.converse(
+      { messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] },
+      config,
+    );
+    await expect(result).rejects.toMatchObject({ kind, retryable });
+    await expect(result).rejects.not.toThrow("canary");
+  });
+
+  it("maps an AWS cancellation to RuntimeCancelledError without details", async () => {
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async () => {
+          throw Object.assign(new Error("canary"), { name: "AbortError" });
+        },
+      },
+    });
+    await expect(
+      transport.converse(
+        { messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] },
+        config,
+      ),
+    ).rejects.toBeInstanceOf(RuntimeCancelledError);
+  });
+
+  it("keeps TransportError retryability consistent with its kind", () => {
+    expect(new TransportError("x", "THROTTLING")).toMatchObject({
+      kind: "THROTTLING",
+      retryable: true,
+    });
+    expect(new TransportError("x", "FATAL")).toMatchObject({ kind: "FATAL", retryable: false });
   });
 
   it("rejects unsupported content before sending", async () => {
