@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `09`
+- Plan revision: `10`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -26,11 +26,12 @@
 | `RA-008-WU-03` | `ACCEPTED` | czysta aplikacja checkpoint patch | WU-02 |
 | `RA-008-WU-04A` | `ACCEPTED` | czyste przygotowanie completion do zapisu | WU-03 |
 | `RA-008-WU-04B` | `ACCEPTED` | atomic completion persistence | WU-04A |
-| `RA-008-WU-05A` | `READY` | czyste przygotowanie request/answer | WU-01, WU-04B |
-| `RA-008-WU-05B` | `BLOCKED` | trwałe waiting i atomic answer resume | WU-05A |
+| `RA-008-WU-05A` | `ACCEPTED` | czyste przygotowanie request/answer | WU-01, WU-04B |
+| `RA-008-WU-05B` | `READY` | trwała materializacja waiting | WU-05A |
+| `RA-008-WU-05C` | `BLOCKED` | atomic answer i resume job | WU-05B |
 | `RA-008-WU-06` | `BLOCKED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07` | `BLOCKED` | bounded compaction bez utraty decyzji | WU-02, WU-03 |
-| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05B, WU-06, WU-07 |
+| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -172,7 +173,7 @@
 
 ## `RA-008-WU-05A` — Decision preparation
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: czyste funkcje normalizują modelowy `DecisionRequest` do rewizji
   zatwierdzonego checkpointu oraz budują systemowo związany `DecisionAnswer`.
 - Allowed paths: `packages/agent-orchestrator/src/decisions/prepare.ts`,
@@ -194,34 +195,58 @@
 - Sol gate: modelowa dowolna rewizja zostaje zastąpiona committed revision;
   exhaustive mismatch/stale/expiry/option matrix oraz trust-safe error messages.
 
-## `RA-008-WU-05B` — Durable waiting and answer resume
+## `RA-008-WU-05B` — Durable waiting materialization
+
+- Status: `READY`
+- Result: committed `WAITING_FOR_USER` completion jest materializowane
+  idempotentnie jako request, case state i zredagowany outbox event.
+- Allowed paths: `packages/database/src/repositories/decision-waiting.ts`,
+  `repositories/index.ts`, `src/errors.ts`, `src/index.ts`,
+  `test/decision-waiting.integration.test.ts`.
+- Context pack: WU-01, WU-04B, WU-05A, checkpoint repository i OutboxRepository.
+- Acceptance:
+  - operacja przyjmuje `sourceRunId` i runtime-valid prepared DecisionRequest,
+    posiada Database i sama otwiera jedną transakcję; lockuje source run
+    completion i case oraz advisory-lockuje decision ID;
+  - source musi być `WAITING_FOR_USER`, run terminalny `SUCCEEDED`, committed
+    checkpoint bieżącej rewizji musi wskazywać source run, case nie ma active run,
+    a prepared request jest semantycznie równy requestowi ze source po
+    autorytatywnej normalizacji case/revision;
+  - commit zapisuje DecisionRequest, przełącza do `WAITING_FOR_USER` wyłącznie z
+    dozwolonego `PLANNING`/`IMPLEMENTING` i enqueue'uje `decision.requested` z
+    payload `{decisionId, caseId, checkpointRevision, sourceRunId}`;
+  - exact replay jest write-free i wymaga kompletnego request/case/outbox/dispatch
+    state; kolizja decision ID/source o innej semantyce daje typed conflict;
+    completion bez materializacji pozostaje wykrywalny dla WU-08.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/decision-waiting.integration.test.ts`.
+- Out of scope: odpowiedź, resume job, Discord parsing i recovery skan.
+- Sol gate: real-PG exact/conflicting/concurrent replay; cross-run/case/revision;
+  fault rollback po decision insert, case transition oraz obu outbox writes.
+
+## `RA-008-WU-05C` — Atomic answer and resume
 
 - Status: `BLOCKED`
-- Result: waiting jest materializowane idempotentnie, a odpowiedź i dokładnie
-  jeden resume job commitują się atomowo.
+- Result: ważna odpowiedź i dokładnie jeden per-case resume job commitują się atomowo.
 - Allowed paths: `packages/database/src/repositories/decision-resume.ts`,
   `repositories/index.ts`, `src/errors.ts`, `src/index.ts`,
   `test/decision-resume.integration.test.ts`.
-- Context pack: WU-01, WU-04B, WU-05A, `JobStore`, `OutboxRepository` i case CAS.
+- Context pack: WU-01, WU-05A/B, `JobStore` i case state machine.
 - Acceptance:
-  - `materializeWaiting` lockuje source run completion i case, wymaga
-    `WAITING_FOR_USER`, terminalnego runa, committed checkpointu wskazującego run,
-    braku active run i semantycznej zgodności requestu; zapisuje request, ustawia
-    `WAITING_FOR_USER` i enqueue'uje zredagowany `decision.requested` w jednej
-    transakcji;
-  - identyczna materializacja jest write-free replay, a kolizja decision ID o
-    innej semantyce typed conflict; luka crash między completion a materializacją
-    pozostaje wykrywalna z append-only completion i jest domykana przez WU-08;
-  - `answerAndResume` lockuje decision/case, ponownie sprawdza case/revision/status,
-    zapisuje odpowiedź przez WU-01, przełącza case do `PLANNING` i enqueue'uje
-    per-case `case.resume` job w tej samej transakcji;
-  - exact double-answer replay nie tworzy drugiego answer/job; conflicting,
-    stale, foreign albo expired answer zapisuje zero; waiting nie ma active run
-    ani lease.
+  - operacja runtime-waliduje `{answerId, answer}`, advisory-lockuje decision i
+    lockuje decision/case; nowy zapis wymaga `WAITING_FOR_USER`, exact bieżącej
+    rewizji, braku active run, niewygasłego requestu i zgodnej opcji/case;
+  - jedna transakcja zapisuje answer przez WU-01, przełącza case do `PLANNING` i
+    enqueue'uje PENDING `case.resume` job z redacted IDs, wymuszając per-case
+    serialization istniejącym JobStore;
+  - exact replay sprawdzany przed wymaganiem starego case statusu zwraca istniejący
+    answer/job bez writes; inna odpowiedź daje typed conflict, a stale/foreign/
+    expired zapisuje zero;
+  - concurrent exact double answer tworzy jeden answer i jeden job; fault po
+    answer/case/job write cofa całość.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/decision-resume.integration.test.ts`.
-- Out of scope: Discord interaction parsing i uruchomienie nowego model call.
-- Sol gate: real-PG crash/fault przed każdym commit point, concurrent double answer,
-  exact/conflicting replay, stale revision i jeden PENDING job z case serialization.
+- Out of scope: Discord interaction parsing i wykonanie nowego model call.
+- Sol gate: real-PG replay/conflict/stale/expiry/concurrency, job payload redaction,
+  PENDING status/serialization key i trzyetapowa fault matrix.
 
 ## `RA-008-WU-06` — Checkpoint projections
 
