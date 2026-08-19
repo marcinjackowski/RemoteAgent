@@ -27,6 +27,7 @@ export {
   AppendOnlyViolationError,
   ScopeViolationError,
   ContractViolationError,
+  DecisionAnswerConflictError,
   CredentialRefreshConflictError,
   CredentialRefreshIdentityError,
   ProtectedTableError,

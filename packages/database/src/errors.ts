@@ -74,6 +74,16 @@ export class ScopeViolationError extends PersistenceError {}
  */
 export class ContractViolationError extends PersistenceError {}
 
+/** A decision already has an answer with different immutable semantics. */
+export class DecisionAnswerConflictError extends PersistenceError {
+  public readonly decisionId: string;
+
+  public constructor(decisionId: string) {
+    super(`decision answer conflict for ${decisionId}`);
+    this.decisionId = decisionId;
+  }
+}
+
 /** A concurrent credential refresh already advanced the expected revision. */
 export class CredentialRefreshConflictError extends PersistenceError {
   public readonly connectionId: string;
