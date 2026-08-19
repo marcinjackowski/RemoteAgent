@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "event_id": "evt-future-1",
+  "provider": "jira",
+  "connection_id": "conn-jira-private",
+  "external_event_id": "jira-2027-0001",
+  "event_type": "jira:issue_updated",
+  "occurred_at": "2027-01-01T00:00:00.000Z",
+  "received_at": "2027-01-01T00:00:00.250Z",
+  "actor": {
+    "external_actor_id": "acct-42",
+    "display_name": { "trust": "UNTRUSTED_DATA", "value": "Jane Q" }
+  },
+  "entity_ref": {
+    "provider": "jira",
+    "connection_id": "conn-jira-private",
+    "kind": "jira_issue",
+    "external_id": "PROJ-123"
+  },
+  "correlation_keys": ["PROJ-123"],
+  "dedupe_key": "jira-2027-0001",
+  "payload_ref": {
+    "ref": "s3://raw-events/jira/2027-0001",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "trace_id": "trace-future-1",
+  "sensitivity": "internal"
+}

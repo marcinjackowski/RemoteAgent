@@ -12,7 +12,10 @@ services:
       POSTGRES_PASSWORD: remoteagent-local-dev
       POSTGRES_DB: remoteagent
     ports:
-      - "5432:5432"
+      # Host port 5433 avoids colliding with a locally-installed PostgreSQL that
+      # may already bind 5432. Inside the container PostgreSQL still listens on
+      # 5432. Set RA_PGPORT=5433 (or RA_DATABASE_URL) to point tools/tests here.
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

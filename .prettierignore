@@ -2,7 +2,14 @@
 **/dist/**
 **/.turbo/**
 **/coverage/**
+# The pnpm content-addressable store may live inside the project (CI sets
+# PNPM_STORE_DIR to $CI_PROJECT_DIR/.pnpm-store for caching); it is machine data.
+**/.pnpm-store/**
 pnpm-lock.yaml
+
+# Local, gitignored agent settings must never be reformatted by the repo tooling
+# (AUDIT-02 LOW): keep them out of Prettier's scope entirely.
+.claude/settings.local.json
 
 # Hand-authored Markdown and the pre-existing worker schema are prose and
 # contracts maintained by hand, not machine-formatted code.

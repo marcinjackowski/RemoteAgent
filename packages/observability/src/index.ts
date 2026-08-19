@@ -1,7 +1,4 @@
-/**
- * @remoteagent/observability — package skeleton.
- *
- * Foundation task RA-001 provides the manifest and workspace wiring only.
- * Domain logic is intentionally out of scope and arrives in later tasks.
- */
+/** Secret-safe logging and serialization utilities (RA-005). */
 export const packageName = "observability" as const;
+
+export * from "./redaction.js";

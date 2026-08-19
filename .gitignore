@@ -6,6 +6,8 @@ node_modules/
 dist/
 .turbo/
 coverage/
+# pnpm content-addressable store when kept inside the project (CI cache).
+.pnpm-store/
 
 # Tool caches and logs
 *.tsbuildinfo

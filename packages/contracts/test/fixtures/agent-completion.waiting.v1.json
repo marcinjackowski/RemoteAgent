@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "run_id": "run-compat-1",
+  "case_id": "case-compat-1",
+  "summary": "Analysed the issue and drafted a plan.",
+  "completed_steps": [{ "description": "Read linked Jira issue" }],
+  "evidence": [{ "kind": "jira", "reference": "PROJ-123" }],
+  "checkpoint_patch": {
+    "current_phase": "planning",
+    "next_actions": ["await owner decision"]
+  },
+  "next_actions": ["await owner decision"],
+  "status": "WAITING_FOR_USER",
+  "decision_request": {
+    "schema_version": 1,
+    "decision_id": "dec-compat-1",
+    "case_id": "case-compat-1",
+    "question": "Which storage backend should we target first?",
+    "why_now": "Blocks the persistence design.",
+    "options": [
+      { "id": "pg", "label": "PostgreSQL", "consequences": "Matches Master Plan." },
+      { "id": "sqlite", "label": "SQLite", "consequences": "Simpler, less prod-ready." }
+    ],
+    "recommendation": "pg",
+    "blocked_scope": "persistence implementation",
+    "checkpoint_revision": 2
+  }
+}

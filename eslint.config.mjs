@@ -19,6 +19,7 @@ export default tseslint.config(
       "**/dist/**",
       "**/.turbo/**",
       "**/coverage/**",
+      "**/.pnpm-store/**",
       // Deliberately-broken guardrail fixtures are exercised only by their spec.
       "test/guardrails/fixtures/**",
     ],

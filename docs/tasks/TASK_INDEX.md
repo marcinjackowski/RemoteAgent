@@ -19,21 +19,21 @@ zgodnie z `AGENTS.md`. Nie zmieniaj kolejności bez ADR albo decyzji właścicie
 | Order | Task | Status | Depends on | Milestone |
 |---:|---|---|---|---|
 | 1 | [RA-001](RA-001.md) Repo foundation | DONE | — | M0 |
-| 2 | [RA-002](RA-002.md) Domain contracts and state machines | READY | RA-001 | M0 |
-| 3 | [RA-003](RA-003.md) PostgreSQL persistence | BLOCKED_BY_DEPENDENCIES | RA-001, RA-002 | M0 |
-| 4 | [RA-004](RA-004.md) Durable jobs, outbox and leases | BLOCKED_BY_DEPENDENCIES | RA-003 | M0 |
-| 5 | [RA-005](RA-005.md) Connections, secrets and scope isolation | BLOCKED_BY_DEPENDENCIES | RA-003 | M0 |
-| 6 | [RA-006](RA-006.md) Discord case interface | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005 | M1 |
-| 7 | [RA-007](RA-007.md) Bedrock Converse runtime | BLOCKED_BY_DEPENDENCIES | RA-001, RA-002, RA-005 | M1 |
+| 2 | [RA-002](RA-002.md) Domain contracts and state machines | DONE | RA-001 | M0 |
+| 3 | [RA-003](RA-003.md) PostgreSQL persistence | DONE | RA-001, RA-002 | M0 |
+| 4 | [RA-004](RA-004.md) Durable jobs, outbox and leases | DONE | RA-003 | M0 |
+| 5 | [RA-005](RA-005.md) Connections, secrets and scope isolation | DONE | RA-003 | M0 |
+| 6 | [RA-006](RA-006.md) Discord case interface | DONE | RA-002, RA-003, RA-004, RA-005 | M1 |
+| 7 | [RA-007](RA-007.md) Bedrock Converse runtime | READY | RA-001, RA-002, RA-005 | M1 |
 | 8 | [RA-008](RA-008.md) Checkpoints, context and decisions | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-007 | M1 |
 | 9 | [RA-009](RA-009.md) Multi-agent orchestrator | BLOCKED_BY_DEPENDENCIES | RA-004, RA-006, RA-007, RA-008 | M1 |
-| 10 | [RA-010](RA-010.md) Isolated workspace runner | BLOCKED_BY_DEPENDENCIES | RA-001, RA-003, RA-004, RA-005 | M2 |
+| 10 | [RA-010](RA-010.md) Isolated workspace runner | READY | RA-001, RA-003, RA-004, RA-005 | M2 |
 | 11 | [RA-011](RA-011.md) Repository discovery and planning | BLOCKED_BY_DEPENDENCIES | RA-008, RA-010 | M2 |
 | 12 | [RA-012](RA-012.md) Implementation toolset | BLOCKED_BY_DEPENDENCIES | RA-007, RA-009, RA-010, RA-011 | M2 |
 | 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012 | M2 |
 | 14 | [RA-014](RA-014.md) Local Git lifecycle | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012, RA-013 | M2 |
 | 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-012, RA-013, RA-014 | M2 |
-| 16 | [RA-016](RA-016.md) Jira connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
+| 16 | [RA-016](RA-016.md) Jira connector | READY | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
 | 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-014 | M3 |
 | 18 | [RA-018](RA-018.md) Golden path and concurrency proof | BLOCKED_BY_DEPENDENCIES | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
 | 19 | [RA-019](RA-019.md) Gmail two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |

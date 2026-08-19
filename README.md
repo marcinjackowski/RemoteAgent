@@ -64,6 +64,33 @@ pnpm run check           # wszystkie powyższe po kolei
 
 Lokalna infrastruktura (opcjonalnie): `docker compose up -d postgres`.
 
+### Lokalny PostgreSQL i persistence (RA-003)
+
+PostgreSQL jest autorytatywnym źródłem stanu (Master Plan §3.2). Compose publikuje
+go na **porcie 5433** (host `5433` → kontener `5432`), aby nie kolidować z lokalnie
+zainstalowanym Postgresem na 5432. Domyślna konfiguracja pakietu
+`@remoteagent/database` (`config.ts`) jest zestrojona z tym portem, więc
+`db:up`→`migrate` działa bez ręcznego ustawiania `RA_PGPORT`:
+
+```bash
+pnpm --filter @remoteagent/database db:up      # start + czekaj aż healthy
+pnpm --filter @remoteagent/database db:smoke    # up -> health -> migrate up
+pnpm --filter @remoteagent/database migrate up  # migracje na działającym serwerze
+pnpm --filter @remoteagent/database db:down     # stop
+```
+
+Testy integracyjne wymagają prawdziwego PostgreSQL (kryterium akceptacji 6). W
+bramce/CI ustaw `RA_REQUIRE_POSTGRES=1` — brak działającej bazy jest wtedy twardym
+błędem, a nie cichym `skip` z exit 0. Preflight:
+
+```bash
+pnpm --filter @remoteagent/database gate       # fail-closed sprawdzenie połączenia
+RA_REQUIRE_POSTGRES=1 pnpm run test            # integ. testy failują bez bazy
+```
+
+Połączenie pochodzi wyłącznie z env (`RA_DATABASE_URL` albo `RA_PG*`/`PG*`);
+wartości w `docker-compose.yml` to jawne, nie-sekretne domyślne dane lokalne.
+
 Struktura workspace jest zdefiniowana w `pnpm-workspace.yaml`:
 
 - `apps/*` — osobno wdrażalne usługi (na tym etapie szkielety bez logiki);

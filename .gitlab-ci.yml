@@ -45,7 +45,28 @@ typecheck:
 test:
   stage: verify
   <<: *pnpm-setup
+  # A real PostgreSQL service backs the RA-003 integration gate. The image and
+  # credentials mirror docker-compose.yml (non-secret local values). Inside CI
+  # the service is reachable at host `postgres` on 5432 (no port remap needed).
+  services:
+    - name: postgres:17.2-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: remoteagent
+    POSTGRES_PASSWORD: remoteagent-local-dev
+    POSTGRES_DB: remoteagent
+    # Point the persistence layer at the CI service.
+    RA_PGHOST: postgres
+    RA_PGPORT: "5432"
+    RA_PGUSER: remoteagent
+    RA_PGPASSWORD: remoteagent-local-dev
+    RA_PGDATABASE: remoteagent
+    # Fail closed: a missing/unreachable PostgreSQL must fail this gate, never
+    # skip green (AUDIT-01 MEDIUM-03).
+    RA_REQUIRE_POSTGRES: "1"
   script:
+    # Preflight: fail fast if the database is unreachable.
+    - pnpm --filter @remoteagent/database exec tsx scripts/require-postgres.ts
     - pnpm run test
 
 build:
