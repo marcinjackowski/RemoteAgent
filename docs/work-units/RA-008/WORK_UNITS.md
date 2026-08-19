@@ -21,8 +21,8 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-008-WU-01` | `READY` | trwałe repozytorium decyzji i odpowiedzi | — |
-| `RA-008-WU-02` | `BLOCKED` | deterministyczny context builder i provenance | WU-01 |
+| `RA-008-WU-01` | `ACCEPTED` | trwałe repozytorium decyzji i odpowiedzi | — |
+| `RA-008-WU-02` | `READY` | deterministyczny context builder i provenance | WU-01 |
 | `RA-008-WU-03` | `BLOCKED` | czysta aplikacja checkpoint patch | WU-02 |
 | `RA-008-WU-04` | `BLOCKED` | atomic completion apply | WU-03 |
 | `RA-008-WU-05` | `BLOCKED` | waiting/answer binding i stale rejection | WU-01, WU-04 |
@@ -32,7 +32,7 @@
 
 ## `RA-008-WU-01` — Decision repository
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: typed repository zapisuje request i jedną związaną odpowiedź.
 - Allowed paths: `packages/database/src/repositories/decision.ts`,
   `repositories/index.ts`, `test/decision.integration.test.ts`,
@@ -49,6 +49,7 @@
 
 ## `RA-008-WU-02` — Context builder
 
+- Status: `READY`
 - Result: czysty builder wybiera materiały według budżetu, priorytetu i scope.
 - Allowed paths: `packages/agent-orchestrator/src/context/types.ts`,
   `context/builder.ts`, `context/budget.ts`, `test/context-builder.test.ts`,
