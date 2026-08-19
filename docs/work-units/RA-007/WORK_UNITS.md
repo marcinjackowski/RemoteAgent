@@ -109,11 +109,13 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 - Result: walidacja `AgentCompletion` i pojedynczy repair call bez tools.
 - Allowed paths: `src/structured-completion.ts`, `src/tool-loop.ts`,
-  `test/structured-completion.test.ts`, `src/index.ts`.
+  `test/structured-completion.test.ts`, `src/index.ts`,
+  `packages/bedrock-runtime/package.json`, `pnpm-lock.yaml`.
 - Context pack: WU-05, `agent-completion.ts`, JSON Schema eksport kontraktów.
 - Acceptance: poprawny output nie jest naprawiany; wadliwy uruchamia jeden repair;
   repair request nie zawiera tools i nie odtwarza side effectów.
-- Verification: `pnpm vitest run packages/bedrock-runtime/test/structured-completion.test.ts`.
+- Verification: frozen-lockfile install, następnie
+  `pnpm vitest run packages/bedrock-runtime/test/structured-completion.test.ts`.
 - Out of scope: retry transportu i streaming.
 - Sol gate: test z licznikiem tool execution pozostaje równy jeden.
 
