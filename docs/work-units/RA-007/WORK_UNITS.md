@@ -26,7 +26,7 @@
 | `RA-007-WU-02` | `ACCEPTED` | fake transport i non-streaming Converse | WU-01 |
 | `RA-007-WU-03` | `ACCEPTED` | produkcyjny adapter AWS SDK bez wycieku credentials | WU-02 |
 | `RA-007-WU-04` | `ACCEPTED` | streaming i jednoznaczne cancellation | WU-02 |
-| `RA-007-WU-05` | `READY` | ograniczony client-side tool loop | WU-02 |
+| `RA-007-WU-05` | `READY` | ograniczony client-side tool loop | WU-02, WU-03 |
 | `RA-007-WU-06` | `BLOCKED` | schema validation i tools-disabled repair | WU-05 |
 | `RA-007-WU-07` | `BLOCKED` | bezpieczna klasyfikacja retry i limitów | WU-03, WU-05 |
 | `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06, WU-07 |
@@ -95,12 +95,13 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 - Status: `READY`
 - Result: pętla `toolUse`/`toolResult` z limitem iteracji i wywołań.
-- Allowed paths: `src/tool-loop.ts`, `src/types.ts`, `test/tool-loop.test.ts`,
-  `src/index.ts`.
-- Context pack: WU-01/02, `contracts/tool.ts`, Bedrock tool message shapes.
+- Allowed paths: `src/tool-loop.ts`, `src/types.ts`, `src/aws-transport.ts`,
+  `test/tool-loop.test.ts`, `test/aws-transport.test.ts`, `src/index.ts`.
+- Context pack: WU-01/02/03, `contracts/tool.ts`, Bedrock tool message shapes.
 - Acceptance: tools wykonują się najwyżej raz na krok; wynik wraca do historii;
-  limit kończy się typed error.
-- Verification: `pnpm vitest run packages/bedrock-runtime/test/tool-loop.test.ts`.
+  definicje i `toolUse`/`toolResult` są mapowane do Bedrock; limit jest sprawdzany
+  przed side effectem i kończy się typed error.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/tool-loop.test.ts packages/bedrock-runtime/test/aws-transport.test.ts`.
 - Out of scope: business tool implementation, retry i repair.
 - Sol gate: test licznika side effectów, nie tylko liczby requestów modelu.
 
