@@ -95,6 +95,13 @@ export async function converseStream(
     };
   } finally {
     if (abort !== undefined && signal !== undefined) signal.removeEventListener("abort", abort);
-    if (!settled) await iterator.return?.();
+    if (!settled) {
+      try {
+        const cleanup = iterator.return?.();
+        if (cleanup !== undefined) void Promise.resolve(cleanup).catch(() => undefined);
+      } catch {
+        // Iterator cleanup is best-effort and must not replace the primary result.
+      }
+    }
   }
 }

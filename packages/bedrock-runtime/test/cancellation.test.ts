@@ -25,7 +25,7 @@ function deferred<T>() {
 function transportWithNext(
   next: Promise<IteratorResult<{ type: "text" | "complete"; text?: string }>>,
   nextCalled: { resolve: () => void },
-  returned: { count: number; resolve: () => void },
+  returned: { count: number; resolve: () => void; promise?: Promise<void> },
 ): RuntimeStreamTransport {
   return {
     converseStream: async () => ({
@@ -39,6 +39,7 @@ function transportWithNext(
             return: async () => {
               returned.count += 1;
               returned.resolve();
+              if (returned.promise !== undefined) await returned.promise;
               return { done: true, value: undefined };
             },
           };
@@ -72,10 +73,82 @@ describe("converseStream cancellation", () => {
     await nextCalled.promise;
     controller.abort();
     await expect(result).rejects.toBeInstanceOf(RuntimeCancelledError);
-    await returned.promise;
     expect(returned.count).toBe(1);
     expect(remove).toHaveBeenCalledTimes(2);
     gate.resolve({ done: true, value: undefined });
+  });
+
+  it("does not wait for pending iterator cleanup", async () => {
+    const controller = new AbortController();
+    const gate = deferred<IteratorResult<{ type: "text" | "complete"; text?: string }>>();
+    const nextCalled = deferred<void>();
+    const cleanup = deferred<void>();
+    const returned = { ...deferred<void>(), count: 0, promise: cleanup.promise };
+    const result = converseStream(transportWithNext(gate.promise, nextCalled, returned), config, {
+      ...request,
+      signal: controller.signal,
+    });
+    await nextCalled.promise;
+    controller.abort();
+
+    await expect(result).rejects.toBeInstanceOf(RuntimeCancelledError);
+    expect(returned.count).toBe(1);
+    cleanup.resolve();
+    gate.resolve({ done: true, value: undefined });
+  });
+
+  it("keeps the cancellation error when iterator cleanup rejects", async () => {
+    const controller = new AbortController();
+    const gate = deferred<IteratorResult<{ type: "text" | "complete"; text?: string }>>();
+    const nextCalled = deferred<void>();
+    const cleanup = deferred<void>();
+    const returned = { ...deferred<void>(), count: 0, promise: cleanup.promise };
+    const unhandled = vi.fn();
+    const onUnhandled = (reason: unknown) => unhandled(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const result = converseStream(transportWithNext(gate.promise, nextCalled, returned), config, {
+        ...request,
+        signal: controller.signal,
+      });
+      await nextCalled.promise;
+      controller.abort();
+
+      await expect(result).rejects.toBeInstanceOf(RuntimeCancelledError);
+      cleanup.reject(new Error("cleanup failed"));
+      await Promise.resolve();
+      expect(returned.count).toBe(1);
+      expect(unhandled).not.toHaveBeenCalled();
+      gate.resolve({ done: true, value: undefined });
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("keeps the transport error when iterator cleanup throws synchronously", async () => {
+    let calls = 0;
+    const transport: RuntimeStreamTransport = {
+      converseStream: async () => ({
+        stream: {
+          [Symbol.asyncIterator]() {
+            return {
+              next: async () => {
+                calls += 1;
+                return calls === 1
+                  ? { done: false as const, value: { type: "text" as const, text: "x" } }
+                  : { done: true as const, value: undefined };
+              },
+              return: () => {
+                throw new Error("cleanup failed");
+              },
+            };
+          },
+        },
+      }),
+    };
+    await expect(converseStream(transport, config, request)).rejects.toMatchObject({
+      message: "Bedrock stream ended before completion",
+    });
   });
 
   it("gives completion precedence when completion and cancellation are triggered together", async () => {
