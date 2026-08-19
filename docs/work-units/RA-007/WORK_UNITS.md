@@ -29,8 +29,8 @@
 | `RA-007-WU-05` | `ACCEPTED` | ograniczony client-side tool loop | WU-02, WU-03 |
 | `RA-007-WU-06A` | `ACCEPTED` | model-neutralny JSON Schema output i mapowanie AWS | WU-05 |
 | `RA-007-WU-06B` | `ACCEPTED` | walidacja completion i tools-disabled repair | WU-06A |
-| `RA-007-WU-07A` | `READY` | retry policy i klasyfikacja błędów AWS | WU-03, WU-05 |
-| `RA-007-WU-07B` | `BLOCKED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
+| `RA-007-WU-07A` | `ACCEPTED` | retry policy i klasyfikacja błędów AWS | WU-03, WU-05 |
+| `RA-007-WU-07B` | `READY` | bezpieczne retry, timeout i limity wykonania | WU-07A |
 | `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06B, WU-07B |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
@@ -140,7 +140,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-07A` — Retry policy and AWS error classification
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: ograniczona retry policy oraz jawna klasyfikacja
   `throttling`/`transient`/`fatal` na granicy AWS.
 - Allowed paths: `src/types.ts`, `src/config.ts`, `src/errors.ts`, `src/retry.ts`,
@@ -157,7 +157,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-07B` — Safe retry, timeout and execution limits
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: retry obejmuje wyłącznie transport, timeout ma jednoznaczny typed wynik,
   a executory tools nigdy nie są powtarzane.
 - Allowed paths: `src/retry.ts`, `src/converse.ts`, `src/tool-loop.ts`,
