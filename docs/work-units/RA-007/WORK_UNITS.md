@@ -33,7 +33,7 @@
 | `RA-007-WU-07B` | `ACCEPTED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
 | `RA-007-WU-08` | `ACCEPTED` | zintegrowany runtime z pełną metryką completion | WU-04, WU-06B, WU-07B |
 | `RA-007-WU-09A` | `READY` | cancellation nie czeka na wadliwy cleanup iteratora | WU-08 |
-| `RA-007-WU-09B` | `READY` | metadane każdego model completion są zachowane | WU-08 |
+| `RA-007-WU-09B` | `BLOCKED` | metadane każdego model completion są zachowane | WU-09A |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -207,7 +207,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-09B` — Per-completion metadata trace
 
-- Status: `READY`
+- Status: `BLOCKED`
 - Finding: `AUDIT-01 MEDIUM-02`.
 - Result: provider-neutralny trace pozwala zapisać identity i usage każdego
   zakończonego model call bez zachowywania promptu ani contentu.
@@ -215,6 +215,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
   `src/structured-completion.ts`, `src/runtime.ts`, `test/tool-loop.test.ts`,
   `test/structured-completion.test.ts`, `test/runtime.contract.test.ts`,
   `test/runtime.integration.test.ts`.
+- Depends on: `WU-09A`.
 - Context pack: `AUDIT-01 MEDIUM-02`, WU-05/06B/08 contracts i
   `MASTER_PLAN.md` §3.3.
 - Acceptance: wspólny typ elementu trace zawiera model, opcjonalne usage/request
