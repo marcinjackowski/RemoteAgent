@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   StructuredCompletionError,
+  TransportError,
   createRuntimeConfig,
   runStructuredCompletion,
   type RuntimeConfig,
@@ -56,6 +57,58 @@ const textResponse = (text: string, requestId = "request"): RuntimeResponse => (
 });
 
 describe("runStructuredCompletion", () => {
+  it("retries repair without repeating a tool executor", async () => {
+    const repairConfig = createRuntimeConfig({
+      model: config.model,
+      timeoutMs: 1000,
+      toolLimits: config.toolLimits,
+      retryPolicy: { maxAttempts: 2, baseDelayMs: 5 },
+    });
+    const invalid = response({ invalid: true }, "bad");
+    let calls = 0;
+    let repairAttempts = 0;
+    const requests: RuntimeRequest[] = [];
+    const transport: RuntimeTransport = {
+      converse: async (request) => {
+        requests.push(request);
+        calls += 1;
+        if (calls === 1)
+          return {
+            model: config.model,
+            content: [{ type: "tool-use" as const, id: "u1", name: "lookup", input: {} }],
+          };
+        if (calls === 2) return invalid;
+        repairAttempts += 1;
+        if (repairAttempts === 1) throw new TransportError("transient", "TRANSIENT");
+        return response(completion, "repair");
+      },
+    };
+    let executions = 0;
+    const delays: number[] = [];
+    const result = await runStructuredCompletion(transport, repairConfig, {
+      messages: [{ role: "user", content: [{ type: "text", text: "go" }] }],
+      tools: [{ name: "lookup", inputSchema: { type: "object" } }],
+      execute: async () => {
+        executions += 1;
+        return { found: true };
+      },
+      execution: {
+        sleep: async (delay) => {
+          delays.push(delay);
+        },
+      },
+    });
+    expect(executions).toBe(1);
+    expect(calls).toBe(4);
+    expect(delays).toEqual([5]);
+    expect(result).toMatchObject({ repaired: true, requestId: "repair" });
+    expect(result.transportCalls).toBe(4);
+    expect(requests[2]?.tools).toBeUndefined();
+    expect(requests[3]?.tools).toBeUndefined();
+    expect(requests[2]?.outputSchema).toEqual(requests[3]?.outputSchema);
+    expect(requests[2]?.messages).toEqual(requests[3]?.messages);
+  });
+
   it("returns a valid completion without repair", async () => {
     const transport = new ScriptTransport([response(completion)]);
     const result = await runStructuredCompletion(transport, config, { messages: [] });

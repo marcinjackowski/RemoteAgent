@@ -6,6 +6,7 @@ import {
   TransportError,
   createRuntimeConfig,
   runToolLoop,
+  type RuntimeRequest,
 } from "../src/index.js";
 
 const tool = { name: "lookup", inputSchema: { type: "object" } };
@@ -19,6 +20,48 @@ const user = { role: "user" as const, content: [{ type: "text" as const, text: "
 const use = (id: string, name = "lookup") => ({ type: "tool-use" as const, id, name, input: {} });
 
 describe("runToolLoop", () => {
+  it("retries the next model turn without repeating the executor", async () => {
+    const retryConfig = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 2, maxCalls: 2 },
+      retryPolicy: { maxAttempts: 2, baseDelayMs: 7 },
+    });
+    let transportCalls = 0;
+    const requests: RuntimeRequest[] = [];
+    const transport = {
+      converse: async (request: RuntimeRequest) => {
+        requests.push(request);
+        transportCalls += 1;
+        if (transportCalls === 1) return { model: retryConfig.model, content: [use("u1")] };
+        if (transportCalls === 2) throw new TransportError("transient", "TRANSIENT");
+        return { model: retryConfig.model, content: [{ type: "text" as const, text: "done" }] };
+      },
+    };
+    let executions = 0;
+    const delays: number[] = [];
+    const result = await runToolLoop(transport, retryConfig, {
+      messages: [user],
+      tools: [tool],
+      execute: async () => {
+        executions += 1;
+        return { value: 1 };
+      },
+      execution: {
+        sleep: async (delay) => {
+          delays.push(delay);
+        },
+      },
+    });
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(executions).toBe(1);
+    expect(transportCalls).toBe(3);
+    expect(result.transportAttempts).toBe(3);
+    expect(delays).toEqual([7]);
+    expect(requests[1]?.messages).toEqual(requests[2]?.messages);
+    expect(requests[1]?.tools).toEqual([tool]);
+  });
+
   it("executes once, appends history, and returns metadata", async () => {
     const transport = new FakeTransport([
       { model: config(2, 3).model, content: [use("u1")] },

@@ -1,4 +1,120 @@
-import type { TransportFailureKind } from "./errors.js";
+import {
+  RuntimeCancelledError,
+  RuntimeTimeoutError,
+  TransportError,
+  type TransportFailureKind,
+} from "./errors.js";
+import type { RuntimeConfig, RuntimeRequest, RuntimeResponse, RuntimeTransport } from "./types.js";
+
+export interface TransportExecutionDependencies {
+  readonly setTimeout?: (callback: () => void, delayMs: number) => unknown;
+  readonly clearTimeout?: (handle: unknown) => void;
+  readonly sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+}
+
+export interface DetailedTransportResponse {
+  readonly response: RuntimeResponse;
+  readonly attempts: number;
+}
+
+export async function executeTransportDetailed(
+  transport: RuntimeTransport,
+  config: RuntimeConfig,
+  request: RuntimeRequest,
+  dependencies: TransportExecutionDependencies = {},
+): Promise<DetailedTransportResponse> {
+  const controller = new AbortController();
+  const transportRequest: RuntimeRequest = { ...request, signal: controller.signal };
+  const setTimeoutFn =
+    dependencies.setTimeout ??
+    ((callback: () => void, delayMs: number) => globalThis.setTimeout(callback, delayMs));
+  const clearTimeoutFn =
+    dependencies.clearTimeout ??
+    ((handle: unknown) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const sleep =
+    dependencies.sleep ??
+    ((delayMs: number, signal: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
+        if (signal.aborted) {
+          reject(new RuntimeCancelledError());
+          return;
+        }
+        let handle: unknown;
+        const onAbort = () => {
+          if (handle !== undefined) clearTimeoutFn(handle);
+          reject(new RuntimeCancelledError());
+        };
+        handle = setTimeoutFn(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, delayMs);
+        signal.addEventListener("abort", onAbort, { once: true });
+      }));
+  let finished = false;
+  let attempts = 0;
+  let timer: unknown;
+  let onAbort: (() => void) | undefined;
+
+  const result = new Promise<DetailedTransportResponse>((resolve, reject) => {
+    const settle = (callback: () => void) => {
+      if (finished) return;
+      finished = true;
+      if (timer !== undefined) clearTimeoutFn(timer);
+      if (onAbort !== undefined) request.signal?.removeEventListener("abort", onAbort);
+      controller.abort();
+      callback();
+    };
+    onAbort = () => settle(() => reject(new RuntimeCancelledError()));
+    if (request.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    request.signal?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeoutFn(() => settle(() => reject(new RuntimeTimeoutError())), config.timeoutMs);
+
+    const run = async () => {
+      for (let attempt = 1; attempt <= config.retryPolicy.maxAttempts; attempt += 1) {
+        if (finished) return;
+        try {
+          attempts += 1;
+          const response = await transport.converse(transportRequest, config);
+          settle(() => resolve({ response, attempts }));
+          return;
+        } catch (error) {
+          if (finished) return;
+          if (!(error instanceof TransportError) || !error.retryable) {
+            settle(() => reject(error));
+            return;
+          }
+          if (attempt >= config.retryPolicy.maxAttempts) {
+            settle(() => reject(error));
+            return;
+          }
+          try {
+            await sleep(config.retryPolicy.baseDelayMs * 2 ** (attempt - 1), controller.signal);
+          } catch (sleepError) {
+            if (!finished) settle(() => reject(sleepError));
+            return;
+          }
+        }
+      }
+    };
+    void run().catch((error: unknown) => {
+      if (!finished) settle(() => reject(error));
+    });
+  });
+  return result;
+}
+
+export async function executeTransport(
+  transport: RuntimeTransport,
+  config: RuntimeConfig,
+  request: RuntimeRequest,
+  dependencies: TransportExecutionDependencies = {},
+): Promise<RuntimeResponse> {
+  const result = await executeTransportDetailed(transport, config, request, dependencies);
+  return result.response;
+}
 
 export type TransportFailureClassification = TransportFailureKind | "CANCELLED";
 

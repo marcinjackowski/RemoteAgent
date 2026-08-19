@@ -7,6 +7,7 @@ import type {
   RuntimeTransport,
   RuntimeUsage,
 } from "./types.js";
+import { executeTransport, type TransportExecutionDependencies } from "./retry.js";
 
 export interface ConverseTextRequest {
   readonly messages: readonly RuntimeMessage[];
@@ -35,12 +36,18 @@ export async function converseText(
   transport: RuntimeTransport,
   config: RuntimeConfig,
   request: ConverseTextRequest,
+  dependencies?: TransportExecutionDependencies,
 ): Promise<ConverseTextResult> {
   const transportRequest =
     request.signal === undefined
       ? { messages: request.messages }
       : { messages: request.messages, signal: request.signal };
-  const response: RuntimeResponse = await transport.converse(transportRequest, config);
+  const response: RuntimeResponse = await executeTransport(
+    transport,
+    config,
+    transportRequest,
+    dependencies,
+  );
 
   return {
     text: textFromContent(response.content),

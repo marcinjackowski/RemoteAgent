@@ -1,5 +1,6 @@
 import { agentCompletion, toJsonSchema } from "@remoteagent/contracts";
 import { ConfigurationError, TransportError } from "./errors.js";
+import { executeTransportDetailed, type TransportExecutionDependencies } from "./retry.js";
 import { runToolLoop, type ToolExecutor } from "./tool-loop.js";
 import type {
   RuntimeConfig,
@@ -24,6 +25,7 @@ export interface StructuredCompletionRequest {
   readonly tools?: readonly RuntimeToolDefinition[];
   readonly execute?: ToolExecutor;
   readonly signal?: AbortSignal;
+  readonly execution?: TransportExecutionDependencies;
 }
 
 export interface StructuredCompletionResult {
@@ -97,6 +99,7 @@ export async function runStructuredCompletion(
     execute: request.execute ?? (async () => null),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
     outputSchema,
+    ...(request.execution === undefined ? {} : { execution: request.execution }),
   });
   try {
     return {
@@ -105,19 +108,22 @@ export async function runStructuredCompletion(
       ...(loop.usage === undefined ? {} : { usage: loop.usage }),
       ...(loop.requestId === undefined ? {} : { requestId: loop.requestId }),
       repaired: false,
-      transportCalls: loop.iterations + 1,
+      transportCalls: loop.transportAttempts,
       toolIterations: loop.iterations,
       toolCalls: loop.calls,
     };
   } catch {
-    const repair = await transport.converse(
+    const repairExecution = await executeTransportDetailed(
+      transport,
+      config,
       {
         messages: [...loop.history, repairInstruction],
         outputSchema,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       },
-      config,
+      request.execution,
     );
+    const repair = repairExecution.response;
     try {
       return {
         completion: validate(repair),
@@ -125,7 +131,7 @@ export async function runStructuredCompletion(
         ...(repair.usage === undefined ? {} : { usage: repair.usage }),
         ...(repair.requestId === undefined ? {} : { requestId: repair.requestId }),
         repaired: true,
-        transportCalls: loop.iterations + 2,
+        transportCalls: loop.transportAttempts + repairExecution.attempts,
         toolIterations: loop.iterations,
         toolCalls: loop.calls,
       };
