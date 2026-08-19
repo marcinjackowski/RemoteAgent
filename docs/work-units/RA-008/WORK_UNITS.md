@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `11`
+- Plan revision: `12`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -28,8 +28,8 @@
 | `RA-008-WU-04B` | `ACCEPTED` | atomic completion persistence | WU-04A |
 | `RA-008-WU-05A` | `ACCEPTED` | czyste przygotowanie request/answer | WU-01, WU-04B |
 | `RA-008-WU-05B` | `ACCEPTED` | trwała materializacja waiting | WU-05A |
-| `RA-008-WU-05C` | `READY` | atomic answer i resume job | WU-05B |
-| `RA-008-WU-06` | `BLOCKED` | Markdown/pinned-status projection | WU-03 |
+| `RA-008-WU-05C` | `ACCEPTED` | atomic answer i resume job | WU-05B |
+| `RA-008-WU-06` | `READY` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07` | `BLOCKED` | bounded compaction bez utraty decyzji | WU-02, WU-03 |
 | `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07 |
 
@@ -225,7 +225,7 @@
 
 ## `RA-008-WU-05C` — Atomic answer and resume
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: ważna odpowiedź i dokładnie jeden per-case resume job commitują się atomowo.
 - Allowed paths: `packages/database/src/repositories/decision-resume.ts`,
   `repositories/index.ts`, `src/errors.ts`, `src/index.ts`,
@@ -250,6 +250,7 @@
 
 ## `RA-008-WU-06` — Checkpoint projections
 
+- Status: `READY`
 - Result: deterministyczny Markdown i pinned status są read-only projections JSON.
 - Allowed paths: `packages/agent-orchestrator/src/checkpoint/render.ts`,
   `test/checkpoint-render.test.ts`, `packages/discord/src/status.ts`,
