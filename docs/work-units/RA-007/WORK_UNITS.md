@@ -28,9 +28,10 @@
 | `RA-007-WU-04` | `ACCEPTED` | streaming i jednoznaczne cancellation | WU-02 |
 | `RA-007-WU-05` | `ACCEPTED` | ograniczony client-side tool loop | WU-02, WU-03 |
 | `RA-007-WU-06A` | `ACCEPTED` | model-neutralny JSON Schema output i mapowanie AWS | WU-05 |
-| `RA-007-WU-06B` | `READY` | walidacja completion i tools-disabled repair | WU-06A |
-| `RA-007-WU-07` | `BLOCKED` | bezpieczna klasyfikacja retry i limitów | WU-03, WU-05 |
-| `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06B, WU-07 |
+| `RA-007-WU-06B` | `ACCEPTED` | walidacja completion i tools-disabled repair | WU-06A |
+| `RA-007-WU-07A` | `READY` | retry policy i klasyfikacja błędów AWS | WU-03, WU-05 |
+| `RA-007-WU-07B` | `BLOCKED` | bezpieczne retry, timeout i limity wykonania | WU-07A |
+| `RA-007-WU-08` | `BLOCKED` | zintegrowany runtime z pełną metrybką completion | WU-04, WU-06B, WU-07B |
 
 ## `RA-007-WU-01` — Runtime contracts and configuration
 
@@ -122,7 +123,7 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 ## `RA-007-WU-06B` — Structured completion validation and repair
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: walidacja `AgentCompletion` i pojedynczy repair call bez tools.
 - Allowed paths: `src/structured-completion.ts`, `src/tool-loop.ts`,
   `test/structured-completion.test.ts`, `src/index.ts`,
@@ -137,18 +138,39 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 - Sol gate: test z licznikiem tool execution pozostaje równy jeden, a repair jest
   dokładnie jednym dodatkowym wywołaniem transportu.
 
-## `RA-007-WU-07` — Retry classification and limits
+## `RA-007-WU-07A` — Retry policy and AWS error classification
 
-- Result: jawna klasyfikacja throttling/transient/fatal i bezpieczne retry boundary.
-- Allowed paths: `src/retry.ts`, `src/errors.ts`, `src/converse.ts`,
-  `src/tool-loop.ts`, `src/aws-transport.ts`, `test/retry.test.ts`,
-  `test/limits.test.ts`, `test/aws-transport.test.ts`.
-- Context pack: WU-03/WU-05, run-safety contract, task retry criteria.
-- Acceptance: retry tylko przed możliwym tool side effectem; fatal nie retryuje;
-  timeout/model/tool limits dają kontrolowany typed error.
-- Verification: `pnpm vitest run packages/bedrock-runtime/test/retry.test.ts packages/bedrock-runtime/test/limits.test.ts packages/bedrock-runtime/test/aws-transport.test.ts`.
-- Out of scope: business-level job retry.
-- Sol gate: adversarial test potencjalnego side effectu nigdy nie jest powtarzany.
+- Status: `READY`
+- Result: ograniczona retry policy oraz jawna klasyfikacja
+  `throttling`/`transient`/`fatal` na granicy AWS.
+- Allowed paths: `src/types.ts`, `src/config.ts`, `src/errors.ts`, `src/retry.ts`,
+  `src/aws-transport.ts`, `test/config.test.ts`, `test/retry.test.ts`,
+  `test/aws-transport.test.ts`.
+- Context pack: WU-01/03/05, AWS exception shapes i task retry criteria.
+- Acceptance: policy ma mały jawny limit prób i opóźnienie; throttling/transient
+  tworzą zredagowany retryable typed error; fatal i cancellation nie są retryable;
+  żaden provider-specific type nie wychodzi przez publiczne API.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/config.test.ts packages/bedrock-runtime/test/retry.test.ts packages/bedrock-runtime/test/aws-transport.test.ts`.
+- Out of scope: wykonywanie retry, timeout i business-level job retry.
+- Sol gate: tabela klasyfikacji obejmuje błędy nazwane i HTTP status, a canary z
+  wyjątku SDK nie trafia do błędu ani logu.
+
+## `RA-007-WU-07B` — Safe retry, timeout and execution limits
+
+- Status: `BLOCKED`
+- Result: retry obejmuje wyłącznie transport, timeout ma jednoznaczny typed wynik,
+  a executory tools nigdy nie są powtarzane.
+- Allowed paths: `src/retry.ts`, `src/converse.ts`, `src/tool-loop.ts`,
+  `src/structured-completion.ts`, `test/retry.test.ts`, `test/limits.test.ts`,
+  `test/tool-loop.test.ts`, `test/structured-completion.test.ts`.
+- Context pack: WU-05/06B/07A, cancellation contract i task retry criteria.
+- Acceptance: retryable transport kończy się najpóźniej na skonfigurowanym limicie;
+  fatal nie retryuje; timeout/cancel wygrywa także z transportem ignorującym signal;
+  retry model call nie obejmuje executora ani nie powtarza jego side effectu.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/retry.test.ts packages/bedrock-runtime/test/limits.test.ts packages/bedrock-runtime/test/tool-loop.test.ts packages/bedrock-runtime/test/structured-completion.test.ts`.
+- Out of scope: business-level job retry i streaming retry po częściowym output.
+- Sol gate: deterministyczne testy używają wstrzykniętego zegara/sleep bez realnych
+  timerów; adversarial tool counter pozostaje równy jeden.
 
 ## `RA-007-WU-08` — Runtime integration and metadata
 
