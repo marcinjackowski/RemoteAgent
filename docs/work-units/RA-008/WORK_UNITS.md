@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `04`
+- Plan revision: `05`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -56,12 +56,14 @@
   `src/index.ts`, `packages/agent-orchestrator/package.json`, `pnpm-lock.yaml`.
 - Context pack: RA-008 scope, checkpoint/event/entity/tool contracts, scope guards.
 - Acceptance:
-  - wejście zawiera autorytatywne `caseId`, `ownerId`, provider/connection allowlist
-    i dozwolone nazwy tools; fragment nie może tego scope poszerzyć;
+  - wejście zawiera autorytatywne `caseId`, `ownerId`, allowlistę powiązanych par
+    `{provider, connectionId}` i dozwolone nazwy tools; fragment nie może tego
+    scope poszerzyć ani połączyć providera z connection innego providera;
   - obsługiwane rodzaje to task, thread excerpt, checkpoint, entity, receipt,
     plan, repo state i tool; priorytet wynika wyłącznie z rodzaju w kolejności
     `task > checkpoint > plan > receipt > repo_state > entity > thread_excerpt > tool`,
-    a remis rozstrzyga stabilny `provenance.reference`;
+    a remis rozstrzyga stabilny `provenance.reference` porównywany po code units,
+    bez zależnego od locale sortowania;
   - task i checkpoint są wymagane dokładnie raz; ich brak, duplikat albo budżet
     zbyt mały na oba kończy się typed error zamiast niepełnego kontekstu;
   - budżet jest dodatnim limitem bajtów UTF-8 treści fragmentów; fragmenty nie są
@@ -70,10 +72,10 @@
   - każdy wybrany i pominięty fragment zachowuje jawne provenance i trust;
     treść z eventów/providers oraz model-derived checkpointu jest
     `UNTRUSTED_DATA` i caller nie może oznaczyć jej jako trusted;
-  - fragmenty entity/thread/receipt muszą odpowiadać case, ownerowi, providerowi
-    i connection allowlist; tool musi być na systemowej allowliście i nie może
-    nieść scope zaproponowanego przez model; każde naruszenie failuje typed scope
-    error zamiast cichego odfiltrowania;
+  - fragmenty entity/thread/receipt muszą odpowiadać case, ownerowi i jednej
+    dozwolonej parze provider/connection; tool musi pochodzić z systemu, być na
+    systemowej allowliście i nie może nieść scope zaproponowanego przez model;
+    każde naruszenie failuje typed scope error zamiast cichego odfiltrowania;
   - wynik i kolejność pominięć są identyczne niezależnie od kolejności wejścia,
     a zduplikowany `provenance.reference` jest odrzucany.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/context-builder.test.ts`.
