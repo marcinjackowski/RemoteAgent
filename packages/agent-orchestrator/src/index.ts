@@ -5,3 +5,6 @@
  * Domain logic is intentionally out of scope and arrives in later tasks.
  */
 export const packageName = "agent-orchestrator" as const;
+export * from "./context/types.js";
+export * from "./context/budget.js";
+export * from "./context/builder.js";

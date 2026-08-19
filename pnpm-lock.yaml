@@ -63,7 +63,11 @@ importers:
 
   infra/cdk: {}
 
-  packages/agent-orchestrator: {}
+  packages/agent-orchestrator:
+    dependencies:
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/bedrock-runtime:
     dependencies:
