@@ -1,5 +1,9 @@
 # RA-001 — trwały stan sesji koordynatora
 
+> Dokument historyczny dla RA-001. Opisany niżej wybór OpenCode/Bedrock został
+> zastąpiony przez ADR-0003: aktualnie Sol planuje i audytuje, a lokalny Qwen
+> wykonuje małe work units przez oMLX + Codex CLI.
+
 Aktualizacja: 2026-08-18 23:48 CEST — stan końcowy
 
 ## Cel i ograniczenie

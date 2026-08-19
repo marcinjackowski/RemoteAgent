@@ -17,25 +17,30 @@ Jira -> Discord thread -> decyzje -> plan -> branch/workspace -> implementacja
 
 Agent rozpoczynający lub wznawiający pracę musi zacząć od `AGENTS.md`.
 
-Claude Code automatycznie otrzymuje zgodny bootstrap przez `CLAUDE.md`, który
-importuje te same nadrzędne instrukcje i definiuje repozytoryjne znaczenie
-`continue`.
+Codex/Qwen otrzymuje nadrzędne instrukcje z `AGENTS.md`. `CLAUDE.md` pozostaje
+wyłącznie bootstrapem legacy i przekierowuje `continue` do Sol.
 
 - Plan systemu: `docs/MASTER_PLAN.md`
 - Kolejka tasków: `docs/tasks/TASK_INDEX.md`
 - Protokół wykonania i audytu: `docs/workflow/EXECUTION_AND_AUDIT.md`
-- Shell worker Bedrock Opus 4.8: `docs/workflow/BEDROCK_WORKER.md`
+- Lokalny implementer Qwen przez oMLX + Codex: `docs/workflow/QWEN_IMPLEMENTER.md`
+- Legacy worker Bedrock Opus 4.8: `docs/workflow/BEDROCK_WORKER.md`
+- Plany małych work units: `docs/work-units/`
 - Handoffs: `docs/handoffs/`
 - Audyty: `docs/audits/`
 - Decyzje architektoniczne: `docs/decisions/`
 
 ## Najprostszy cykl użytkownika
 
-1. Do agenta implementującego napisz `continue`.
-2. Gdy agent zwróci `STOP — RA-... oczekuje na audyt`, poproś model audytujący:
-   `Wykonaj audyt RA-... zgodnie z AGENTS.md`.
-3. Po zapisaniu audytu wróć do implementera i napisz wyłącznie `continue`.
-4. Implementer sam odczyta werdykt, poprawi findingi albo rozpocznie następny task.
+1. Napisz Solowi `continue`.
+2. Sol wybiera makro-task, rozpisuje lub aktualizuje małe work units i uruchamia
+   lokalnego Qwena dla jednego unit naraz.
+3. Sol po każdym unit sprawdza diff i test, a po całym tasku sam wykonuje
+   niezależny audyt.
+4. Po `PASS` Sol zatrzymuje się. Następne `continue` zamyka task i rozpoczyna
+   kolejny zgodnie z zależnościami.
+
+Qwen nie otrzymuje komendy `continue`, całego makro-taska ani roli audytora.
 
 ## Rozwój (foundation)
 

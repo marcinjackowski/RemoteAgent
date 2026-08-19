@@ -119,6 +119,26 @@ właścicielem. Supervisor uruchamia w razie potrzeby role:
 
 Role są one-shot. Ich ciągłość zapewniają kontrakty i checkpointy.
 
+Powyższe role opisują docelowy runtime produktu. Proces budowy tego repozytorium
+ma osobny kontrakt z ADR-0003: Sol pełni rolę koordynatora, planisty i audytora,
+a lokalny Qwen wykonuje małe work units. To rozdzielenie nie hardcoduje Sol ani
+Qwena w kontraktach runtime RemoteAgent.
+
+### 3.6 Proces budowy repozytorium
+
+- Wiersz `RA-NNN` w `TASK_INDEX.md` jest makro-taskiem: jednostką zależności,
+  kryteriów akceptacji i końcowego audytu.
+- Przed implementacją Sol rozpisuje makro-task na atomowe work units w
+  `docs/work-units/<TASK_ID>/WORK_UNITS.md`.
+- Jeden work unit ma jeden rezultat, mały context pack, ograniczone ścieżki i
+  jedną celowaną weryfikację.
+- Qwen wykonuje units sekwencyjnie w ephemerycznych sesjach; nie planuje, nie
+  audytuje i nie zmienia artefaktów workflow.
+- Sol po każdym unit sprawdza diff i ponawia celowany test, a po całym tasku
+  wykonuje pełny niezależny audyt.
+- To workflow służy oszczędzaniu ograniczonego budżetu Sol bez obniżania
+  jakości decyzji architektonicznych i audytu.
+
 ## 4. Architektura przepływu
 
 ```text
@@ -421,8 +441,9 @@ Wymagane:
 Najpierw powstaje golden path Jira -> Discord -> Bedrock -> workspace -> GitLab
 MR. Gmail i Calendar są dodawane dopiero po udowodnieniu trwałości coding loop.
 
-Każdy task z `docs/tasks/TASK_INDEX.md` przechodzi osobną bramkę audytową. Task
-jest zakończony dopiero po `PASS`.
+Każdy task z `docs/tasks/TASK_INDEX.md` przechodzi osobną bramkę audytową Sol.
+Zielone raporty poszczególnych work units nie zastępują tej bramki. Task jest
+zakończony dopiero po `PASS`.
 
 ## 13. Systemowe kryteria końcowe
 
@@ -450,4 +471,3 @@ Podczas implementacji wolno adaptować koncepcje, ale nie kopiować bez audytu:
 
 Każdy import kodu wymaga sprawdzenia licencji, zależności, sekretów i dopasowania
 do kontraktów RemoteAgent.
-

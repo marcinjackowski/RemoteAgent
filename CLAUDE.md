@@ -1,9 +1,13 @@
-# RemoteAgent — Claude Code bootstrap
+# RemoteAgent — legacy Claude Code bootstrap
 
 @AGENTS.md
 
 `AGENTS.md` jest nadrzędnym kontraktem tego repozytorium. Przeczytaj go w całości
 i stosuj przed rozpoczęciem jakiejkolwiek pracy.
+
+Ten plik pozostaje dla legacy Claude Code/Bedrock workera. Domyślny workflow
+budowy repozytorium prowadzi Sol, a implementację małych work units wykonuje Qwen
+przez oMLX + Codex CLI. Claude nie może sam przejąć roli implementera.
 
 ## Specjalne znaczenie `continue`
 
@@ -18,12 +22,8 @@ Po `continue` zawsze:
    - `docs/MASTER_PLAN.md`
    - `docs/workflow/EXECUTION_AND_AUDIT.md`
    - `docs/tasks/TASK_INDEX.md`
-3. Wykonaj dokładnie algorytm `continue` z
-   `docs/workflow/EXECUTION_AND_AUDIT.md`.
-4. Dla początkowego stanu repozytorium wybierz `RA-001`, ponieważ jest pierwszym
-   taskiem ze statusem `READY`.
-5. Po ukończeniu taska utwórz handoff, ustaw `AWAITING_AUDIT` i zatrzymaj się
-   zgodnie z wymaganym komunikatem `STOP` z `AGENTS.md`.
+3. Nie implementuj. Zwróć informację, że `continue` powinno zostać obsłużone
+   przez Sol zgodnie z `docs/workflow/EXECUTION_AND_AUDIT.md`.
 
 Historia chatu może być pusta. Repozytorium jest źródłem prawdy dla stanu pracy.
 
@@ -32,4 +32,3 @@ Historia chatu może być pusta. Repozytorium jest źródłem prawdy dla stanu p
 Ostrzeżenie o nieuwierzytelnionym MCP nie blokuje pracy, jeżeli aktualny task nie
 wymaga tego serwera. Nie uruchamiaj logowania ani nie proś o credentials na zapas.
 W szczególności `RA-001` nie wymaga MCP.
-

@@ -1,7 +1,8 @@
 # Checklist audytora
 
-Checklist jest wspólna dla wszystkich tasków. Specyficzny `Audit focus` w pliku
-taska ma pierwszeństwo i rozszerza poniższe punkty.
+Checklist wykonuje Sol po implementacji Qwena i jest wspólna dla wszystkich
+tasków. Specyficzny `Audit focus` w pliku taska ma pierwszeństwo i rozszerza
+poniższe punkty.
 
 ## 1. Zakres i wymagania
 
@@ -9,6 +10,8 @@ taska ma pierwszeństwo i rozszerza poniższe punkty.
 - Czy nie wprowadza nieuzgodnionego zakresu albo zmiany architektury?
 - Czy każdy materialny wymóg ma konkretny dowód?
 - Czy wcześniejsze findingi zostały rzeczywiście usunięte?
+- Czy każda zmiana pochodzi z zaakceptowanego work unit, a scope creep został
+  jawnie odrzucony albo zatwierdzony przez Sol przed wykonaniem?
 
 ## 2. Kod i kontrakty
 
@@ -44,6 +47,7 @@ taska ma pierwszeństwo i rozszerza poniższe punkty.
 ## 6. Test evidence
 
 - Uruchom wymagane testy samodzielnie.
+- Nie traktuj raportu Qwena ani unit gate jako końcowego dowodu.
 - Potwierdź, że test sprawdza zachowanie, a nie tylko mock implementation detail.
 - Sprawdź negatywne ścieżki, concurrency, retry, cancellation i recovery.
 - Zweryfikuj snapshot diff zamiast automatycznie go akceptować.
@@ -56,7 +60,17 @@ taska ma pierwszeństwo i rozszerza poniższe punkty.
 - Czy operator potrafi rozpoznać i naprawić stan bez ręcznej edycji DB?
 - Czy dokumentacja i runbook odpowiadają rzeczywistemu zachowaniu?
 
-## 8. Inwarianty `workflow:validate`
+## 8. Niezależność Sol/Qwen
+
+- Czy plan i kryteria powstały przed implementacją i były autorstwa Sol?
+- Czy Qwen edytował wyłącznie dozwolone ścieżki jednego work unit?
+- Czy Qwen nie zmienił task index, planu, handoffu, audytu ani decyzji?
+- Czy Sol przeczytał pełny diff od bazowego tree, a nie tylko raport modelu?
+- Czy Sol ponowił celowane testy i pełną weryfikację taska?
+- Czy findingi są opisane przed utworzeniem fix units, bez edycji kodu podczas
+  audytu?
+
+## 9. Inwarianty `workflow:validate`
 
 Sprawdź, że stan kolejki i artefaktów spełnia inwarianty egzekwowane przez
 `workflow:validate` (zob. `docs/workflow/EXECUTION_AND_AUDIT.md`):
@@ -74,7 +88,7 @@ Sprawdź, że stan kolejki i artefaktów spełnia inwarianty egzekwowane przez
   tokeny `RA-NNN` w `Depends on`, zewnętrzne pipe’y i poprawny separator; żaden
   wiersz danych nie jest cicho pomijany.
 
-## 9. Werdykt
+## 10. Werdykt
 
 - `PASS`: wszystkie kryteria spełnione, brak unresolved BLOCKER/HIGH/MEDIUM.
 - `CHANGES_REQUIRED`: implementacja jest naprawialna w zakresie taska; findingi
@@ -83,4 +97,3 @@ Sprawdź, że stan kolejki i artefaktów spełnia inwarianty egzekwowane przez
 
 Brak możliwości uruchomienia kluczowego testu oznacza `NOT_VERIFIED`, nie PASS na
 podstawie samej deklaracji handoffu.
-

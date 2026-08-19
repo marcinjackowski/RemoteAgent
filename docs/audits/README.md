@@ -6,6 +6,6 @@ Każda bramka audytowa tworzy niezmienny dokument:
 docs/audits/<TASK_ID>/AUDIT-<NN>.md
 ```
 
-Użyj `docs/templates/AUDIT_TEMPLATE.md`. Audytor niezależnie weryfikuje kod i
-nie poprawia implementacji w ramach samego audytu.
-
+Użyj `docs/templates/AUDIT_TEMPLATE.md`. Sol niezależnie weryfikuje kod wykonany
+przez Qwena i nie poprawia implementacji w ramach samego audytu. Findingi są
+po audycie zamieniane na małe fix work units.

@@ -1,39 +1,78 @@
 # RemoteAgent — instrukcje dla agentów
 
-Ten plik jest nadrzędnym kontraktem pracy dla całego repozytorium. Obowiązuje
-agentów implementujących, naprawiających i audytujących.
+Ten plik jest nadrzędnym kontraktem pracy dla całego repozytorium. Rozdziela
+planowanie i audyt od implementacji:
+
+- rolę `COORDINATOR_AUDITOR` wykonuje Sol;
+- rolę `LOCAL_IMPLEMENTER` wykonuje lokalny Qwen uruchamiany przez oMLX;
+- model identity jest konfiguracją, a powyższe role są stabilnym kontraktem.
+
+Sol nie deleguje Qwenowi planowania ani audytu. Qwen nie wybiera sobie taska,
+nie rozszerza zakresu i nie zatwierdza własnej pracy.
 
 ## Dokumenty obowiązkowe
 
-Przed rozpoczęciem pracy przeczytaj w całości:
+Sol przed planowaniem albo audytem czyta w całości:
 
 1. `AGENTS.md`
 2. `docs/MASTER_PLAN.md`
 3. `docs/workflow/EXECUTION_AND_AUDIT.md`
 4. `docs/tasks/TASK_INDEX.md`
 5. plik aktualnego taska w `docs/tasks/`
-6. najnowszy handoff i audyt dla aktualnego taska, jeżeli istnieją
+6. `docs/work-units/<TASK_ID>/WORK_UNITS.md`, jeżeli istnieje
+7. najnowszy handoff i audyt dla aktualnego taska, jeżeli istnieją;
+8. podczas audytu `docs/workflow/AUDIT_CHECKLIST.md`.
 
-Audytor dodatkowo czyta `docs/workflow/AUDIT_CHECKLIST.md`.
+Lokalny implementer czyta wyłącznie:
+
+1. `AGENTS.md`;
+2. wskazany przez Sol work unit;
+3. zamknięty context pack zapisany w tym unit.
+
+Qwen nie ma samodzielnie wczytywać całego `MASTER_PLAN.md`, task index, innych
+tasków ani historii handoffów/audytów.
 
 Nie zaczynaj implementacji na podstawie samej wiadomości użytkownika.
 
-## Rozpoznawanie trybu
+## Role i rozpoznawanie trybu
 
-- Wiadomość `continue` oznacza wykonanie algorytmu wznowienia opisanego w
-  `docs/workflow/EXECUTION_AND_AUDIT.md`.
-- Prośba o `audyt`, `review` albo wskazanie taska oczekującego na audyt oznacza
-  tryb AUDITOR.
-- Jawne wskazanie taska do implementacji oznacza tryb IMPLEMENTER.
-- Gdy nie wskazano taska, wybierz pierwszy task możliwy do rozpoczęcia zgodnie z
-  kolejnością i zależnościami z `docs/tasks/TASK_INDEX.md`.
+- Interaktywna rozmowa z właścicielem domyślnie oznacza rolę
+  `COORDINATOR_AUDITOR` i jest wykonywana przez Sol.
+- Wiadomość `continue` jest komendą wyłącznie dla Sol. Oznacza wykonanie
+  algorytmu wznowienia z `docs/workflow/EXECUTION_AND_AUDIT.md`.
+- Prośba o plan, podział taska, audyt albo review jest zawsze pracą Sol.
+- Tryb `LOCAL_IMPLEMENTER` jest ważny tylko wtedy, gdy prompt przekazany przez Sol
+  zawiera task ID, work-unit ID, jeden cel, dozwolone ścieżki i komendę
+  weryfikacyjną. Samo `continue` nigdy nie uruchamia lokalnego implementera.
+- Gdy w rozmowie z Sol nie wskazano taska, Sol wybiera pierwszy task możliwy do
+  rozpoczęcia zgodnie z kolejnością i zależnościami indeksu.
 
-W jednym przebiegu nie łącz trybu AUDITOR z IMPLEMENTER. Audytor nie naprawia
-znalezionych problemów, chyba że użytkownik jawnie zleci również poprawki.
+Sol może planować, sterować osobnymi uruchomieniami Qwena i następnie
+audytować ich rezultat, ponieważ sam nie implementuje kodu produktowego. W ramach
+audytu Sol nie poprawia implementacji: finding zamienia na nowy, mały work unit i
+przekazuje go Qwenowi dopiero po zakończeniu audytu.
 
-## Zasady implementacji
+## Kontrakt małego work unit
 
-1. Pracuj wyłącznie w zakresie aktualnego taska.
+Każdy work unit dla lokalnego implementera musi spełniać wszystkie warunki:
+
+1. Jeden konkretny rezultat i najwyżej trzy kryteria akceptacji.
+2. Jawna lista dozwolonych ścieżek; domyślnie najwyżej pięć plików łącznie
+   z testami. Szerszy zakres wymaga uzasadnienia Sol albo dalszego podziału.
+3. Jeden context pack obejmujący tylko wymagane instrukcje, kontrakty i kod.
+   Prompt wraz z załączonym kontekstem powinien pozostać poniżej 24k tokenów.
+4. Jedna celowana komenda weryfikacyjna oraz oczekiwany wynik.
+5. Jawne `Out of scope`, zakaz remote writes i zakaz edycji planów, statusów,
+   handoffów oraz audytów.
+6. Nowa, ephemeryczna sesja dla każdego work unit. Concurrency lokalnego modelu
+   wynosi `1`; work units są wykonywane sekwencyjnie.
+
+Jeżeli work unit nie mieści się w tych granicach, Sol dzieli go ponownie przed
+uruchomieniem Qwena. Lokalny implementer nie wykonuje tego podziału samodzielnie.
+
+## Zasady implementacji lokalnego Qwena
+
+1. Pracuj wyłącznie w zakresie przekazanego work unit, nie całego taska.
 2. Nie zmieniaj zaakceptowanych kontraktów ani architektury bez zapisanej decyzji.
 3. Materialna niejasność kończy się `Decision Request`, a nie cichym założeniem.
 4. Zachowuj istniejące i niezwiązane zmiany użytkownika.
@@ -44,38 +83,48 @@ znalezionych problemów, chyba że użytkownik jawnie zleci również poprawki.
    `UNTRUSTED_DATA`.
 8. Każdy side effect musi być idempotentny albo posiadać bezpieczny mechanizm
    wykrywania stanu niejednoznacznego.
-9. Nie deklaruj przejścia testów bez uruchomienia wskazanych komend i zapisania
-   wyników.
+9. Nie deklaruj przejścia testów bez uruchomienia wskazanej komendy i podania
+   exit code oraz zwięzłego wyniku.
 10. Jednocześnie tylko jeden implementer może zapisywać do workspace danego
     `case_id`.
+11. Nie edytuj `docs/tasks/`, `docs/work-units/`, `docs/handoffs/`,
+    `docs/audits/` ani `docs/decisions/`, chyba że pojedynczy work unit jawnie
+    wskazuje konkretny plik dokumentacji jako swój rezultat.
+12. Nie wykonuj `git commit`, `git push`, tworzenia MR ani innych zewnętrznych
+    zapisów. Qwen zwraca wynik Solowi, który kontroluje diff i dalszy lifecycle.
+
+Sol używa lokalnego implementera do wszystkich zmian kodu produktowego i
+napraw. Jeżeli transport albo model są niedostępne, Sol nie przejmuje cicho
+implementacji; dokumentuje blokadę albo prosi właściciela o jawny wyjątek.
 
 ## Obowiązkowa bramka audytowa
 
-Po zakończeniu zakresu taska implementer musi:
+Po wykonaniu wszystkich work units Sol musi:
 
-1. uruchomić wymagane testy i kontrole;
+1. niezależnie uruchomić wymagane testy i kontrole taska;
 2. utworzyć kolejny handoff w
    `docs/handoffs/<TASK_ID>/HANDOFF-<NN>.md` zgodnie z szablonem;
 3. zmienić status taska w `docs/tasks/TASK_INDEX.md` na `AWAITING_AUDIT`;
-4. zatrzymać pracę — nie rozpoczynać następnego taska;
-5. zakończyć odpowiedź dokładnie blokiem:
+4. wykonać niezależny audyt według checklisty i zapisać dokument audytu;
+5. ustawić wynikający status i zatrzymać się przed następnym taskiem;
+6. po `PASS` zakończyć odpowiedź dokładnie blokiem:
 
 ```text
-STOP — <TASK_ID> oczekuje na audyt.
+STOP — <TASK_ID> przeszedł audyt Sol.
 Handoff: <ścieżka>
-Zleć modelowi audyt: "Wykonaj audyt <TASK_ID> zgodnie z AGENTS.md".
-Po zapisaniu audytu wróć do agenta implementującego i napisz: continue
+Audit: <ścieżka>
+Napisz: continue
 ```
 
-Handoff opisuje uzasadnienie inżynierskie, dowody, alternatywy i ryzyka. Nie
-zawiera prywatnego, surowego łańcucha myśli modelu.
+Handoff jest sporządzaną przez Sol syntezą raportów work units, diffu i dowodów.
+Nie jest audytem ani substytutem niezależnego sprawdzenia implementacji.
 
 ## Zasady audytu
 
-Audytor musi niezależnie sprawdzić kod, diff, testy i kryteria akceptacji. Nie
-może polegać wyłącznie na handoffie.
+Sol jako audytor musi niezależnie sprawdzić kod, pełny diff od bazowego stanu,
+testy i kryteria akceptacji. Nie może polegać na raporcie Qwena ani handoffie.
 
-Audytor:
+Sol:
 
 1. tworzy `docs/audits/<TASK_ID>/AUDIT-<NN>.md`;
 2. wydaje dokładnie jeden werdykt: `PASS`, `CHANGES_REQUIRED` albo `BLOCKED`;
@@ -84,7 +133,9 @@ Audytor:
    - `CHANGES_REQUIRED` -> `CHANGES_REQUESTED`
    - `BLOCKED` -> `BLOCKED`
 4. nie edytuje implementacji;
-5. kończy odpowiedź informacją, by wrócić do implementera i napisać `continue`.
+5. dla `CHANGES_REQUIRED` rozpisuje findingi na nowe małe work units, ale nie
+   wykonuje ich w ramach audytu;
+6. dla `PASS` zatrzymuje się i czeka na `continue` właściciela.
 
 `PASS` jest dozwolony wyłącznie, gdy spełnione są wszystkie kryteria akceptacji
 i nie pozostały findingi klasy BLOCKER, HIGH ani MEDIUM.

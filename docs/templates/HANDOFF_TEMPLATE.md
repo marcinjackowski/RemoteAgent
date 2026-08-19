@@ -5,6 +5,9 @@
 - Task: `<TASK_ID>`
 - Status proponowany: `AWAITING_AUDIT`
 - Autor/rola:
+- Implementer model/transport:
+- Work-units plan:
+- Zaakceptowane units:
 - Data:
 - Bazowy commit lub stan początkowy:
 - Końcowy commit lub stan working tree:
@@ -17,13 +20,19 @@ Zwięzłe podsumowanie osiągniętego rezultatu z perspektywy użytkownika.
 
 - ...
 
+## Wykonanie work units
+
+| Unit | Raport implementera | Sol gate | Wynik |
+|---|---|---|---|
+| | | diff + ponowiona weryfikacja | ACCEPTED/FAILED |
+
 ## Zmiany
 
 | Ścieżka/moduł | Co zmieniono | Dlaczego |
 |---|---|---|
 | | | |
 
-## Decyzje i uzasadnienie
+## Decyzje i uzasadnienie Sol
 
 Opisz przesłanki, ograniczenia, wybraną opcję i istotne alternatywy. Nie zapisuj
 surowego, prywatnego łańcucha myśli.
@@ -60,9 +69,8 @@ surowego, prywatnego łańcucha myśli.
 
 - Brak / ...
 
-## Stan dla następnego agenta
+## Stan dla Sol po audycie
 
 - Co jest gotowe:
 - Czego nie robić przed audytem:
-- Gdzie zacząć po `continue`, jeśli audyt zażąda zmian:
-
+- Jakie małe fix units utworzyć po `CHANGES_REQUIRED`:

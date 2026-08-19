@@ -2,27 +2,30 @@
 
 ## Cel
 
-Protokół pozwala wielu jednorazowym agentom bezpiecznie kontynuować tę samą
-pracę. Źródłem prawdy są repozytorium, task, wersjonowane handoffy i audyty — nie
-pamięć sesji modelu.
+Protokół pozwala Solowi sterować sekwencją małych, jednorazowych uruchomień
+lokalnego implementera. Źródłem prawdy są repozytorium, task, plan work units,
+wersjonowane handoffy i audyty — nie pamięć sesji modelu.
 
 ## Role
 
-### IMPLEMENTER
+### COORDINATOR_AUDITOR (Sol)
 
-Realizuje jeden task albo poprawki wskazane przez ostatni audyt. Może zmieniać
-kod i dokumentację w zakresie taska. Nie może sam zatwierdzić swojej pracy.
+Wybiera makro-task, planuje architekturę i rozpisuje atomowe work units. Przekazuje
+je lokalnemu implementerowi pojedynczo, kontroluje working tree, odtwarza testy i
+wydaje niezależny werdykt. Jest jedynym autorem planów, statusów kolejki i audytów.
+Nie implementuje kodu produktowego, który następnie audytuje.
 
-### AUDITOR
+### LOCAL_IMPLEMENTER (Qwen)
 
-Niezależnie ocenia implementację. Może uruchamiać testy i wykonywać odczytowe
-inspekcje. Zapisuje wyłącznie dokument audytu i status taska, o ile użytkownik
-nie zlecił czegoś więcej.
+Realizuje dokładnie jeden work unit w ephemerycznej sesji. Może edytować tylko
+dozwolone ścieżki i uruchomić wskazaną weryfikację. Nie wybiera taska, nie
+rozpisuje dalszej pracy, nie audytuje, nie zmienia statusów ani artefaktów
+workflow i nie wykonuje remote writes.
 
 ### OWNER
 
-Podejmuje materialne decyzje i przekazuje między rolami prostą komendę
-`continue`.
+Podejmuje materialne decyzje i uruchamia kolejny makro-task prostą komendą
+`continue`. Nie musi ręcznie przełączać się między implementerem i audytorem.
 
 ## Statusy taska
 
@@ -46,19 +49,23 @@ Dowolny stan -> BLOCKED po udokumentowaniu realnej blokady.
 
 ## Algorytm dla wiadomości `continue`
 
-Agent wykonuje poniższe kroki bez proszenia użytkownika o wskazanie taska:
+Sol wykonuje poniższe kroki bez proszenia użytkownika o wskazanie taska:
 
-1. Odczytaj `docs/tasks/TASK_INDEX.md`.
+1. Odczytaj `docs/tasks/TASK_INDEX.md`. Lokalnemu Qwenowi nigdy nie przekazuj
+   samego `continue`.
 2. Jeżeli istnieje `CHANGES_REQUESTED`, wybierz go, przeczytaj najnowszy audyt,
-   zmień status na `IN_PROGRESS` i wykonaj wymagane poprawki.
+   zmień status na `IN_PROGRESS`, rozpisz każdy finding na mały fix work unit i
+   zlecaj je Qwenowi pojedynczo.
 3. W przeciwnym razie, jeżeli istnieje `AUDIT_PASSED`, zmień go na `DONE`,
    odblokuj taski, których wszystkie zależności są `DONE`, i rozpocznij pierwszy
    z nich według kolejności indeksu.
 4. W przeciwnym razie, jeżeli istnieje `IN_PROGRESS`, wznów go na podstawie
-   ostatniego handoffu i aktualnego stanu repozytorium.
-5. W przeciwnym razie rozpocznij pierwszy `READY`.
-6. Jeżeli istnieje tylko `AWAITING_AUDIT`, nie implementuj dalej. Powiedz, że
-   konieczny jest audyt.
+   planu work units, ostatniego handoffu i aktualnego stanu repozytorium.
+5. W przeciwnym razie rozpocznij pierwszy `READY`: zapisz bazowy commit/tree,
+   ustaw `IN_PROGRESS`, utwórz lub zrewiduj plan work units i dopiero potem
+   uruchom pierwszy unit.
+6. Jeżeli istnieje `AWAITING_AUDIT`, Sol wykonuje audyt; nie uruchamia nowego
+   work unit przed wydaniem werdyktu.
 7. Jeżeli nie ma taska możliwego do rozpoczęcia, przedstaw konkretną blokadę.
 
 Jeżeli właściciel odpowiada bezpośrednio na zapisany `Decision Request`, agent
@@ -67,30 +74,55 @@ ADR, jeśli zmienia architekturę), ustawia task z `BLOCKED` na `IN_PROGRESS` i
 kontynuuje. Sama komenda `continue` nie jest odpowiedzią na nierozstrzygnięte
 pytanie decyzyjne.
 
-Kolejność w indeksie rozstrzyga remis. Nie uruchamiaj dwóch tasków w jednym
-przebiegu, chyba że ich wspólny task explicite jest testem współbieżności.
+Kolejność w indeksie rozstrzyga remis. Nie uruchamiaj dwóch makro-tasków w
+jednym przebiegu. Concurrency lokalnego implementera wynosi `1` niezależnie od
+tego, czy implementowany produkt testuje współbieżność.
 
-## Cykl implementera
+## Cykl planowania Sol
 
-1. Przeczytaj wymagane dokumenty.
-2. Zmień status `READY` albo `CHANGES_REQUESTED` na `IN_PROGRESS`.
-3. Sprawdź working tree i nie nadpisuj cudzych zmian.
-4. Zapisz plan bieżącego taska w swoim narzędziu planowania.
-5. Implementuj małymi, weryfikowalnymi krokami.
-6. Uruchom testy wymagane przez task oraz adekwatne testy regresji.
-7. Sprawdź diff, sekrety, migracje, idempotencję i zachowanie po restarcie.
-8. Utwórz nowy handoff na podstawie szablonu.
-9. Ustaw `AWAITING_AUDIT` i zatrzymaj się.
+1. Przeczytaj wymagane dokumenty, task i aktualny kod bez delegowania tej analizy
+   Qwenowi.
+2. Sprawdź working tree, zapisz bazowy commit/tree i zachowaj cudze zmiany.
+3. Zapisz `docs/work-units/<TASK_ID>/WORK_UNITS.md` według szablonu.
+4. Upewnij się, że każdy unit ma jeden rezultat, maksymalnie trzy kryteria,
+   zamknięte ścieżki, context pack poniżej 24k tokenów i jedną weryfikację.
+5. Zidentyfikuj zależności między units i tylko jeden oznacz jako `READY`.
+6. Materialną niejasność zapisz jako Decision Request przed uruchomieniem
+   implementera.
 
-Implementer nie rozpoczyna następnego taska przed `PASS`.
+## Cykl pojedynczego work unit
 
-## Cykl audytora
+1. Sol wykonuje preflight z `docs/workflow/QWEN_IMPLEMENTER.md`.
+2. Sol uruchamia Qwena w nowej ephemerycznej sesji z rolą `LOCAL_IMPLEMENTER`.
+3. Qwen czyta tylko context pack, edytuje dozwolone ścieżki, uruchamia wskazaną
+   komendę i zwraca krótki raport.
+4. Sol porównuje rzeczywisty diff z allowlistą. Zmiana poza zakresem oznacza
+   odrzucenie unit albo Decision Request, nie cichą akceptację.
+5. Sol czyta zmienione przepływy i sam ponawia celowaną weryfikację.
+6. Po akceptacji Sol aktualizuje stan unit i odblokowuje tylko jego bezpośredniego
+   następcę. Po niepowodzeniu zapisuje mniejszy fix unit.
+7. Po dwóch nieudanych próbach tego samego celu Sol zatrzymuje automatyczne
+   ponawianie i dokumentuje blokadę.
+
+Qwen nie rozpoczyna następnego unit, nawet jeżeli widzi go w planie.
+
+## Handoff i audyt całego taska
+
+Po akceptacji wszystkich units Sol:
+
+1. uruchamia wymagane przez task testy i adekwatną regresję;
+2. sprawdza diff, sekrety, migracje, idempotencję i restart/recovery;
+3. tworzy handoff jako syntezę implementacji i dowodów;
+4. ustawia `AWAITING_AUDIT`;
+5. rozpoczyna niezależny audyt bez edycji implementacji.
+
+W audycie Sol:
 
 1. Potwierdź, że task ma status `AWAITING_AUDIT`.
-2. Przeczytaj specyfikację taska, handoff i wcześniejsze audyty.
+2. Przeczytaj specyfikację taska, plan work units, handoff i wcześniejsze audyty.
 3. Sprawdź pełny diff i wszystkie dotknięte przepływy, nie tylko wskazane pliki.
-4. Uruchom testy samodzielnie. Jeśli środowisko to uniemożliwia, opisz dokładnie
-   ograniczenie i nie traktuj deklaracji implementera jako dowodu.
+4. Uruchom testy samodzielnie. Raport Qwena i wcześniejszy unit gate nie są
+   dowodem końcowym.
 5. Sprawdź każde kryterium akceptacji osobno.
 6. Oceń bezpieczeństwo, izolację kont, idempotencję, recovery, observability i
    kompatybilność kontraktów odpowiednio do zakresu.
@@ -98,7 +130,9 @@ Implementer nie rozpoczyna następnego taska przed `PASS`.
 8. Zaktualizuj status taska zgodnie z werdyktem.
 
 Finding zawiera: severity, lokalizację, dowód, wpływ i wymaganą zmianę. Samo
-stwierdzenie „to może być lepsze” nie jest findingiem blokującym.
+stwierdzenie „to może być lepsze” nie jest findingiem blokującym. Dla
+`CHANGES_REQUIRED` Sol po zamknięciu audytu tworzy małe fix work units; nie
+naprawia kodu w roli audytora.
 
 ## Handoff revisions
 
@@ -128,8 +162,9 @@ starszego werdyktu jako obowiązującego.
 
 ## Decision Request
 
-Gdy konieczna jest decyzja właściciela, implementer zapisuje ją w najnowszym
-handoffie i ustawia task na `BLOCKED`. Handoff musi zawierać jawny marker
+Gdy Qwen zgłosi materialną niejasność albo Sol wykryje ją przed dispatch, Sol
+zapisuje decyzję w najnowszym handoffie i ustawia task na `BLOCKED`. Handoff musi
+zawierać jawny marker
 `Decision Request` (nagłówek, pogrubienie lub pozycja listy zaczynająca się od
 `Decision Request`), a samo pytanie:
 
@@ -156,9 +191,9 @@ samo istnienie jakiegokolwiek audytu:
 
 Każdy inny kształt (np. stary audyt `CHANGES_REQUIRED` bez nowszego handoffu z
 Decision Request, brak markera, niejednoznaczny lub brakujący werdykt) jest
-fail-closed. Dzięki temu implementer może legalnie zatrzymać się z Decision
-Request po wcześniejszym `CHANGES_REQUIRED`, a przestarzały audyt nie jest brany
-za przyczynę bieżącej blokady.
+fail-closed. Dzięki temu Sol może legalnie zatrzymać task z Decision Request po
+wcześniejszym `CHANGES_REQUIRED`, a przestarzały audyt nie jest brany za
+przyczynę bieżącej blokady.
 
 ## Inwarianty walidatora kolejki (`workflow:validate`)
 
@@ -173,11 +208,11 @@ Najnowszy artefakt (po numerze rewizji `HANDOFF-NN`/`AUDIT-NN`, nie po kolejnoś
 katalogu) musi odpowiadać miejscu statusu w cyklu audytu, aby przestarzały
 werdykt nie mógł zatwierdzić nowszej, niezaudytowanej pracy:
 
-- `AWAITING_AUDIT` jest wejściem implementera, który właśnie zapisał handoff.
+- `AWAITING_AUDIT` jest wejściem Sol po zakończeniu units i zapisaniu handoffu.
   Najnowszy handoff musi więc mieć rewizję nowszą niż najnowszy audyt
   (`rewizja_handoffu > rewizja_audytu`). Stary handoff nienowszy od audytu jest
   błędem.
-- `CHANGES_REQUESTED`, `AUDIT_PASSED` i `DONE` są wejściami audytora. Najnowszy
+- `CHANGES_REQUESTED`, `AUDIT_PASSED` i `DONE` są wejściami audytu Sol. Najnowszy
   audyt nie może być starszy od najnowszego handoffu, który ocenia
   (`rewizja_audytu ≥ rewizja_handoffu`); handoff bez nowszego lub równego audytu
   jest błędem.

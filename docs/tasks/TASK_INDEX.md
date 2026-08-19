@@ -1,7 +1,12 @@
 # Task Index
 
-Ten plik jest operacyjną kolejką pracy. Status zmienia implementer lub audytor
-zgodnie z `AGENTS.md`. Nie zmieniaj kolejności bez ADR albo decyzji właściciela.
+Ten plik jest operacyjną kolejką makro-tasków. Statusy zmienia wyłącznie Sol
+jako `COORDINATOR_AUDITOR`, zgodnie z `AGENTS.md`. Lokalny implementer nie edytuje
+tej kolejki. Nie zmieniaj kolejności bez ADR albo decyzji właściciela.
+
+Każdy rozpoczynany task jest dzielony just-in-time na małe jednostki w
+`docs/work-units/<TASK_ID>/WORK_UNITS.md`. Gotowe plany najbliższych tasków nie
+zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 
 ## Status legend
 
@@ -54,3 +59,13 @@ zgodnie z `AGENTS.md`. Nie zmieniaj kolejności bez ADR albo decyzji właścicie
 - **M4 Google:** dwa konta Gmail i Calendar bez cross-account leakage.
 - **M5 Tools/actions:** MCP, policy, approval i external writes.
 - **M6 Production:** hardening, AWS, restore drill i final audit.
+
+## Prepared execution plans
+
+- [RA-007 work units](../work-units/RA-007/WORK_UNITS.md)
+- [RA-008 work units](../work-units/RA-008/WORK_UNITS.md)
+- [RA-009 work units](../work-units/RA-009/WORK_UNITS.md)
+- [RA-010 work units](../work-units/RA-010/WORK_UNITS.md)
+
+Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
+przy starcie i dopiero wtedy oznacza pierwszy unit jako gotowy do wykonania.

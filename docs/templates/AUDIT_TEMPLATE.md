@@ -5,6 +5,8 @@
 - Task: `<TASK_ID>`
 - Audytowany handoff: `<path>`
 - Audytor:
+- Implementer model/transport:
+- Work-units plan:
 - Data:
 - Werdykt: `PASS | CHANGES_REQUIRED | BLOCKED`
 
@@ -17,6 +19,7 @@ Krótka, niezależna ocena implementacji.
 - Przeczytane dokumenty:
 - Sprawdzony diff/commity:
 - Uruchomione kontrole:
+- Potwierdzenie, że audytor nie implementował ocenianego kodu:
 
 ## Kryteria akceptacji
 
@@ -41,6 +44,8 @@ Jeśli brak findingów, wpisz `Brak`.
 |---|---:|---|
 | | | |
 
+Raporty Qwena i unit gates nie zastępują powyższych, ponowionych kontroli.
+
 ## Ryzyka przekrojowe
 
 - Security/privacy:
@@ -49,13 +54,13 @@ Jeśli brak findingów, wpisz `Brak`.
 - Observability:
 - Kompatybilność:
 
-## Wymagane działania po `continue`
+## Fix work units po `CHANGES_REQUIRED`
 
-Lista jest obowiązkowa dla `CHANGES_REQUIRED`; dla `PASS` wskaż kolejny task.
+Lista jest obowiązkowa dla `CHANGES_REQUIRED`; każdy finding musi zostać
+zamieniony przez Sol na mały unit dla Qwena. Dla `PASS` wskaż kolejny makro-task.
 
 1. ...
 
 ## Uzasadnienie werdyktu
 
 Wyjaśnij werdykt na podstawie kryteriów i dowodów.
-

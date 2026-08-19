@@ -9,3 +9,8 @@ docs/decisions/ADR-<NNNN>-<slug>.md
 ADR zawiera: kontekst, decyzję, alternatywy, konsekwencje, sposób migracji i
 rollback. Zmiana zaakceptowanej decyzji wymaga nowego ADR zastępującego poprzedni.
 
+Aktualne decyzje:
+
+- `ADR-0001` — foundation tooling i przypięte wersje;
+- `ADR-0002` — SQL i migracje trwałego stanu;
+- `ADR-0003` — Sol koordynuje/audytuje, lokalny Qwen wykonuje małe work units.

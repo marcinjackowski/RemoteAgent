@@ -1,4 +1,9 @@
-# Bedrock Opus 4.8 worker
+# Bedrock Opus 4.8 worker (legacy)
+
+> Ten worker nie jest już domyślnym implementerem procesu budowy repozytorium.
+> Aktualny flow używa Sol jako koordynatora/audytora i lokalnego Qwena przez
+> oMLX + Codex CLI; zob. `docs/workflow/QWEN_IMPLEMENTER.md` i ADR-0003.
+> Skrypt pozostaje jako historyczne, przetestowane narzędzie i nie jest usuwany.
 
 ## Cel
 
