@@ -123,11 +123,12 @@ strukturalna do unitu dopuszczającego zmianę manifestu.
 
 - Result: jawna klasyfikacja throttling/transient/fatal i bezpieczne retry boundary.
 - Allowed paths: `src/retry.ts`, `src/errors.ts`, `src/converse.ts`,
-  `test/retry.test.ts`, `test/limits.test.ts`.
+  `src/tool-loop.ts`, `src/aws-transport.ts`, `test/retry.test.ts`,
+  `test/limits.test.ts`, `test/aws-transport.test.ts`.
 - Context pack: WU-03/WU-05, run-safety contract, task retry criteria.
 - Acceptance: retry tylko przed możliwym tool side effectem; fatal nie retryuje;
   timeout/model/tool limits dają kontrolowany typed error.
-- Verification: `pnpm vitest run packages/bedrock-runtime/test/retry.test.ts packages/bedrock-runtime/test/limits.test.ts`.
+- Verification: `pnpm vitest run packages/bedrock-runtime/test/retry.test.ts packages/bedrock-runtime/test/limits.test.ts packages/bedrock-runtime/test/aws-transport.test.ts`.
 - Out of scope: business-level job retry.
 - Sol gate: adversarial test potencjalnego side effectu nigdy nie jest powtarzany.
 
