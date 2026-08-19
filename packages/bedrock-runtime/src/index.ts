@@ -5,3 +5,5 @@ export * from "./fake-transport.js";
 export * from "./aws-transport.js";
 export * from "./transport.js";
 export * from "./types.js";
+export * from "./stream.js";
+export * from "./aws-stream-transport.js";
