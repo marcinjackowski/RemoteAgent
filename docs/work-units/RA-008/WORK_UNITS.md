@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `03`
+- Plan revision: `04`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -53,13 +53,34 @@
 - Result: czysty builder wybiera materiały według budżetu, priorytetu i scope.
 - Allowed paths: `packages/agent-orchestrator/src/context/types.ts`,
   `context/builder.ts`, `context/budget.ts`, `test/context-builder.test.ts`,
-  `src/index.ts`.
+  `src/index.ts`, `packages/agent-orchestrator/package.json`, `pnpm-lock.yaml`.
 - Context pack: RA-008 scope, checkpoint/event/entity/tool contracts, scope guards.
-- Acceptance: deterministyczny wybór; każdy fragment ma provenance i trust;
-  brak entities/connections spoza authoritative scope.
+- Acceptance:
+  - wejście zawiera autorytatywne `caseId`, `ownerId`, provider/connection allowlist
+    i dozwolone nazwy tools; fragment nie może tego scope poszerzyć;
+  - obsługiwane rodzaje to task, thread excerpt, checkpoint, entity, receipt,
+    plan, repo state i tool; priorytet wynika wyłącznie z rodzaju w kolejności
+    `task > checkpoint > plan > receipt > repo_state > entity > thread_excerpt > tool`,
+    a remis rozstrzyga stabilny `provenance.reference`;
+  - task i checkpoint są wymagane dokładnie raz; ich brak, duplikat albo budżet
+    zbyt mały na oba kończy się typed error zamiast niepełnego kontekstu;
+  - budżet jest dodatnim limitem bajtów UTF-8 treści fragmentów; fragmenty nie są
+    obcinane, a opcjonalny fragment, który się nie mieści, jest raportowany jako
+    pominięty; dopasowanie dokładnie do granicy jest dozwolone;
+  - każdy wybrany i pominięty fragment zachowuje jawne provenance i trust;
+    treść z eventów/providers oraz model-derived checkpointu jest
+    `UNTRUSTED_DATA` i caller nie może oznaczyć jej jako trusted;
+  - fragmenty entity/thread/receipt muszą odpowiadać case, ownerowi, providerowi
+    i connection allowlist; tool musi być na systemowej allowliście i nie może
+    nieść scope zaproponowanego przez model; każde naruszenie failuje typed scope
+    error zamiast cichego odfiltrowania;
+  - wynik i kolejność pominięć są identyczne niezależnie od kolejności wejścia,
+    a zduplikowany `provenance.reference` jest odrzucany.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/context-builder.test.ts`.
 - Out of scope: persistence i model invocation.
-- Sol gate: golden order przy granicznych budżetach i cross-account fixtures.
+- Sol gate: golden order przy granicznych budżetach; missing/duplicate mandatory;
+  cross-case, cross-owner, cross-provider, cross-connection i disallowed-tool
+  fixtures; wejście nie jest mutowane.
 
 ## `RA-008-WU-03` — Checkpoint patch application
 
