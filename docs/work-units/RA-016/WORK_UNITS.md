@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `13`
+- Plan revision: `14`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -58,8 +58,8 @@
 | `RA-016-WU-03` | `ACCEPTED` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
 | `RA-016-WU-04` | `ACCEPTED` | read-only REST client i stale-safe enrichment | WU-03 |
 | `RA-016-WU-05A` | `ACCEPTED` | bounded Jira-to-Discord projection | WU-03, WU-04 |
-| `RA-016-WU-05B` | `RUNNING` | scoped correlation lookup i durable receipt | WU-05A |
-| `RA-016-WU-05C` | `BLOCKED` | atomic case/entity/binding/outbox correlation | WU-05B |
+| `RA-016-WU-05B` | `ACCEPTED` | scoped correlation lookup i durable receipt | WU-05A |
+| `RA-016-WU-05C` | `READY` | atomic case/entity/binding/outbox correlation | WU-05B |
 | `RA-016-WU-06` | `BLOCKED` | webhook registration health i renewal | WU-02, WU-04, WU-05C |
 | `RA-016-WU-07` | `BLOCKED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
 | `RA-016-WU-08` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-05C, WU-07 |

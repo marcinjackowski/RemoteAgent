@@ -13,3 +13,4 @@ export * from "./decision-waiting.js";
 export * from "./decision-resume.js";
 export * from "./case-recovery.js";
 export * from "./work-unit.js";
+export * from "./jira-correlation.js";
