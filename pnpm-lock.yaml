@@ -95,6 +95,9 @@ importers:
       '@remoteagent/database':
         specifier: workspace:*
         version: link:../database
+      '@remoteagent/discord':
+        specifier: workspace:*
+        version: link:../discord
       jose:
         specifier: 6.2.8
         version: 6.2.8
