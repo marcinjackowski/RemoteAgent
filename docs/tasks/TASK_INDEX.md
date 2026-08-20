@@ -35,12 +35,12 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 | 8 | [RA-008](RA-008.md) Checkpoints, context and decisions | DONE | RA-002, RA-003, RA-004, RA-007 | M1 |
 | 9 | [RA-009](RA-009.md) Multi-agent orchestrator | DONE | RA-004, RA-006, RA-007, RA-008 | M1 |
 | 10 | [RA-010](RA-010.md) Isolated workspace runner | DONE | RA-001, RA-003, RA-004, RA-005 | M2 |
-| 11 | [RA-011](RA-011.md) Repository discovery and planning | BLOCKED | RA-008, RA-010 | M2 |
-| 12 | [RA-012](RA-012.md) Implementation toolset | BLOCKED_BY_DEPENDENCIES | RA-005, RA-007, RA-009, RA-010, RA-011 | M2 |
+| 11 | [RA-011](RA-011.md) Repository discovery and planning | DONE | RA-008, RA-010 | M2 |
+| 12 | [RA-012](RA-012.md) Implementation toolset | IN_PROGRESS | RA-005, RA-007, RA-009, RA-010, RA-011 | M2 |
 | 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012 | M2 |
 | 14 | [RA-014](RA-014.md) Local Git lifecycle | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012, RA-013 | M2 |
 | 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
-| 16 | [RA-016](RA-016.md) Jira connector | BLOCKED | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
+| 16 | [RA-016](RA-016.md) Jira connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
 | 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
 | 18 | [RA-018](RA-018.md) Golden path and concurrency proof | BLOCKED_BY_DEPENDENCIES | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
 | 19 | [RA-019](RA-019.md) Gmail two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
@@ -69,6 +69,20 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 - [RA-009 work units](../work-units/RA-009/WORK_UNITS.md)
 - [RA-010 work units](../work-units/RA-010/WORK_UNITS.md)
 - [RA-011 work units](../work-units/RA-011/WORK_UNITS.md)
+- [RA-012 work units](../work-units/RA-012/WORK_UNITS.md)
+- [RA-013 work units](../work-units/RA-013/WORK_UNITS.md) — `DRAFT`
+- [RA-014 work units](../work-units/RA-014/WORK_UNITS.md) — `DRAFT`
+- [RA-015 work units](../work-units/RA-015/WORK_UNITS.md) — `DRAFT`
+- [RA-017 work units](../work-units/RA-017/WORK_UNITS.md) — `DRAFT`
+- [RA-018 work units](../work-units/RA-018/WORK_UNITS.md) — `DRAFT`
+- [RA-019 work units](../work-units/RA-019/WORK_UNITS.md) — `DRAFT`
+- [RA-020 work units](../work-units/RA-020/WORK_UNITS.md) — `DRAFT`
+- [RA-021 work units](../work-units/RA-021/WORK_UNITS.md) — `DRAFT`
+- [RA-022 work units](../work-units/RA-022/WORK_UNITS.md) — `DRAFT`
+- [RA-023 work units](../work-units/RA-023/WORK_UNITS.md) — `DRAFT`
+- [RA-024 work units](../work-units/RA-024/WORK_UNITS.md) — `DRAFT`
+- [RA-025 work units](../work-units/RA-025/WORK_UNITS.md) — `DRAFT`
+- [RA-026 work units](../work-units/RA-026/WORK_UNITS.md) — `DRAFT`
 - [RA-016 work units](../work-units/RA-016/WORK_UNITS.md)
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
