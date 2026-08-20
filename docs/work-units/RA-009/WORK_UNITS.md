@@ -3,11 +3,11 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `01`
+- Plan revision: `02`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
-- Plan status: `DRAFT`; aktywacja po `RA-004`, `RA-006`, `RA-007`, `RA-008 DONE`
-- Base commit/tree: ustala Sol przy aktywacji
+- Plan status: `ACTIVE`
+- Base commit/tree: `55b1041a78d08d7f73867ffcb0875c90aab8efbc`
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/agent-orchestrator/test`
 
 ## Global boundaries
@@ -20,7 +20,7 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-009-WU-01` | `DRAFT` | role registry i wersjonowane prompt manifests | — |
+| `RA-009-WU-01` | `READY` | role registry i wersjonowane prompt manifests | — |
 | `RA-009-WU-02` | `BLOCKED` | czysta state machine Supervisora | WU-01 |
 | `RA-009-WU-03` | `BLOCKED` | trwały work-unit/run repository | WU-02 |
 | `RA-009-WU-04` | `BLOCKED` | mailbox, semaphores i fairness | WU-03 |
@@ -34,7 +34,9 @@
 - Result: registry wiąże semantic role z wersją promptu, modelem i tool manifestem.
 - Allowed paths: `packages/agent-orchestrator/src/roles/registry.ts`,
   `roles/types.ts`, `roles/prompts.ts`, `test/role-registry.test.ts`, `src/index.ts`.
-- Context pack: WorkUnit/AgentRole contracts, RA-009 scope, model-selection feedback.
+- Context pack: `docs/tasks/RA-009.md`,
+  `packages/contracts/src/{work-unit,agent-run,agent-completion,tool}.ts`, ADR-0004
+  wyłącznie jako rozdzielenie procesu budowy od model-neutralnego runtime.
 - Acceptance: role i model identity są rozdzielone; unknown version failuje;
   implementer jest jedyną rolą write-enabled.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/role-registry.test.ts`.
