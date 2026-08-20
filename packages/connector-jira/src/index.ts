@@ -17,3 +17,4 @@ export * from "./rest/transport.js";
 export * from "./rest/client.js";
 export * from "./enrichment.js";
 export * from "./projection.js";
+export * from "./correlation.js";

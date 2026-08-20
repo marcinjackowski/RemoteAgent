@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `15`
+- Plan revision: `16`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -59,8 +59,8 @@
 | `RA-016-WU-04` | `ACCEPTED` | read-only REST client i stale-safe enrichment | WU-03 |
 | `RA-016-WU-05A` | `ACCEPTED` | bounded Jira-to-Discord projection | WU-03, WU-04 |
 | `RA-016-WU-05B` | `ACCEPTED` | scoped correlation lookup i durable receipt | WU-05A |
-| `RA-016-WU-05C` | `RUNNING` | atomic case/entity/binding/outbox correlation | WU-05B |
-| `RA-016-WU-06` | `BLOCKED` | webhook registration health i renewal | WU-02, WU-04, WU-05C |
+| `RA-016-WU-05C` | `ACCEPTED` | atomic case/entity/binding/outbox correlation | WU-05B |
+| `RA-016-WU-06` | `RUNNING` | webhook registration health i renewal | WU-02, WU-04, WU-05C |
 | `RA-016-WU-07` | `BLOCKED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
 | `RA-016-WU-08` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-05C, WU-07 |
 
@@ -183,8 +183,9 @@
 - Result: issue key wiąże się idempotentnie z entity/case i projektuje do
   autorytatywnego kanału `#jira`/thread.
 - Allowed paths: `src/correlation.ts`, `test/correlation.integration.test.ts`,
-  `src/index.ts`, `package.json`, `pnpm-lock.yaml` oraz wyłącznie konieczne
-  publiczne exporty/adapters `packages/discord`.
+  `src/index.ts`, `package.json`, `pnpm-lock.yaml`, konieczny publiczny lookup
+  receiptu w `packages/database/src/repositories/jira-correlation.ts` oraz
+  wyłącznie konieczne publiczne exporty/adapters `packages/discord`.
 - Context pack: WU-05A/B, RA-003 entity/case repositories, RA-006 routing/outbox.
 - Acceptance: całość działa w jednej transakcji po per-connection/issue advisory
   lock. Durable receipt jest keyed exact normalized `event_id`, zawiera canonical

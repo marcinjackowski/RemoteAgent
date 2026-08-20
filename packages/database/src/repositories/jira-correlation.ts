@@ -2,6 +2,11 @@ import type { Transaction, Queryable } from "../client.js";
 import { translatePgError } from "../client.js";
 import * as z from "zod";
 const idSchema = z.string().min(1).max(512);
+const scopedLookupSchema = z.strictObject({
+  ownerId: idSchema,
+  connectionId: idSchema,
+  issueKey: z.string().min(1).max(128),
+});
 const receiptSchema = z.strictObject({
   eventId: idSchema,
   ownerId: idSchema,
@@ -38,25 +43,29 @@ export class JiraCorrelationConflictError extends Error {
   }
 }
 export class JiraCorrelationRepository {
+  public async findByEventId(q: Queryable, eventId: string): Promise<JiraProjectionReceipt | null> {
+    const valid = idSchema.safeParse(eventId);
+    if (!valid.success) throw new JiraCorrelationConflictError();
+    const result = await q.query<JiraProjectionReceipt>(
+      'SELECT event_id AS "eventId", owner_id AS "ownerId", connection_id AS "connectionId", issue_key AS "issueKey", case_id AS "caseId", entity_id AS "entityId", outbox_id AS "outboxId", canonical_digest AS "canonicalDigest" FROM jira_projection_receipts WHERE event_id=$1',
+      [valid.data],
+    );
+    return result.rows[0] ?? null;
+  }
+
   public async findScoped(
     q: Queryable,
     ownerId: string,
     connectionId: string,
     issueKey: string,
   ): Promise<JiraScopedEntityRow | null> {
-    const valid = z
-      .strictObject({
-        ownerId: idSchema,
-        connectionId: idSchema,
-        issueKey: z.string().min(1).max(128),
-      })
-      .safeParse({ ownerId, connectionId, issueKey });
+    const valid = scopedLookupSchema.safeParse({ ownerId, connectionId, issueKey });
     if (!valid.success) throw new JiraCorrelationConflictError();
     return (
       (
         await q.query<JiraScopedEntityRow>(
           "SELECT entity_id, case_id, owner_id, connection_id, provider, kind, external_id FROM external_entities WHERE owner_id=$1 AND connection_id=$2 AND provider='jira' AND kind='jira_issue' AND external_id=$3",
-          [ownerId, connectionId, issueKey],
+          [valid.data.ownerId, valid.data.connectionId, valid.data.issueKey],
         )
       ).rows[0] ?? null
     );
@@ -83,7 +92,7 @@ export class JiraCorrelationRepository {
       );
       const row = await tx.query<JiraProjectionReceipt>(
         'SELECT event_id AS "eventId", owner_id AS "ownerId", connection_id AS "connectionId", issue_key AS "issueKey", case_id AS "caseId", entity_id AS "entityId", outbox_id AS "outboxId", canonical_digest AS "canonicalDigest" FROM jira_projection_receipts WHERE event_id=$1',
-        [input.eventId],
+        [valid.data.eventId],
       );
       const existing = row.rows[0];
       if (
