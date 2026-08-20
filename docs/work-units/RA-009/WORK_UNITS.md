@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `16`
+- Plan revision: `17`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -27,7 +27,7 @@
 | `RA-009-WU-05` | `ACCEPTED` | single-writer lease i fencing | WU-03 |
 | `RA-009-WU-06` | `ACCEPTED` | read-only parallel merge | WU-04, WU-05 |
 | `RA-009-WU-07` | `ACCEPTED` | budgets, pause, cancel i waiting resume | WU-04 |
-| `RA-009-WU-08` | `READY` | restart/concurrency integration | WU-06, WU-07 |
+| `RA-009-WU-08` | `RUNNING` | restart/concurrency integration | WU-06, WU-07 |
 
 ## `RA-009-WU-01` — Role registry
 
@@ -141,13 +141,30 @@
 
 - Result: Supervisor odtwarza dwa cases po faultach bez replay completed units.
 - Allowed paths: `src/supervisor/runtime.ts`, `test/orchestrator.integration.test.ts`,
-  `test/orchestrator-recovery.integration.test.ts`, `test/fake-roles.ts`, `src/index.ts`.
+  `test/orchestrator-recovery.integration.test.ts`, `test/fake-roles.ts`, `src/index.ts`
+  oraz, wyłącznie gdy brakuje publicznego zapytania potrzebnego do recovery,
+  `packages/database/src/repositories/work-unit.ts` i `case-recovery.ts` wraz z
+  ich istniejącymi testami.
 - Context pack: wszystkie zaakceptowane RA-009 units i RA-007/008 public APIs.
-- Acceptance: dwa cases równolegle w limitach; jeden writer per case; restart w
-  każdym boundary nie duplikuje completion.
+- Acceptance: runtime jest bounded i model-neutralny, a trwałe repozytoria są
+  źródłem prawdy; in-memory scheduler może być tylko odbudowywalnym cache. Dwa
+  cases robią postęp równolegle bez przekroczenia limitu globalnego i limitów
+  providera. Implementer zachowuje dokładnie jeden aktywny writer per case oraz
+  zaakceptowany fencing token, podczas gdy Reviewer i Verification mogą działać
+  równolegle jako read-only i są scalane deterministycznie. Restart odtwarza
+  PENDING/DISPATCHED/RUNNING/terminal state z DB: potwierdzone completion nie
+  wywołuje roli ponownie, a RUNNING bez potwierdzonego wyniku nie jest ślepo
+  replayowane i kończy się jawnym stanem ambiguous/blocked. WAITING zamyka run,
+  a odpowiedź użytkownika tworzy nowy run przez zaakceptowany mechanizm RA-008.
+  Fake roles rejestrują dokładną liczbę wywołań i nie używają prawdziwych modeli.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/agent-orchestrator/test/orchestrator.integration.test.ts packages/agent-orchestrator/test/orchestrator-recovery.integration.test.ts`.
 - Out of scope: real coding tools.
-- Sol gate: fault-injection matrix i reviewed prompt snapshots.
+- Sol gate: real-PG fault-injection przed claimem, po claim/start oraz po trwałym
+  completion przed lokalnym ack; restart nie duplikuje wywołania ani completion.
+  Test obejmuje co najmniej dwa cases, global limit `2`, provider limits, writer
+  fencing, read-only merge i liczniki fake roles. `pumpOnce`/odpowiednik jest
+  deterministycznie bounded bez endless loop, sleep ani zależności od wall clock;
+  reviewed prompt snapshots nie zawierają sekretów ani prywatnego chain-of-thought.
 
 ## Final task gate
 
