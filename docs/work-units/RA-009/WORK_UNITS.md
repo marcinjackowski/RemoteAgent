@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `17`
+- Plan revision: `18`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -27,7 +27,7 @@
 | `RA-009-WU-05` | `ACCEPTED` | single-writer lease i fencing | WU-03 |
 | `RA-009-WU-06` | `ACCEPTED` | read-only parallel merge | WU-04, WU-05 |
 | `RA-009-WU-07` | `ACCEPTED` | budgets, pause, cancel i waiting resume | WU-04 |
-| `RA-009-WU-08` | `RUNNING` | restart/concurrency integration | WU-06, WU-07 |
+| `RA-009-WU-08` | `ACCEPTED` | restart/concurrency integration | WU-06, WU-07 |
 
 ## `RA-009-WU-01` — Role registry
 

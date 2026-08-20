@@ -31,3 +31,4 @@ export * from "./supervisor/parallel.js";
 export * from "./supervisor/merge.js";
 export * from "./supervisor/budget.js";
 export * from "./supervisor/control.js";
+export * from "./supervisor/runtime.js";
