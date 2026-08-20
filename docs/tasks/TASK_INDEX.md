@@ -40,8 +40,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 11 | [RA-011](RA-011.md) Repository discovery and planning | DONE | RA-008, RA-010 | M2 |
 | 12 | [RA-012](RA-012.md) Implementation toolset | DONE | RA-005, RA-007, RA-009, RA-010, RA-011 | M2 |
 | 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | DONE | RA-010, RA-012 | M2 |
-| 14 | [RA-014](RA-014.md) Local Git lifecycle | READY | RA-010, RA-012, RA-013 | M2 |
-| 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
+| 14 | [RA-014](RA-014.md) Local Git lifecycle | DONE | RA-010, RA-012, RA-013 | M2 |
+| 15 | [RA-015](RA-015.md) Independent review and fix loop | READY | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
 | 16 | [RA-016](RA-016.md) Jira connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
 | 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
 | 18 | [RA-018](RA-018.md) Golden path and concurrency proof | BLOCKED_BY_DEPENDENCIES | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
@@ -72,8 +72,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-010 work units](../work-units/RA-010/WORK_UNITS.md)
 - [RA-011 work units](../work-units/RA-011/WORK_UNITS.md)
 - [RA-012 work units](../work-units/RA-012/WORK_UNITS.md)
-- [RA-013 work units](../work-units/RA-013/WORK_UNITS.md) — `DRAFT`
-- [RA-014 work units](../work-units/RA-014/WORK_UNITS.md) — `DRAFT`
+- [RA-013 work units](../work-units/RA-013/WORK_UNITS.md)
+- [RA-014 work units](../work-units/RA-014/WORK_UNITS.md)
 - [RA-015 work units](../work-units/RA-015/WORK_UNITS.md) — `DRAFT`
 - [RA-017 work units](../work-units/RA-017/WORK_UNITS.md) — `DRAFT`
 - [RA-018 work units](../work-units/RA-018/WORK_UNITS.md) — `DRAFT`
