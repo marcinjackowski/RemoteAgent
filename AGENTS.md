@@ -3,12 +3,28 @@
 Ten plik jest nadrzędnym kontraktem pracy dla całego repozytorium. Rozdziela
 planowanie i audyt od implementacji:
 
-- rolę `COORDINATOR_AUDITOR` wykonuje Sol;
-- rolę `IMPLEMENTER` wykonuje `GPT-5.6 Luna` z reasoning effort `medium`;
+- rolę `COORDINATOR_AUDITOR` wykonuje `Claude Opus 5`;
+- rolę `IMPLEMENTER` wykonuje `Claude Opus 4.8`
+  (`amazon-bedrock/us.anthropic.claude-opus-4-8`, `variant: high`), uruchamiany
+  wyłącznie jako osobny subagent w świeżej, ephemerycznej sesji per work unit;
 - model identity jest konfiguracją, a powyższe role są stabilnym kontraktem.
 
-Sol nie deleguje Lunie planowania ani audytu. Luna nie wybiera sobie taska,
-nie rozszerza zakresu i nie zatwierdza własnej pracy.
+Obowiązująca decyzja o model identity:
+[ADR-0006](docs/decisions/ADR-0006-opus48-implementer.md), która zastąpiła
+ADR-0005. Nazwy `Sol` (koordynator/audytor) i `Luna` (implementer) występujące
+dalej w tym pliku oraz w `docs/workflow/` są **aliasami ról**, nie tożsamościami
+modeli; rozwiązuje je powyższy blok. Historyczne handoffy i audyty zachowują
+oryginalne nazwy oraz zapisany wtedy model jako stan z chwili powstania.
+
+Separację `IMPLEMENTER` od `COORDINATOR_AUDITOR` zapewniają trzy warstwy: różny
+model, granica sesji z zamkniętym context packiem oraz deterministyczne
+permissions harnessu (allowlista ścieżek zapisu per work unit, zakaz odczytu
+planów i historii audytowej, zakaz commitów i remote writes). Implementer widzi
+wyłącznie swój work unit, a audytor wydaje werdykt z odczytu rzeczywistego diffu i
+własnego uruchomienia testów — nigdy z raportu implementera.
+
+Koordynator nie deleguje implementerowi planowania ani audytu. Implementer nie
+wybiera sobie taska, nie rozszerza zakresu i nie zatwierdza własnej pracy.
 
 ## Dokumenty obowiązkowe
 

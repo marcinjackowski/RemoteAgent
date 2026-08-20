@@ -1,9 +1,12 @@
-# Bedrock Opus 4.8 worker (legacy)
+# Bedrock Opus 4.8 worker (fallback transport)
 
-> Ten worker nie jest już domyślnym implementerem procesu budowy repozytorium.
-> Aktualny flow używa Sol high jako koordynatora/audytora i GPT-5.6 Luna medium
-> jako implementera; zob. `docs/workflow/LUNA_IMPLEMENTER.md` i ADR-0004.
-> Skrypt pozostaje jako historyczne, przetestowane narzędzie i nie jest usuwany.
+> Ten worker nie jest domyślnym transportem implementera. Domyślny flow używa
+> `Opus 5` jako koordynatora/audytora i `Opus 4.8` jako implementera uruchamianego
+> przez agenta `implementer` (`opencode run --agent implementer`); zob.
+> `docs/workflow/LUNA_IMPLEMENTER.md` i ADR-0006. Ten skrypt pozostaje jako
+> przetestowany **fallback** na wypadek niedostępności tamtego dispatchu — używa
+> tego samego modelu (`us.anthropic.claude-opus-4-8`), ale jest zorientowany na
+> cały task i nie wstrzykuje per-unit allowlisty ścieżek.
 
 ## Cel
 

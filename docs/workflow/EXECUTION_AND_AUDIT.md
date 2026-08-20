@@ -8,14 +8,14 @@ wersjonowane handoffy i audyty — nie pamięć sesji modelu.
 
 ## Role
 
-### COORDINATOR_AUDITOR (Sol)
+### COORDINATOR_AUDITOR (Claude Opus 5 — zob. ADR-0006)
 
 Wybiera makro-task, planuje architekturę i rozpisuje atomowe work units. Przekazuje
 je lokalnemu implementerowi pojedynczo, kontroluje working tree, odtwarza testy i
 wydaje niezależny werdykt. Jest jedynym autorem planów, statusów kolejki i audytów.
 Nie implementuje kodu produktowego, który następnie audytuje.
 
-### IMPLEMENTER (GPT-5.6 Luna medium)
+### IMPLEMENTER (Claude Opus 4.8, variant high — zob. ADR-0006)
 
 Realizuje dokładnie jeden work unit w ephemerycznej sesji. Może edytować tylko
 dozwolone ścieżki i uruchomić wskazaną weryfikację. Nie wybiera taska, nie
@@ -105,10 +105,11 @@ Sol serializuje zmiany statusów, planów, handoffów, audytów i integracyjne g
 ## Cykl pojedynczego work unit
 
 1. Sol wykonuje preflight z `docs/workflow/LUNA_IMPLEMENTER.md`.
-2. Sol uruchamia `GPT-5.6 Luna` z effort `medium` w nowej ephemerycznej sesji z
-   rolą `IMPLEMENTER`.
-3. Luna czyta tylko context pack, edytuje dozwolone ścieżki, uruchamia wskazaną
-   komendę i zwraca krótki raport.
+2. Sol uruchamia implementera zgodnie z ADR-0006 (`Claude Opus 4.8`, `variant: high`)
+   w nowej ephemerycznej sesji z rolą `IMPLEMENTER`, z allowlistą ścieżek
+   egzekwowaną przez permissions harnessu, nie tylko treścią promptu.
+3. Implementer czyta tylko context pack, edytuje dozwolone ścieżki, uruchamia
+   wskazaną komendę i zwraca krótki raport.
 4. Sol porównuje rzeczywisty diff z allowlistą. Zmiana poza zakresem oznacza
    odrzucenie unit albo Decision Request, nie cichą akceptację.
 5. Sol czyta zmienione przepływy i sam ponawia celowaną weryfikację.

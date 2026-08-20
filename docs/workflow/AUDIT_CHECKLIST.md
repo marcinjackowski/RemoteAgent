@@ -60,13 +60,20 @@ poniższe punkty.
 - Czy operator potrafi rozpoznać i naprawić stan bez ręcznej edycji DB?
 - Czy dokumentacja i runbook odpowiadają rzeczywistemu zachowaniu?
 
-## 8. Niezależność Sol/Luna
+## 8. Niezależność koordynatora i implementera
 
-- Czy plan i kryteria powstały przed implementacją i były autorstwa Sol?
-- Czy Luna edytowała wyłącznie dozwolone ścieżki jednego work unit?
-- Czy Luna nie zmieniła task index, planu, handoffu, audytu ani decyzji?
-- Czy Sol przeczytał pełny diff od bazowego tree, a nie tylko raport modelu?
-- Czy Sol ponowił celowane testy i pełną weryfikację taska?
+- Czy plan i kryteria powstały przed implementacją i były autorstwa koordynatora?
+- Czy implementer edytował wyłącznie dozwolone ścieżki jednego work unit?
+- Czy implementer nie zmienił task index, planu, handoffu, audytu ani decyzji?
+- Czy koordynator przeczytał pełny diff od bazowego tree, a nie tylko raport
+  implementera?
+- Czy koordynator ponowił celowane testy i pełną weryfikację taska?
+- Czy audyt jawnie odnotowuje, że werdykt powstał z odczytu diffu i własnego
+  uruchomienia testów, a nie z raportu implementera? Od ADR-0006 role dzieli
+  również model (`Opus 5` audytuje, `Opus 4.8` implementuje), ale różnica modelu
+  **nie jest** dowodem poprawności — dowodem jest samodzielnie odtworzony wynik.
+- Czy allowed paths unitu były egzekwowane przez permissions harnessu, a diff
+  potwierdza, że żaden plik poza nimi nie został zmieniony?
 - Czy findingi są opisane przed utworzeniem fix units, bez edycji kodu podczas
   audytu?
 
