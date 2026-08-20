@@ -5,7 +5,11 @@ import { ChannelRegistry } from "@remoteagent/discord";
 import { createTestDatabase } from "../../database/test/harness.js";
 import { describeIntegration, ensurePostgres } from "../../database/test/integration-base.js";
 import { JiraContractError } from "../src/errors.js";
-import { correlateJiraIssue, correlateJiraIssueInTransaction } from "../src/correlation.js";
+import {
+  correlateJiraIssue,
+  correlateJiraIssueInTransaction,
+  replayJiraCorrelationInTransaction,
+} from "../src/correlation.js";
 
 const available = await ensurePostgres();
 
@@ -75,6 +79,326 @@ describeIntegration(
           "SELECT (SELECT count(*) FROM cases)::text cases, (SELECT count(*) FROM external_entities)::text entities, (SELECT count(*) FROM discord_case_bindings)::text bindings, (SELECT count(*) FROM outbox)::text outbox, (SELECT count(*) FROM outbox_dispatch)::text dispatch, (SELECT count(*) FROM jira_projection_receipts)::text receipts",
         )
       ).rows[0];
+
+    const durableState = async () => ({
+      cases: (await db.query("SELECT * FROM cases ORDER BY case_id")).rows,
+      entities: (await db.query("SELECT * FROM external_entities ORDER BY entity_id")).rows,
+      bindings: (await db.query("SELECT * FROM discord_case_bindings ORDER BY case_id")).rows,
+      outbox: (await db.query("SELECT * FROM outbox ORDER BY outbox_id")).rows,
+      dispatch: (await db.query("SELECT * FROM outbox_dispatch ORDER BY outbox_id")).rows,
+      receipts: (await db.query("SELECT * FROM jira_projection_receipts ORDER BY event_id")).rows,
+    });
+    const replayOptions = () => ({
+      ownerId: "owner-1",
+      connectionId: "conn-1",
+      channelRegistry: channels,
+    });
+    const expectReplayRejected = async (input: unknown, options = replayOptions()) => {
+      await expect(
+        db.withTransaction((tx) => replayJiraCorrelationInTransaction(tx, input, options)),
+      ).rejects.toBeInstanceOf(JiraContractError);
+    };
+    const insertReplayFixture = async (input: {
+      eventId: string;
+      caseId: string;
+      entityId: string;
+      outboxId: string;
+      eventType?: string;
+      aggregate?: string;
+      payload: unknown;
+      dispatch?: boolean;
+    }) => {
+      await db.withTransaction(async (tx) => {
+        await tx.query(
+          "INSERT INTO outbox(outbox_id,aggregate,aggregate_id,event_type,payload) VALUES($1,$2,$3,$4,$5::jsonb)",
+          [
+            input.outboxId,
+            input.aggregate ?? "discord_case",
+            input.caseId,
+            input.eventType ?? "discord.root_thread",
+            JSON.stringify(input.payload),
+          ],
+        );
+        if (input.dispatch !== false)
+          await tx.query("INSERT INTO outbox_dispatch(outbox_id) VALUES($1)", [input.outboxId]);
+        await tx.query(
+          "INSERT INTO jira_projection_receipts(event_id,owner_id,connection_id,issue_key,case_id,entity_id,outbox_id,canonical_digest) VALUES($1,'owner-1','conn-1','PROJ-1',$2,$3,$4,$5)",
+          [
+            input.eventId,
+            input.caseId,
+            input.entityId,
+            input.outboxId,
+            `sha256:${createHash("sha256").update(input.eventId).digest("hex")}`,
+          ],
+        );
+      });
+    };
+
+    it("returns null without a receipt and performs no writes or ID allocation", async () => {
+      const before = await durableState();
+      const result = await db.withTransaction((tx) =>
+        replayJiraCorrelationInTransaction(
+          tx,
+          { eventId: "missing-replay", issueKey: "PROJ-1" },
+          { ownerId: "owner-1", connectionId: "conn-1", channelRegistry: channels },
+        ),
+      );
+      expect(result).toBeNull();
+      expect(await durableState()).toEqual(before);
+    });
+
+    it("replays from durable scoped state with identical independent reads", async () => {
+      const first = await correlateJiraIssue(
+        { eventId: "durable-replay", issueKey: "PROJ-1", status: "Open", summary: "Summary" },
+        options(),
+      );
+      const before = await durableState();
+      const replayOptions = {
+        ownerId: "owner-1",
+        connectionId: "conn-1",
+        channelRegistry: channels,
+      };
+      const one = await db.withTransaction((tx) =>
+        replayJiraCorrelationInTransaction(
+          tx,
+          { eventId: "durable-replay", issueKey: "PROJ-1" },
+          replayOptions,
+        ),
+      );
+      const two = await db.withTransaction((tx) =>
+        replayJiraCorrelationInTransaction(
+          tx,
+          { issueKey: "PROJ-1", eventId: "durable-replay" },
+          replayOptions,
+        ),
+      );
+      expect(one).toEqual({ ...first, replay: true });
+      expect(two).toEqual(one);
+      expect(await durableState()).toEqual(before);
+    });
+
+    it("replays a durable thread message without REST-shaped fields", async () => {
+      const root = await correlateJiraIssue(
+        { eventId: "thread-root", issueKey: "PROJ-1" },
+        options(),
+      );
+      const thread = await correlateJiraIssue(
+        { eventId: "thread-event", issueKey: "PROJ-1", status: "Done" },
+        options(),
+      );
+      const replay = await db.withTransaction((tx) =>
+        replayJiraCorrelationInTransaction(
+          tx,
+          { eventId: "thread-event", issueKey: "PROJ-1" },
+          replayOptions(),
+        ),
+      );
+      expect(root.eventType).toBe("discord.root_thread");
+      expect(replay).toEqual({ ...thread, replay: true });
+    });
+
+    it("rejects strict input and foreign owner, connection, or issue scope", async () => {
+      await expectReplayRejected({ eventId: "missing", issueKey: "PROJ-1", summary: "forged" });
+      const first = await correlateJiraIssue(
+        { eventId: "scope-event", issueKey: "PROJ-1" },
+        options(),
+      );
+      await new OwnerRepository().insert(db, { ownerId: "owner-2", displayName: "owner two" });
+      await new ConnectionRepository().insert(db, {
+        connectionId: "conn-2",
+        ownerId: "owner-2",
+        provider: "jira",
+        alias: "private",
+        displayName: "jira two",
+      });
+      await expectReplayRejected(
+        { eventId: "scope-event", issueKey: "PROJ-1" },
+        { ownerId: "owner-2", connectionId: "conn-2", channelRegistry: channels },
+      );
+      await new ConnectionRepository().insert(db, {
+        connectionId: "conn-3",
+        ownerId: "owner-1",
+        provider: "jira",
+        alias: "private",
+        displayName: "jira three",
+      });
+      await expectReplayRejected(
+        { eventId: "scope-event", issueKey: "PROJ-1" },
+        { ownerId: "owner-1", connectionId: "conn-3", channelRegistry: channels },
+      );
+      await expectReplayRejected({ eventId: first.eventId, issueKey: "FOREIGN-1" });
+    });
+
+    it("rejects tampered entity and case scope without further writes", async () => {
+      const first = await correlateJiraIssue(
+        { eventId: "entity-root", issueKey: "PROJ-1" },
+        options(),
+      );
+      const second = await correlateJiraIssue(
+        { eventId: "case-root", issueKey: "PROJ-2" },
+        options(),
+      );
+      const beforeCase = await durableState();
+      await expect(
+        db.query("UPDATE jira_projection_receipts SET case_id=$2 WHERE event_id=$1", [
+          "entity-root",
+          second.caseId,
+        ]),
+      ).rejects.toThrow(/foreign key|append-only/i);
+      expect(await durableState()).toEqual(beforeCase);
+      const beforeEntity = await durableState();
+      await expect(
+        db.query("UPDATE external_entities SET external_id='FOREIGN-ENTITY' WHERE entity_id=$1", [
+          first.entityId,
+        ]),
+      ).rejects.toThrow(/foreign key|append-only/i);
+      expect(await durableState()).toEqual(beforeEntity);
+    });
+
+    it("rejects missing or wrong authoritative Discord binding", async () => {
+      const first = await correlateJiraIssue(
+        { eventId: "binding-event", issueKey: "PROJ-1" },
+        options(),
+      );
+      await db.query("DELETE FROM discord_case_bindings WHERE case_id=$1", [first.caseId]);
+      const missingBefore = await durableState();
+      await expectReplayRejected({ eventId: "binding-event", issueKey: "PROJ-1" });
+      expect(await durableState()).toEqual(missingBefore);
+      await db.query(
+        "INSERT INTO discord_case_bindings(case_id,owner_id,channel_id,next_seq,delivered_seq) VALUES($1,'owner-1','jira-channel',2,0)",
+        [first.caseId],
+      );
+      const restored = await correlateJiraIssue(
+        { eventId: "new-binding-event", issueKey: "PROJ-1" },
+        options(),
+      );
+      await db.query(
+        "UPDATE discord_case_bindings SET channel_id='wrong-channel' WHERE case_id=$1",
+        [restored.caseId],
+      );
+      const wrongBefore = await durableState();
+      await expectReplayRejected({ eventId: "new-binding-event", issueKey: "PROJ-1" });
+      expect(await durableState()).toEqual(wrongBefore);
+    });
+
+    it("rejects tampered aggregate, event type, strict payload, sequence, or dispatch", async () => {
+      const first = await correlateJiraIssue(
+        { eventId: "fixture-root", issueKey: "PROJ-1" },
+        options(),
+      );
+      const cases = [
+        {
+          eventId: "bad-aggregate",
+          outboxId: "bad-aggregate-outbox",
+          aggregate: "wrong",
+          payload: {
+            case_id: first.caseId,
+            owner_id: "owner-1",
+            seq: 1,
+            provider: "jira",
+            alias: "private",
+            title: "Jira PROJ-1",
+            body: "",
+          },
+        },
+        {
+          eventId: "bad-type",
+          outboxId: "bad-type-outbox",
+          eventType: "discord.status",
+          payload: {
+            case_id: first.caseId,
+            owner_id: "owner-1",
+            seq: 1,
+            provider: "jira",
+            alias: "private",
+            title: "Jira PROJ-1",
+            body: "",
+          },
+        },
+        {
+          eventId: "bad-extra",
+          outboxId: "bad-extra-outbox",
+          payload: {
+            case_id: first.caseId,
+            owner_id: "owner-1",
+            seq: 1,
+            provider: "jira",
+            alias: "private",
+            title: "Jira PROJ-1",
+            body: "",
+            secret: "forged",
+          },
+        },
+        {
+          eventId: "bad-seq",
+          outboxId: "bad-seq-outbox",
+          payload: {
+            case_id: first.caseId,
+            owner_id: "owner-1",
+            seq: 2,
+            provider: "jira",
+            alias: "private",
+            title: "Jira PROJ-1",
+            body: "",
+          },
+        },
+        {
+          eventId: "missing-dispatch",
+          outboxId: "missing-dispatch-outbox",
+          dispatch: false,
+          payload: {
+            case_id: first.caseId,
+            owner_id: "owner-1",
+            seq: 1,
+            provider: "jira",
+            alias: "private",
+            title: "Jira PROJ-1",
+            body: "",
+          },
+        },
+        {
+          eventId: "bad-thread-seq",
+          outboxId: "bad-thread-seq-outbox",
+          eventType: "discord.thread_message",
+          payload: { case_id: first.caseId, seq: 1, body: "" },
+        },
+        {
+          eventId: "bad-thread-extra",
+          outboxId: "bad-thread-extra-outbox",
+          eventType: "discord.thread_message",
+          payload: { case_id: first.caseId, seq: 2, body: "", secret: "forged" },
+        },
+      ] as const;
+      for (const fixture of cases) {
+        await insertReplayFixture({ ...fixture, caseId: first.caseId, entityId: first.entityId });
+        const before = await durableState();
+        await expectReplayRejected({ eventId: fixture.eventId, issueKey: "PROJ-1" });
+        expect(await durableState()).toEqual(before);
+      }
+      const aggregateFixture = "bad-aggregate-id";
+      await insertReplayFixture({
+        eventId: aggregateFixture,
+        caseId: first.caseId,
+        entityId: first.entityId,
+        outboxId: "bad-aggregate-id-outbox",
+        payload: {
+          case_id: first.caseId,
+          owner_id: "owner-1",
+          seq: 1,
+          provider: "jira",
+          alias: "private",
+          title: "Jira PROJ-1",
+          body: "",
+        },
+      });
+      const beforeAggregateId = await durableState();
+      await expect(
+        db.query("UPDATE outbox SET aggregate_id='foreign-case' WHERE outbox_id=$1", [
+          "bad-aggregate-id-outbox",
+        ]),
+      ).rejects.toThrow(/foreign key|append-only/i);
+      expect(await durableState()).toEqual(beforeAggregateId);
+    });
 
     it("atomically creates root and returns the same receipt on exact replay", async () => {
       const first = await correlateJiraIssue(

@@ -41,11 +41,30 @@ export interface JiraCorrelationResult {
   seq: number;
   eventType: "discord.root_thread" | "discord.thread_message";
 }
+export interface JiraCorrelationReplayOptions {
+  ownerId: string;
+  connectionId: string;
+  channelRegistry: Pick<ChannelRegistry, "routeChannelId">;
+}
 const correlationInputSchema = z.strictObject({
   eventId: z.string().trim().min(1).max(512),
   issueKey: z.string().trim().min(1).max(128),
   status: z.string().max(65_536).optional(),
   summary: z.string().max(65_536).optional(),
+});
+const replayInputSchema = z.strictObject({
+  eventId: z.string().trim().min(1).max(512),
+  issueKey: z.string().trim().min(1).max(128),
+});
+const replayReceiptSchema = z.strictObject({
+  eventId: z.string().trim().min(1).max(512),
+  ownerId: z.string().trim().min(1).max(512),
+  connectionId: z.string().trim().min(1).max(512),
+  issueKey: z.string().trim().min(1).max(128),
+  caseId: z.string().trim().min(1).max(512),
+  entityId: z.string().trim().min(1).max(512),
+  outboxId: z.string().trim().min(1).max(512),
+  canonicalDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
 });
 function digestFor(event: z.infer<typeof correlationInputSchema>): string {
   const canonical = JSON.stringify({
@@ -65,6 +84,131 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+export async function replayJiraCorrelationInTransaction(
+  tx: Transaction,
+  input: unknown,
+  options: JiraCorrelationReplayOptions,
+): Promise<JiraCorrelationResult | null> {
+  const parsed = replayInputSchema.safeParse(input);
+  if (!parsed.success) throw new JiraContractError("invalid jira correlation replay input");
+  const event = parsed.data;
+  const connection = await new ConnectionRepository().findById(tx, options.connectionId);
+  if (!connection || connection.provider !== "jira" || connection.owner_id !== options.ownerId)
+    throw new JiraContractError("jira connection scope rejected");
+  const channelId = options.channelRegistry.routeChannelId("jira", connection.alias);
+  const rawReceipt = await new JiraCorrelationRepository().findByEventId(tx, event.eventId);
+  if (rawReceipt === null) return null;
+  const receipt = replayReceiptSchema.safeParse(rawReceipt);
+  if (
+    !receipt.success ||
+    receipt.data.eventId !== event.eventId ||
+    receipt.data.ownerId !== options.ownerId ||
+    receipt.data.connectionId !== options.connectionId ||
+    receipt.data.issueKey !== event.issueKey
+  )
+    throw new JiraContractError("jira projection replay rejected");
+
+  const entity = await tx.query<{
+    entity_id: string;
+    case_id: string;
+    owner_id: string;
+    connection_id: string;
+    provider: string;
+    kind: string;
+    external_id: string;
+  }>(
+    "SELECT entity_id, case_id, owner_id, connection_id, provider, kind, external_id FROM external_entities WHERE entity_id=$1",
+    [receipt.data.entityId],
+  );
+  const entityRow = entity.rows[0];
+  if (
+    !entityRow ||
+    entityRow.case_id !== receipt.data.caseId ||
+    entityRow.owner_id !== options.ownerId ||
+    entityRow.connection_id !== options.connectionId ||
+    entityRow.provider !== "jira" ||
+    entityRow.kind !== "jira_issue" ||
+    entityRow.external_id !== event.issueKey
+  )
+    throw new JiraContractError("jira projection replay rejected");
+
+  const caseRow = await tx.query<{ case_id: string; owner_id: string }>(
+    "SELECT case_id, owner_id FROM cases WHERE case_id=$1",
+    [receipt.data.caseId],
+  );
+  if (!caseRow.rows[0] || caseRow.rows[0].owner_id !== options.ownerId)
+    throw new JiraContractError("jira projection replay rejected");
+
+  const binding = await tx.query<{
+    case_id: string;
+    owner_id: string;
+    channel_id: string;
+    next_seq: string;
+  }>(
+    "SELECT case_id, owner_id, channel_id, next_seq::text FROM discord_case_bindings WHERE case_id=$1",
+    [receipt.data.caseId],
+  );
+  const bindingRow = binding.rows[0];
+  const nextSeq = bindingRow === undefined ? NaN : Number(bindingRow.next_seq);
+  if (
+    !bindingRow ||
+    bindingRow.case_id !== receipt.data.caseId ||
+    bindingRow.owner_id !== options.ownerId ||
+    bindingRow.channel_id !== channelId ||
+    !Number.isSafeInteger(nextSeq) ||
+    nextSeq < 2
+  )
+    throw new JiraContractError("jira projection replay rejected");
+
+  const outbox = await tx.query<{
+    event_type: string;
+    aggregate: string;
+    aggregate_id: string;
+    payload: unknown;
+  }>("SELECT event_type, aggregate, aggregate_id, payload FROM outbox WHERE outbox_id=$1", [
+    receipt.data.outboxId,
+  ]);
+  const outboxRow = outbox.rows[0];
+  if (
+    !outboxRow ||
+    outboxRow.aggregate !== "discord_case" ||
+    outboxRow.aggregate_id !== receipt.data.caseId ||
+    (outboxRow.event_type !== DISCORD_EVENT_TYPES.ROOT_THREAD &&
+      outboxRow.event_type !== DISCORD_EVENT_TYPES.THREAD_MESSAGE)
+  )
+    throw new JiraContractError("jira projection replay rejected");
+  const payload =
+    outboxRow.event_type === DISCORD_EVENT_TYPES.ROOT_THREAD
+      ? rootThreadPayload.safeParse(outboxRow.payload)
+      : threadMessagePayload.safeParse(outboxRow.payload);
+  if (!payload.success || payload.data.case_id !== receipt.data.caseId)
+    throw new JiraContractError("jira projection replay rejected");
+  const seq = payload.data.seq;
+  if (
+    (outboxRow.event_type === DISCORD_EVENT_TYPES.ROOT_THREAD &&
+      (seq !== 1 ||
+        !("owner_id" in payload.data) ||
+        payload.data.owner_id !== options.ownerId ||
+        payload.data.provider !== "jira" ||
+        payload.data.alias !== connection.alias)) ||
+    (outboxRow.event_type === DISCORD_EVENT_TYPES.THREAD_MESSAGE && seq < 2) ||
+    seq >= nextSeq
+  )
+    throw new JiraContractError("jira projection replay rejected");
+  const dispatch = await tx.query("SELECT 1 FROM outbox_dispatch WHERE outbox_id=$1", [
+    receipt.data.outboxId,
+  ]);
+  if (dispatch.rows.length !== 1) throw new JiraContractError("jira projection replay rejected");
+  return {
+    replay: true,
+    eventId: receipt.data.eventId,
+    caseId: receipt.data.caseId,
+    entityId: receipt.data.entityId,
+    outboxId: receipt.data.outboxId,
+    seq,
+    eventType: outboxRow.event_type,
+  } satisfies JiraCorrelationResult;
 }
 export async function correlateJiraIssueInTransaction(
   tx: Transaction,
