@@ -3,10 +3,11 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `13`
-- Plan owner: `Sol / COORDINATOR_AUDITOR`
-- Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
-- Plan status: `BLOCKED`
+- Plan revision: `15`
+- Plan owner: `COORDINATOR_AUDITOR`
+- Implementer: `Claude Opus 5 / high / IMPLEMENTER` (zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md))
+- Plan status: `COMPLETED` — task `DONE` po audycie `PASS`
+  (`docs/audits/RA-011/AUDIT-02.md`)
 - Base commit/tree: `a9e25dca0d29d4c96b0ad9c7d78daa258abc7647`
 - Full-task verification: `pnpm vitest run packages/repository-planner/test`
 
@@ -38,7 +39,8 @@
 | `RA-011-WU-08` | `ACCEPTED` | stale-plan invalidation | WU-05, WU-06 |
 | `RA-011-WU-09` | `CHANGES_REQUESTED` | read-only Planner integration proof | WU-04, WU-07, WU-08 |
 | `RA-011-WU-09F` | `CHANGES_REQUESTED` | domknięcie snapshot/authority binding Plannera | WU-09 |
-| `RA-011-WU-09G` | `BLOCKED` | trwałe i niewymijalne bindingi Plannera | WU-09F |
+| `RA-011-WU-09G` | `CHANGES_REQUESTED` | trwałe i niewymijalne bindingi Plannera | WU-09F |
+| `RA-011-WU-09H` | `ACCEPTED` | weryfikowany serialized binding i task-ID gate | WU-09G |
 
 ## `RA-011-WU-01` — Repository, plan and read-port contracts
 
@@ -237,8 +239,44 @@
   testy obejmują oba proposal kinds i serialized restart; pełne contracts +
   repository-planner suite, typecheck, build, scoped lint/format i diff-check.
 
+## `RA-011-WU-09H` — Verified serialized binding and task-ID gate
+
+- Reset limitu: właściciel zresetował limit prób `2026-08-20` (opcja A, jeden
+  finalny fix unit). Zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md).
+- Result: `checkPlannerStaleness()` przestaje ufać polom serializowanego
+  `RepositoryProfileBuildResult` i wiąże plan z baseline bindingiem.
+- Allowed paths: `packages/repository-planner/src/planner.ts`,
+  `packages/repository-planner/test/planner.integration.test.ts`.
+- Context pack: `checkPlanStaleness` z `src/staleness.ts`; `buildRepositoryProfile`
+  i kanoniczna formuła `bindingDigest` z `src/profile.ts`; `canonicalSha256`
+  z `src/digest.ts`; `taskId` z `runPlanner`; istniejące `planner.integration.test.ts`.
+- Acceptance:
+  1. Oba `RepositoryProfileBuildResult` są runtime-parsowane: exact keys
+     (`profile`, `profileDigest`, `snapshotBinding`, `bindingDigest`), poprawny
+     `repositoryProfile`, `sha256Digest` dla `snapshotBinding.treeDigest`,
+     `idString` dla identity, przeliczony `profileDigest` oraz przeliczony
+     canonical `bindingDigest` z `{profileDigest, identity, treeDigest}`.
+     Rozbieżność daje typed błąd, nigdy `VALID`.
+  2. Przed zwrotem `VALID` sprawdzane jest
+     `plan.task_id === "task_" + baseline.bindingDigest.slice("sha256:".length)`;
+     plan z obcego bindingu daje typed mismatch albo `STALE`, nie `VALID`.
+  3. Testy pokrywają: forged serialized binding (podmieniony `bindingDigest`),
+     foreign case/workspace/tree w `snapshotBinding`, mutation-during-draft dla
+     `PLAN` i `DECISION`, oraz świeży restart z exact `plan_id`, `decision_id`
+     i decision binding.
+- Verification: `pnpm vitest run packages/contracts/test/repository-planning.test.ts packages/repository-planner/test`
+  z exit code `0`, następnie
+  `pnpm exec prettier --write packages/repository-planner/src/planner.ts packages/repository-planner/test/planner.integration.test.ts`.
+- Out of scope: zmiana contracts schemas, `src/staleness.ts`, `src/profile.ts`,
+  nowe pliki, `src/index.ts`, dokumentacja/statusy/handoffy/audyty, commit,
+  remote writes.
+- Coordinator gate: brak nowego publicznego API; `bindingDigest` jest przeliczany,
+  nie odczytywany; `task_id` gate działa dla obu kierunków; pełne contracts +
+  repository-planner suite, typecheck, build, scoped lint, scoped Prettier
+  `--check` i `git diff --check`.
+
 ## Final task gate
 
-Sol uruchamia full suite, sprawdza adversarial instruction precedence, bounded
-read tools, requirement coverage, DecisionRequest, stale invalidation i brak
-write capability. Następnie tworzy handoff oraz niezależny audyt RA-011.
+Koordynator uruchamia full suite, sprawdza adversarial instruction precedence,
+bounded read tools, requirement coverage, DecisionRequest, stale invalidation i
+brak write capability. Następnie tworzy handoff oraz niezależny audyt RA-011.

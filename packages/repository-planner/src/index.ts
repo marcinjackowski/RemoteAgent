@@ -55,6 +55,20 @@ export type { PlanCompilationErrorCode } from "./plan-errors.js";
 export { checkPlanStaleness, PlanStalenessError } from "./staleness.js";
 export type { PlanStaleReason, PlanStalenessInput, PlanStalenessResult } from "./staleness.js";
 export {
+  buildPlannerProfile,
+  checkPlannerStaleness,
+  createPlannerContext,
+  PlannerContextError,
+  runPlanner,
+} from "./planner.js";
+export type {
+  PlannerDraftPort,
+  PlannerResult,
+  PlannerServerInput,
+  PlannerStalenessInput,
+  PlannerWorkspaceContext,
+} from "./planner.js";
+export {
   PlanningAmbiguityClass,
   PlanningDecisionError,
   createPlanningDecision,
