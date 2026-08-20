@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `22`
+- Plan revision: `23`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -32,11 +32,11 @@
 | `RA-008-WU-06` | `ACCEPTED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07A` | `ACCEPTED` | deterministyczny derived compaction manifest | WU-02, WU-03 |
 | `RA-008-WU-07B` | `ACCEPTED` | bezpieczna integracja compaction z builderem | WU-07A |
-| `RA-008-WU-08A` | `FIX_REQUIRED` | spójny trwały snapshot recovery | WU-04B, WU-05C |
-| `RA-008-WU-08A-F1` | `SOURCE_ACCEPTED` | fail-closed mapping snapshotu | WU-08A |
-| `RA-008-WU-08A-F2` | `PARTIAL` | real-PG happy path i legalne statusy | WU-08A-F1 |
-| `RA-008-WU-08A-F3` | `READY` | brakujące recovery negative proofs | WU-08A-F2 |
-| `RA-008-WU-08B` | `BLOCKED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
+| `RA-008-WU-08A` | `ACCEPTED` | spójny trwały snapshot recovery | WU-04B, WU-05C |
+| `RA-008-WU-08A-F1` | `ACCEPTED` | fail-closed mapping snapshotu | WU-08A |
+| `RA-008-WU-08A-F2` | `ACCEPTED` | real-PG happy path i legalne statusy | WU-08A-F1 |
+| `RA-008-WU-08A-F3` | `ACCEPTED` | brakujące recovery negative proofs | WU-08A-F2 |
+| `RA-008-WU-08B` | `READY` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
 | `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
@@ -317,7 +317,7 @@
 
 ## `RA-008-WU-08A` — Durable recovery snapshot
 
-- Status: `FIX_REQUIRED`
+- Status: `ACCEPTED`
 - Result: jedna read-only operacja zwraca spójny, runtime-validated snapshot
   autorytatywnego stanu case potrzebnego po restarcie.
 - Allowed paths: `packages/database/src/repositories/case-recovery.ts`,
@@ -341,7 +341,7 @@
 
 ## `RA-008-WU-08A-F1` — Recovery snapshot mapper fixes
 
-- Status: `SOURCE_ACCEPTED`
+- Status: `ACCEPTED`
 - Result: snapshot nie maskuje niespójnych persisted fields i przechodzi
   source-level type/lint/format gate.
 - Allowed paths: takie same jak WU-08A.
@@ -360,7 +360,7 @@
 
 ## `RA-008-WU-08A-F2` — Recovery snapshot happy-path matrix
 
-- Status: `PARTIAL`
+- Status: `ACCEPTED`
 - Result: kontrakt snapshotu ma kompletny real-PG proof zamiast dwóch testów
   smoke oraz akceptuje wszystkie legalne stany trwałej kolejki.
 - Allowed paths: `packages/database/test/case-recovery.integration.test.ts` oraz
@@ -382,7 +382,7 @@
 
 ## `RA-008-WU-08A-F3` — Recovery snapshot negative proofs
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: brakujące stany recovery są jawnie pokryte publicznymi testami
   fail-closed bez dalszej zmiany kodu produkcyjnego.
 - Allowed paths: wyłącznie
@@ -401,7 +401,7 @@
 
 ## `RA-008-WU-08B` — Recovery plan and context reconstruction
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: czysta funkcja wybiera jedną bezpieczną akcję recovery i odbudowuje
   bounded context bez poprzedniej sesji modelu.
 - Allowed paths: `packages/agent-orchestrator/src/recovery.ts`,
