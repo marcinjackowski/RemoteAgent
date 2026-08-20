@@ -94,7 +94,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { relative, isAbsolute as isAbsolutePath, resolve, sep } from "node:path";
 
-import { TrustLevel, canonicalDigest, canonicalJsonStringify, idString } from "@remoteagent/contracts";
+import {
+  TrustLevel,
+  canonicalDigest,
+  canonicalJsonStringify,
+  idString,
+} from "@remoteagent/contracts";
 import type { Transaction } from "@remoteagent/database";
 import {
   ProcessRunnerError,
@@ -217,8 +222,13 @@ function byteLength(value: string): number {
  * diagnostics, i.e. host paths, so a layer covering only `Bearer`/`Basic`/URL
  * credentials would leave the dominant class untouched. The shapes below are
  * deliberately aligned with `repository-planner`'s `unsafeString` guard so the
- * two boundaries agree on what "unsafe" means; unifying them into one shared
- * redactor is follow-up work for the package that owns redaction.
+ * two boundaries agree on what "unsafe" means.
+ *
+ * **Transitional.** This local table is a deliberate, self-contained stopgap, not
+ * an accidental duplication: unifying every boundary onto one shared redactor
+ * that covers these classes is tracked as RA-024 (`CTF-006`). Until that lands,
+ * this module must not lean on `@remoteagent/observability`, whose `SecretRedactor`
+ * still passes host paths and provider tokens through.
  *
  * Each entry keeps capture group 1 (the boundary character that preceded the
  * match, or the credential's own scheme prefix) and replaces the rest.
@@ -254,12 +264,15 @@ const REDACTION_PATTERNS: readonly RegExp[] = Object.freeze([
  */
 export function redactCommandOutput(value: string, known: readonly string[] = []): string {
   let redacted = value;
-  for (const literal of [...known].filter((item) => item.length > 0).sort((a, b) => b.length - a.length)) {
+  for (const literal of [...known]
+    .filter((item) => item.length > 0)
+    .sort((a, b) => b.length - a.length)) {
     redacted = redacted.split(literal).join(COMMAND_REDACTION_PLACEHOLDER);
   }
   for (const pattern of REDACTION_PATTERNS) {
-    redacted = redacted.replace(pattern, (_match, prefix: string) =>
-      `${prefix}${COMMAND_REDACTION_PLACEHOLDER}`,
+    redacted = redacted.replace(
+      pattern,
+      (_match, prefix: string) => `${prefix}${COMMAND_REDACTION_PLACEHOLDER}`,
     );
   }
   return redacted;
@@ -281,9 +294,12 @@ const relativeCwd = z
  */
 export const commandCatalogueEntry = z.strictObject({
   /** Absolute, canonical path; `runProcess` re-verifies both properties. */
-  executable: z.string().min(1).refine((value) => isAbsolutePath(value) && !value.includes("\0"), {
-    message: "executable must be an absolute path",
-  }),
+  executable: z
+    .string()
+    .min(1)
+    .refine((value) => isAbsolutePath(value) && !value.includes("\0"), {
+      message: "executable must be an absolute path",
+    }),
   args: z.array(z.string().refine((value) => !value.includes("\0"))).default([]),
   /** Workspace-relative; `runProcess` confines it, three times. */
   cwd: relativeCwd.default("."),
@@ -397,6 +413,13 @@ export type ImplementationCommandToolOptions = Readonly<{
    * classified from, and so a command cannot read its predecessors' output.
    */
   artifactRoot: string;
+  /**
+   * Literal secret values the server already knows (forwarding tokens, injected
+   * credentials). These are substituted before the pattern table runs, so a
+   * value the server knows to be sensitive is removed even in a shape the shapes
+   * below do not recognize. Kept out of prompts, logs and artifacts alike.
+   */
+  knownSecrets?: readonly string[];
   /** Redacted-only log sink. Injected so the log path is separately testable. */
   log?: (record: CommandLogRecord) => void;
   observer?: ImplementationCommandObserver;
@@ -659,9 +682,7 @@ function envelope(
  * `finished === false` narrows `run` away and the compiler — not a cast —
  * guarantees a cancelled attempt never reads a `ProcessRunResult` field.
  */
-type Raced =
-  | Readonly<{ finished: true; run: ProcessRunResult }>
-  | Readonly<{ finished: false }>;
+type Raced = Readonly<{ finished: true; run: ProcessRunResult }> | Readonly<{ finished: false }>;
 
 const CANCELED: Raced = Object.freeze({ finished: false });
 
@@ -701,8 +722,9 @@ export async function createImplementationCommandTool(
   }
   const { identity, ledger, runTransaction, observer, log } = options;
   // Literals the server already knows are sensitive, redacted ahead of the
-  // pattern table so a host path is removed even in a shape the patterns miss.
-  const knownStrings: readonly string[] = [root, artifactRoot];
+  // pattern table so a host path or a forwarded token is removed even in a shape
+  // the patterns miss.
+  const knownStrings: readonly string[] = [root, artifactRoot, ...(options.knownSecrets ?? [])];
 
   /**
    * Persist the complete redacted output outside the prompt and outside the
@@ -747,9 +769,10 @@ export async function createImplementationCommandTool(
     const race = abortRace(signal);
     let raced: Raced;
     try {
-      const running = runProcess(toProcessInput(entry, root, network)).then(
-        (run): Raced => ({ finished: true, run }),
-      );
+      const running = runProcess(toProcessInput(entry, root, network)).then((run): Raced => ({
+        finished: true,
+        run,
+      }));
       raced = race.promise === null ? await running : await Promise.race([running, race.promise]);
       if (!raced.finished) {
         // `runProcess` owns the child and offers no abort channel, so the
@@ -816,22 +839,27 @@ export async function createImplementationCommandTool(
   };
 
   const run = async (input: ImplementationCommandInput): Promise<ImplementationToolResult> => {
-    const requested = { operation_id: input.operation_id, command: input.command };
+    // `signal` is a local execution control, not part of the model-facing wire
+    // request; everything else the caller passed is validated as-is. Spreading
+    // the rest (rather than reconstructing `{ operation_id, command }`) is what
+    // makes criterion 1 real: an `env`, `cwd`, `network`, `timeoutMs` or
+    // `outputBytes` field survives to the strict parse below and is refused,
+    // instead of being silently dropped before validation ever sees it.
+    const { signal, ...requested } = input;
 
     // Phase A: pure validation. Launches nothing, mints no ledger row. A field
     // that would widen the server-owned policy dies here.
     const parsed = implementationCommandRequest.safeParse(requested);
     const entry = parsed.success ? catalogue[parsed.data.command] : undefined;
-    const refusal =
-      !parsed.success
-        ? rejectionCode(requested)
-        : entry === undefined
-          ? COMMAND_NOT_ALLOWED
-          : input.signal?.aborted === true
-            ? // Cancelled before anything started, so this is provably
-              // non-mutating and a clean FAILED is honest.
-              COMMAND_CANCELED
-            : null;
+    const refusal = !parsed.success
+      ? rejectionCode(requested)
+      : entry === undefined
+        ? COMMAND_NOT_ALLOWED
+        : signal?.aborted === true
+          ? // Cancelled before anything started, so this is provably
+            // non-mutating and a clean FAILED is honest.
+            COMMAND_CANCELED
+          : null;
 
     // Phase B: read-only pre-state. Needed for the claim, and its failure is
     // also provably non-mutating.
@@ -873,7 +901,7 @@ export async function createImplementationCommandTool(
         // mutation signal is the digest pair, not an invented path list.
         changedFiles: [],
       },
-      async () => attempt(input.command, entry, input.operation_id, beforeDigest, input.signal, into),
+      async () => attempt(input.command, entry, input.operation_id, beforeDigest, signal, into),
     );
     const decision = decide(outcome.record);
     const result = envelope(
