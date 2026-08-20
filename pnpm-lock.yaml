@@ -154,6 +154,24 @@ importers:
 
   packages/event-envelope: {}
 
+  packages/implementation-tools:
+    dependencies:
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:../database
+      '@remoteagent/repository-planner':
+        specifier: workspace:*
+        version: link:../repository-planner
+      '@remoteagent/workspace-runner':
+        specifier: workspace:*
+        version: link:../workspace-runner
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/mcp-tool-broker: {}
 
   packages/observability: {}
