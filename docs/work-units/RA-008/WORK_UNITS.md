@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `17`
+- Plan revision: `18`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -31,8 +31,8 @@
 | `RA-008-WU-05C` | `ACCEPTED` | atomic answer i resume job | WU-05B |
 | `RA-008-WU-06` | `ACCEPTED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07A` | `ACCEPTED` | deterministyczny derived compaction manifest | WU-02, WU-03 |
-| `RA-008-WU-07B` | `READY` | bezpieczna integracja compaction z builderem | WU-07A |
-| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07B |
+| `RA-008-WU-07B` | `ACCEPTED` | bezpieczna integracja compaction z builderem | WU-07A |
+| `RA-008-WU-08` | `READY` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07B |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -290,7 +290,7 @@
 
 ## `RA-008-WU-07B` — Builder compaction integration
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: builder opcjonalnie dołącza derived manifest dla omissions, zachowując
   autorytatywne fragmenty i pełny ślad odtworzenia.
 - Allowed paths: `packages/agent-orchestrator/src/context/builder.ts`,
@@ -312,6 +312,7 @@
 
 ## `RA-008-WU-08` — Recovery and resume integration
 
+- Status: `READY`
 - Result: nowy proces odtwarza context/checkpoint/decision po crashu model call.
 - Allowed paths: `packages/agent-orchestrator/src/recovery.ts`,
   `test/recovery.integration.test.ts`, `packages/database/test/checkpoint-recovery.integration.test.ts`,
