@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `2`
+- Plan revision: `3`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -28,8 +28,8 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-011-WU-01` | `RUNNING` | wersjonowane kontrakty i sealed read-only port | RA-010 DONE |
-| `RA-011-WU-02` | `BLOCKED` | minimalny package scaffold | WU-01 |
+| `RA-011-WU-01` | `ACCEPTED` | wersjonowane kontrakty i sealed read-only port | RA-010 DONE |
+| `RA-011-WU-02` | `RUNNING` | minimalny package scaffold | WU-01 |
 | `RA-011-WU-03` | `BLOCKED` | deterministic instruction discovery i precedence | WU-02 |
 | `RA-011-WU-04` | `BLOCKED` | ograniczone read-only narzędzia discovery | WU-03 |
 | `RA-011-WU-05` | `BLOCKED` | RepositoryProfile związany z base SHA | WU-03, WU-04 |

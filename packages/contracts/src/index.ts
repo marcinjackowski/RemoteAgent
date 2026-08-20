@@ -27,6 +27,9 @@ export * from "./agent-run.js";
 export * from "./agent-completion.js";
 export * from "./tool.js";
 export * from "./external-action.js";
+export * from "./repository-profile.js";
+export * from "./implementation-plan.js";
+export * from "./planner-port.js";
 
 // Runtime JSON Schema.
 export * from "./schema.js";
