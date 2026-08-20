@@ -3,9 +3,9 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `24`
-- Plan owner: `Sol / COORDINATOR_AUDITOR`
-- Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
+- Plan revision: `25`
+- Plan owner: `COORDINATOR_AUDITOR`
+- Implementer: `Claude Opus 5 / high / IMPLEMENTER` (zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md))
 - Plan status: `ACTIVE`
 - Base commit/tree: `d2cf056c07f90a6093400011a5dc4c1a734ef4a7`
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test`
@@ -66,8 +66,9 @@
 | `RA-016-WU-08B` | `ACCEPTED` | transaction-capable correlation core | WU-05C, WU-07, WU-08A |
 | `RA-016-WU-08C` | `ACCEPTED` | restart-stable trusted ingress context | WU-08A |
 | `RA-016-WU-08D` | `ACCEPTED` | write-free durable correlation replay | WU-08B |
-| `RA-016-WU-08E` | `BLOCKED` | atomic Jira processing runtime | WU-08C, WU-08D |
-| `RA-016-WU-08F` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-08E |
+| `RA-016-WU-08E` | `CHANGES_REQUESTED` | atomic Jira processing runtime | WU-08C, WU-08D |
+| `RA-016-WU-08G` | `ACCEPTED` | replay-przed-REST pod jednym per-event lockiem | WU-08E |
+| `RA-016-WU-08F` | `IN_PROGRESS` | Jira-to-case-to-Discord proof | WU-08G |
 
 ## `RA-016-WU-01` — Connector contracts and configuration
 
@@ -343,6 +344,43 @@
   REST przed per-event lockiem. Nie spełnia to literalnej bramki „replay przed
   ponownym REST”. Automatyczne ponawianie zatrzymano zgodnie z workflow; wymagany
   jest jawny reset limitu albo nowa decyzja właściciela o zakresie.
+
+## `RA-016-WU-08G` — Replay before REST under one per-event lock
+
+- Reset limitu: właściciel zresetował limit prób `2026-08-20` (opcja A, jeden
+  finalny fix unit). Zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md).
+- Result: replay check, Jira REST i transakcja zapisu wykonują się w obrębie
+  jednego server-owned per-event advisory locka, więc concurrent exact duplicate
+  nie wykonuje drugiego `getIssue`.
+- Allowed paths: `packages/connector-jira/src/runtime.ts`,
+  `packages/connector-jira/test/runtime.integration.test.ts`.
+- Context pack: `Database.withAdvisoryLock` i `withTransaction` z
+  `packages/database/src/client.ts`; wzór klucza z `migrate.ts`
+  (`MIGRATION_ADVISORY_LOCK_KEY`); `replayJiraCorrelationInTransaction`;
+  istniejący `processJiraWebhook` i `runtime.integration.test.ts`.
+- Acceptance:
+  1. Cała sekcja krytyczna — pre-REST replay, `getIssue`, walidacja scope,
+     budowa snapshotu i transakcja zapisu — biegnie w jednym
+     `db.withAdvisoryLock(key, ...)`, gdzie `key` jest deterministycznie
+     wyprowadzony z `event_id` (session-level lock; klucz `bigint`, nie
+     `pg_advisory_xact_lock` wewnątrz transakcji jako jedyny mechanizm).
+  2. Deferred concurrency test dowodzi dokładnie jednego `getIssue` przy N
+     równoległych exact deliveries tego samego `event_id`: dokładnie jeden
+     `APPLIED`, pozostałe `REPLAYED`, `getIssue` wywołany raz.
+  3. Zachowane bez zmian: zero zapisów i brak `cause` po REST failure
+     (`rest_failure`), `issue_deleted` bez GET, scope isolation, fault matrix i
+     STALE bez projekcji.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/runtime.integration.test.ts`
+  z exit code `0`.
+- Out of scope: `src/index.ts` (export już istnieje), zmiana `correlation.ts`,
+  `enrichment.ts`, migracje, `packages/database`, live Jira, Discord transport,
+  scheduler, commit i remote writes.
+- Coordinator gate: pula połączeń nie zakleszcza się przy N równoległych
+  wywołaniach (lock trzyma osobne połączenie niż transakcja — sprawdzić pool
+  exhaustion przy N=4 i N=8); klucz locka jest per-event, nie globalny;
+  `getIssue` call-count asercja jest realna, nie tautologiczna; pełny
+  `packages/connector-jira/test` na real PG, typecheck, build, scoped
+  lint/format, `git diff --check`.
 
 ## `RA-016-WU-08F` — End-to-end Jira proof
 
