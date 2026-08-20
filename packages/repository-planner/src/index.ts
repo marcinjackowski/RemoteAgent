@@ -52,6 +52,20 @@ export { compileImplementationPlan } from "./plan.js";
 export { PlanCompilationError } from "./plan-errors.js";
 export type { CompilePlanInput, CompilePlanResult, ServerRequirement } from "./plan.js";
 export type { PlanCompilationErrorCode } from "./plan-errors.js";
+export {
+  PlanningAmbiguityClass,
+  PlanningDecisionError,
+  createPlanningDecision,
+  validatePlanningDecisionAnswer,
+} from "./ambiguity.js";
+export type {
+  PlanningDecisionAuthority,
+  PlanningDecisionBinding,
+  PlanningDecisionErrorCode,
+  PlanningDecisionProposal,
+  PlanningDecisionResult,
+  PlanningDecisionSelection,
+} from "./ambiguity.js";
 export { createPlannerReadPort } from "./read-tools.js";
 export { discoverAllowedConfig } from "./config-discovery.js";
 export type { DiscoveryErrorCode } from "./discovery-policy.js";
