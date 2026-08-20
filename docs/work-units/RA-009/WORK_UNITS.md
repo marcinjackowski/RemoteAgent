@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `14`
+- Plan revision: `15`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -26,7 +26,7 @@
 | `RA-009-WU-04` | `ACCEPTED` | mailbox, semaphores i fairness | WU-03 |
 | `RA-009-WU-05` | `ACCEPTED` | single-writer lease i fencing | WU-03 |
 | `RA-009-WU-06` | `ACCEPTED` | read-only parallel merge | WU-04, WU-05 |
-| `RA-009-WU-07` | `READY` | budgets, pause, cancel i waiting resume | WU-04 |
+| `RA-009-WU-07` | `RUNNING` | budgets, pause, cancel i waiting resume | WU-04 |
 | `RA-009-WU-08` | `BLOCKED` | restart/concurrency integration | WU-06, WU-07 |
 
 ## `RA-009-WU-01` — Role registry
@@ -121,10 +121,21 @@
   `test/supervisor-control.test.ts`, `src/index.ts`.
 - Context pack: WU-02/04, RA-008 decision resume, cancellation contracts.
 - Acceptance: limit zapisuje trwały checkpoint; cancel nie dispatchuje nowej pracy;
-  answer event tworzy nowy run, nie wznawia procesu.
+  answer event tworzy nowy run, nie wznawia procesu. Limity iteracji i fixów są
+  dodatnimi integerami z server config i nie mogą być zwiększone przez completion
+  ani prompt. Wyczerpanie zwraca dokładnie jedną idempotentną dyspozycję
+  `CHECKPOINT_AND_STOP` z jawnym reason, case/run/revision bindingiem; controller
+  nie deklaruje trwałości przed potwierdzeniem wstrzykniętego persistence portu.
+  Pause i cancel są monotoniczne/sticky, blokują dispatch po wyścigu z completion,
+  a cancel ma pierwszeństwo. `WAITING_FOR_USER` kończy źródłowy run i deleguje do
+  zaakceptowanego RA-008 decision materialization; exact answer/revision tworzy
+  dyspozycję nowego runu, duplicate jest idempotentny, stale/foreign answer jest
+  odrzucony. Żaden model-controlled field nie jest authority dla tych decyzji.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/supervisor-control.test.ts`.
 - Out of scope: external approval policy.
-- Sol gate: bounded-loop test nie opiera się na wall-clock sleep.
+- Sol gate: boundary table dla iteration/fix off-by-one, race
+  pause/cancel/completion, duplicate/stale answer i persistence failure; bounded
+  loop nie opiera się na wall-clock sleep.
 
 ## `RA-009-WU-08` — Recovery and concurrency proof
 
