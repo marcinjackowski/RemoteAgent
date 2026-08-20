@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `12`
+- Plan revision: `13`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -25,7 +25,7 @@
 | `RA-009-WU-03` | `ACCEPTED` | trwały work-unit/run repository | WU-02 |
 | `RA-009-WU-04` | `ACCEPTED` | mailbox, semaphores i fairness | WU-03 |
 | `RA-009-WU-05` | `ACCEPTED` | single-writer lease i fencing | WU-03 |
-| `RA-009-WU-06` | `READY` | read-only parallel merge | WU-04, WU-05 |
+| `RA-009-WU-06` | `RUNNING` | read-only parallel merge | WU-04, WU-05 |
 | `RA-009-WU-07` | `BLOCKED` | budgets, pause, cancel i waiting resume | WU-04 |
 | `RA-009-WU-08` | `BLOCKED` | restart/concurrency integration | WU-06, WU-07 |
 
@@ -103,10 +103,16 @@
   `test/parallel-merge.test.ts`, `src/index.ts`.
 - Context pack: WU-01/04/05, AgentCompletion evidence/provenance.
 - Acceptance: tylko read-only roles równolegle; order completion nie zmienia
-  merged result; konflikt jest jawny, nie last-write-wins.
+  merged result; implementer i write-enabled scope są odrzucane przed startem;
+  każde completion musi odpowiadać exact work-unit/run/case bindingowi; duplicate
+  exact completion jest idempotentny, natomiast konflikt tego samego unit/run
+  jest jawny, nie last-write-wins. Merge ma stabilny canonical order niezależny
+  od kolejności zakończenia i zachowuje provenance/evidence bez kopiowania
+  prywatnego chain-of-thought.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/parallel-merge.test.ts`.
 - Out of scope: prawdziwe role/models.
-- Sol gate: permutation test kolejności completion.
+- Sol gate: permutation test wszystkich kolejności completion oraz negative
+  tests dla implementera, obcego run/case, conflicting duplicate i write scope.
 
 ## `RA-009-WU-07` — Control and budgets
 
