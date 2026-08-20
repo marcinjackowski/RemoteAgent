@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `21`
+- Plan revision: `22`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -30,6 +30,7 @@
 | `RA-010-WU-08` | `ACCEPTED` | bezpieczny cleanup | WU-02, WU-07 |
 | `RA-010-WU-09` | `ACCEPTED` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
 | `RA-010-WU-10` | `ACCEPTED` | read-only snapshot lifecycle | WU-07, AUDIT-01 |
+| `RA-010-WU-11` | `READY` | deterministyczny timeout-race test process runnera | WU-04, CTF-003 |
 
 ## `RA-010-WU-01` — Workspace contracts
 
@@ -182,6 +183,48 @@
 - Out of scope: zapis snapshot artifactu, reset/recovery i zmiany kontraktów.
 - Sol gate: porównanie before/after bytes/stat ledgera, mappingu oraz tree digest,
   wraz ze świeżym adapterem po restarcie.
+
+## `RA-010-WU-11` — Deterministic process-runner timeout race
+
+- Finding: `CTF-003` z `docs/audits/CROSS_TASK_FINDINGS.md` (wykryty podczas
+  audytu RA-016, poza zakresem tamtego taska).
+- Result: test „kills the process tree on timeout and reports the timeout"
+  przestaje failować niedeterministycznie w pełnym przebiegu repo, bez osłabiania
+  tego, co dowodzi.
+- Allowed paths: `packages/workspace-runner/test/process-runner.test.ts`.
+- Context pack: `packages/workspace-runner/src/process-runner.ts`
+  (`ProcessLimits`, `timedOut`, `killTree`); obecna treść testu; opis `CTF-003`.
+- Diagnoza koordynatora: test ustawia `limits: { timeoutMs: 100 }`, a asercja
+  wymaga, by proces **wnuk** zdążył wystartować i zapisać `child.pid` przed
+  zabiciem drzewa. Pod współbieżnym I/O pełnej suity ten wyścig czasem przegrywa i
+  `readFile` rzuca `ENOENT`. Zmierzone: 1 fail na 4 pełne przebiegi; 6/6 PASS solo;
+  nie reprodukuje się pod sztucznym obciążeniem CPU (24 procesy busy-loop).
+  **Defekt jest w teście, nie w `runProcess`** — timeout i zabicie drzewa działają.
+- Acceptance:
+  1. Test rozdziela dwa niezależne fakty: (a) `runProcess` zgłasza `timedOut` i
+     nie-zerowy exit; (b) proces wnuk został zabity. Oczekiwanie na powstanie
+     `child.pid` ma **własny, dłuższy budżet** (polling do ~2 s) i nie jest
+     sprzęgnięte z `timeoutMs` runnera.
+  2. Jeżeli wnuk nie zdążył wystartować, test **nie przechodzi cicho** — albo
+     czeka do własnego budżetu, albo failuje z komunikatem odróżniającym „wnuk nie
+     wystartował" od „wnuk przeżył zabicie drzewa". Zielony wynik nie może
+     oznaczać „nie sprawdziliśmy".
+  3. `timeoutMs` może wzrosnąć na tyle, by wnuk realnie startował, ale nie na
+     tyle, by test przestał dowodzić timeoutu; pozostałe 5 testów w pliku bez zmian.
+- Verification: `pnpm vitest run packages/workspace-runner/test/process-runner.test.ts`
+  z exit code `0`, oraz pełne repo trzykrotnie bez tego faila.
+- Out of scope: zmiany w `src/process-runner.ts` i w jakimkolwiek innym pliku,
+  osłabianie asercji „wnuk zabity", dokumentacja, commit, remote writes.
+- Coordinator gate: trzy pełne przebiegi repo bez faila; mutation test —
+  zastąpienie `killTree` no-opem musi wywalić ten test, inaczej asercja jest pusta.
+- **Wymagany lifecycle taska.** RA-010 jest `DONE` z `HANDOFF-02` i `AUDIT-02`
+  (werdykt `PASS`). Zmiana jego kodu unieważnia pokrycie tym audytem, więc nie
+  wolno jej wprowadzić „po cichu" do zamkniętego taska. Pełna ścieżka:
+  `DONE` → `IN_PROGRESS` → wykonanie unitu → `HANDOFF-03` → `AWAITING_AUDIT` →
+  `AUDIT-03` z werdyktem `PASS` → `DONE`. Walidator wymusza
+  `rewizja_audytu ≥ rewizja_handoffu` dla `DONE`, więc pominięcie któregokolwiek
+  kroku jest wykrywane, a nie tylko nieelegackie. Zakres zmiany to jeden plik
+  testowy, więc audyt będzie węższy niż pierwotny, ale musi być niezależny.
 
 ## Final task gate
 
