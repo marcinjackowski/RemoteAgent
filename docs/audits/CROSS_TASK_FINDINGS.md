@@ -34,6 +34,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-004` | LOW | OTWARTY | unit repozytorialny; 6 z 11 pakietów bez pokrycia |
 | `CTF-007` | LOW | OTWARTY | razem z `CTF-003`, przed RA-018/RA-026 |
 | `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
+| `CTF-009` | LOW | OTWARTY — mechanizm domknięty w RA-012 | `isForbiddenPath` nie zna plików instrukcji; RA-015/RA-021 |
 
 ---
 
@@ -573,3 +574,61 @@ Zakres dotyka `packages/bedrock-runtime`, który jest `DONE`, więc zmiana wymag
 pełnego cyklu audytowego (jak `CTF-003` i `CTF-007`). Domykać razem z nimi, przed
 finalnymi bramkami `RA-018`/`RA-026`, które opierają dowodowość na zielonym
 `check`.
+
+---
+
+## `CTF-009` — `isForbiddenPath` nie zna plików instrukcji repozytorium
+
+- Severity: **LOW** (dla RA-012 domknięte lokalnie; mechanizm nadal rozjechany)
+- Wykryty: `2026-08-20`, podczas audytu RA-012 sondą adwersarialną audytora
+- Dotyczy: `packages/repository-planner/src/discovery-policy.ts` (RA-011, `DONE`)
+- Status: **OTWARTY** — RA-012 ma własny filtr, reszta konsumentów nie
+
+### Dowód
+
+`isForbiddenPath` (`discovery-policy.ts:65`) odrzuca `.git`, `.env`/`.env.*`,
+`*.key|pem|p12|pfx`, `id_rsa`, `id_ed25519` oraz nazwy `credentials`/`secrets`/
+`token`. **Nie zna** `AGENTS.md`, `CLAUDE.md`, `.cursorrules` ani
+`copilot-instructions.md`.
+
+Sonda audytora na realnym workspace, przed naprawą RA-012:
+
+```text
+search "INSTRUCTION_MARKER" -> zwrócona treść AGENTS.md
+tree (root)                 -> AGENTS.md wylistowany
+.env, .git                  -> poprawnie odfiltrowane
+```
+
+### Wpływ
+
+Każdy konsument `createPlannerReadPort`, który zakłada, że `isForbiddenPath`
+pokrywa „wszystko, czego model nie powinien czytać", wystawi pliki instrukcji.
+`repository-planner` (RA-011) czyta je celowo — to jego zadanie — więc **dla niego
+nie jest to defekt**. Ryzyko dotyczy warstw model-facing, które dziedziczą ten
+predykat jako politykę bezpieczeństwa: model czytający własne instrukcje może
+planować wokół nich.
+
+Nie jest to eskalacja uprawnień: zapis do plików instrukcji był i pozostaje
+blokowany osobno.
+
+### Domknięcie dla RA-012 (`2026-08-20`)
+
+`packages/implementation-tools/src/toolset.ts` filtruje payloady listingowe na
+wyjściu własnym `isProtectedPath`, który pokrywa pliki instrukcji. Rozliczone przez
+`dropped`/`complete: false`/`truncated`, nie ciche. Commit `5c3df61`,
+potwierdzone mutacją i trzema testami regresyjnymi.
+
+### Wymagana zmiana
+
+Rozstrzygnąć, gdzie należy polityka „czego model nie czyta". Rekomendacja: nie
+rozszerzać `isForbiddenPath` (RA-011 **musi** czytać instrukcje, żeby zbudować
+profil), lecz utrzymać rozróżnienie jawnie — `discovery-policy` chroni
+credentiale i VCS, a warstwa model-facing dokłada pliki instrukcji. Wymaga wtedy,
+by każda nowa warstwa model-facing przechodziła przez własną bramkę, a nie
+dziedziczyła cudzą.
+
+Najbliżsi kandydaci na konsumentów: **RA-015** (independent reviewer czyta repo) i
+**RA-021** (MCP broker wystawia narzędzia read). Oba muszą albo użyć
+`isProtectedPath` z `implementation-tools`, albo mieć własną, jawną bramkę —
+nie zakładać, że `isForbiddenPath` wystarcza. Wpisane jako warunek wejścia do
+planów obu tasków.
