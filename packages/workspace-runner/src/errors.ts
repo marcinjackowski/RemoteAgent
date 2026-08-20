@@ -4,6 +4,10 @@ export type WorkspaceRunnerErrorCode =
   | "STALE_FENCE"
   | "INVALID_LIFECYCLE"
   | "INVALID_DESTRUCTIVE_TARGET"
+  | "INVALID_PATH"
+  | "PATH_ESCAPE"
+  | "SYMLINK_NOT_ALLOWED"
+  | "BROAD_WORKSPACE_ROOT"
   | "WORKSPACE_NOT_FOUND"
   | "WORKSPACE_CONFLICT";
 
@@ -45,5 +49,15 @@ export class WorkspaceDestructiveTargetError extends WorkspaceRunnerError {
   public constructor(message = "Destructive operations require a verified workspace target") {
     super("INVALID_DESTRUCTIVE_TARGET", message);
     this.name = "WorkspaceDestructiveTargetError";
+  }
+}
+
+export type WorkspacePathErrorCode =
+  "INVALID_PATH" | "PATH_ESCAPE" | "SYMLINK_NOT_ALLOWED" | "BROAD_WORKSPACE_ROOT";
+
+export class WorkspacePathPolicyError extends WorkspaceRunnerError {
+  public constructor(code: WorkspacePathErrorCode, message: string) {
+    super(code, message);
+    this.name = "WorkspacePathPolicyError";
   }
 }
