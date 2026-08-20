@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `09`
+- Plan revision: `10`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -57,7 +57,7 @@
 | `RA-016-WU-02` | `ACCEPTED` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
 | `RA-016-WU-03` | `ACCEPTED` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
 | `RA-016-WU-04` | `ACCEPTED` | read-only REST client i stale-safe enrichment | WU-03 |
-| `RA-016-WU-05` | `READY` | issue/case correlation i Discord routing | WU-03, WU-04 |
+| `RA-016-WU-05` | `RUNNING` | issue/case correlation i Discord routing | WU-03, WU-04 |
 | `RA-016-WU-06` | `BLOCKED` | webhook registration health i renewal | WU-02, WU-04 |
 | `RA-016-WU-07` | `BLOCKED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
 | `RA-016-WU-08` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-05, WU-07 |
@@ -147,13 +147,32 @@
   autorytatywnego kanału `#jira`/thread.
 - Allowed paths: `src/correlation.ts`, `src/projection.ts`,
   `test/correlation.integration.test.ts`, `test/projection.test.ts`, `src/index.ts`,
-  konieczne publiczne adaptery database/Discord.
+  `package.json`, `pnpm-lock.yaml`,
+  `packages/database/migrations/024_jira_projection_receipts.{up,down}.sql`,
+  `packages/database/src/repositories/jira-correlation.ts`,
+  `packages/database/src/repositories/case.ts`, `repositories/index.ts` oraz
+  wyłącznie konieczne publiczne exporty/adapters `packages/discord`.
 - Context pack: WU-03/04, RA-003 entity/case repositories, RA-006 routing/outbox.
-- Acceptance: retry nie duplikuje case/projection; foreign scope nie koreluje;
-  Discord otrzymuje redacted untrusted summary i stabilne IDs.
+- Acceptance: całość działa w jednej transakcji po per-connection/issue advisory
+  lock. Durable receipt jest keyed exact normalized `event_id`, zawiera canonical
+  digest inputu i wynik case/entity/outbox; exact retry zwraca ten sam wynik,
+  conflicting retry failuje, a dwa concurrent eventy tego samego issue nie
+  tworzą dwóch cases/entities. Lookup external entity jest dokładnie scoped przez
+  owner+connection+provider+kind+issue key; foreign scope nie koreluje i DB FK
+  pozostaje drugą granicą. Nowy issue tworzy case, Jira external entity,
+  autorytatywny Discord binding do skonfigurowanego `#jira`, rezerwuje seq i
+  enqueueuje `discord.root_thread`; kolejny event używa tego samego case i
+  enqueueuje `discord.thread_message`. Alias pochodzi z trusted connection, nie
+  payloadu. Projekcja zawiera wyłącznie bounded issue key, status i summary z
+  jawną etykietą untrusted; bez description/comment/raw body/credential. Title i
+  body przechodzą istniejące Discord sanitizers/contracts, IDs są server-owned.
+  Receipt, entity/case/binding/seq i outbox commitują albo rollbackują atomowo.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/correlation.integration.test.ts packages/connector-jira/test/projection.test.ts`.
 - Out of scope: Jira mutation i GitLab branch.
-- Sol gate: dwa owners/connections nie współdzielą entity ani thread.
+- Sol gate: real-PG duplicate i concurrent race, injected rollback po każdym
+  zapisie, conflicting same-event digest oraz dwa owners/connections o tym samym
+  issue key nie współdzielą case/entity/binding/outbox; projection unit testuje
+  mentions, oversize i brak description/comment/sekretu.
 
 ## `RA-016-WU-06` — Webhook lifecycle and renewal
 
