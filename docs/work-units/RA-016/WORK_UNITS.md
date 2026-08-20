@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `17`
+- Plan revision: `18`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -226,10 +226,16 @@
 
 - Result: bounded poll watermark odnajduje utracony webhook bez cofnięcia nowszego stanu.
 - Allowed paths: `src/reconciliation.ts`, `test/reconciliation.integration.test.ts`,
-  `src/index.ts`, konieczne repozytorium database.
+  `src/enrichment.ts`, `test/enrichment.test.ts`, `src/index.ts`, konieczne
+  repozytorium i migracja database.
 - Context pack: WU-04/06, event dedupe, monotonic issue version i scheduler.
 - Acceptance: watermark zapisuje się atomowo; utracony event przechodzi ten sam
-  normalize pipeline; retry nie duplikuje projekcji.
+  normalize pipeline; retry nie duplikuje projekcji. Normalny enrichment i
+  reconciliation używają jednego atomowego `putIfNewer` snapshot authority,
+  związanego z owner/connection/project/issue. Snapshot accept/reject, projekcja
+  i watermark reconciliation są w jednej transakcji; starszy wynik nie wywołuje
+  projekcji. Provider results są deduplikowane po issue key niezależnie od
+  kolejności i sortowane bytewise; `applied` liczy wyłącznie przyjęte snapshoty.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/reconciliation.integration.test.ts`.
 - Out of scope: pełny Jira backup.
 - Sol gate: fault injection przed/po watermark commit.
