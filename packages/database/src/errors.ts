@@ -127,6 +127,9 @@ export class DecisionResumeConflictError extends PersistenceError {
 /** The decision or case is not eligible for a new answer/resume operation. */
 export class DecisionResumeStateError extends PersistenceError {}
 
+/** Persisted recovery state is missing, malformed, or crosses an ownership edge. */
+export class CaseRecoveryStateError extends PersistenceError {}
+
 /** A concurrent credential refresh already advanced the expected revision. */
 export class CredentialRefreshConflictError extends PersistenceError {
   public readonly connectionId: string;

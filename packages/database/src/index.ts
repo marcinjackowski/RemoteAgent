@@ -40,6 +40,7 @@ export {
   DecisionWaitingStateError,
   DecisionResumeConflictError,
   DecisionResumeStateError,
+  CaseRecoveryStateError,
 } from "./errors.js";
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";

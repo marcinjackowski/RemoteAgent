@@ -10,3 +10,4 @@ export * from "./discord.js";
 export * from "./run-completion.js";
 export * from "./decision-waiting.js";
 export * from "./decision-resume.js";
+export * from "./case-recovery.js";
