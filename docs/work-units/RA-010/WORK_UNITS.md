@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `07`
+- Plan revision: `08`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -22,8 +22,8 @@
 |---|---|---|---|
 | `RA-010-WU-01` | `ACCEPTED` | model-neutralne kontrakty workspace | — |
 | `RA-010-WU-02` | `ACCEPTED` | bezpieczna walidacja root/path | WU-01 |
-| `RA-010-WU-03` | `RUNNING` | repository mirror i create worktree | WU-02 |
-| `RA-010-WU-04` | `BLOCKED` | confined command runner i limity | WU-02 |
+| `RA-010-WU-03` | `ACCEPTED` | repository mirror i create worktree | WU-02 |
+| `RA-010-WU-04` | `READY` | confined command runner i limity | WU-02 |
 | `RA-010-WU-05` | `BLOCKED` | operation log, digest i dirty state | WU-03, WU-04 |
 | `RA-010-WU-06` | `BLOCKED` | writer fencing | WU-03 |
 | `RA-010-WU-07` | `BLOCKED` | resume i ambiguous recovery | WU-05, WU-06 |
