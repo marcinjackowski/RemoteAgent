@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `19`
+- Plan revision: `20`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -62,8 +62,9 @@
 | `RA-016-WU-05C` | `ACCEPTED` | atomic case/entity/binding/outbox correlation | WU-05B |
 | `RA-016-WU-06` | `ACCEPTED` | webhook registration health i renewal | WU-02, WU-04, WU-05C |
 | `RA-016-WU-07` | `ACCEPTED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
-| `RA-016-WU-08A` | `RUNNING` | zweryfikowany odczyt durable raw payloadu | WU-02, WU-07 |
-| `RA-016-WU-08B` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-05C, WU-07, WU-08A |
+| `RA-016-WU-08A` | `ACCEPTED` | zweryfikowany odczyt durable raw payloadu | WU-02, WU-07 |
+| `RA-016-WU-08B` | `RUNNING` | transaction-capable correlation core | WU-05C, WU-07, WU-08A |
+| `RA-016-WU-08C` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-08B |
 
 ## `RA-016-WU-01` — Connector contracts and configuration
 
@@ -262,7 +263,28 @@
 - Sol gate: real-PG exact/foreign/missing lookup, tampered digest/size, reader
   failure oraz potwierdzenie, że unauthorized ingress nie wywołuje readera.
 
-## `RA-016-WU-08B` — End-to-end Jira proof
+## `RA-016-WU-08B` — Transaction-capable correlation core
+
+- Result: istniejąca korelacja ma wariant przyjmujący branded `Transaction`, aby
+  runtime mógł atomowo zapisać normalized event, snapshot, receipt i Discord
+  outbox bez otwierania zagnieżdżonej transakcji.
+- Allowed paths: `packages/connector-jira/src/correlation.ts`,
+  `packages/connector-jira/test/correlation.integration.test.ts`.
+- Context pack: WU-05C correlation, WU-07 snapshot authority, RA-003
+  `Transaction` i `EventRepository`.
+- Acceptance: `correlateJiraIssueInTransaction` przyjmuje wyłącznie branded
+  transaction i nie wywołuje `withTransaction`; dotychczasowy
+  `correlateJiraIssue` pozostaje kompatybilnym wrapperem. Exact replay oraz
+  conflicting/foreign scope zachowują dotychczasową semantykę. Fault w
+  zewnętrznej transakcji rollbackuje zarówno zapis caller-a, jak i wszystkie
+  case/entity/binding/sequence/outbox/receipt writes.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/correlation.integration.test.ts`.
+- Out of scope: raw payload, REST call, snapshot write, normalized event i runtime
+  composition.
+- Sol gate: test z sentinel write w tej samej transakcji, brak nested transaction
+  oraz pełna dotychczasowa macierz correlation.
+
+## `RA-016-WU-08C` — End-to-end Jira proof
 
 - Result: fake Jira przechodzi verified ingress → normalized event → enrichment
   → case/entity → Discord, wraz z duplicate, sparse i lost-event paths.

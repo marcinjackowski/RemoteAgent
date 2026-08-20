@@ -1,4 +1,19 @@
-import type { Transaction } from "../client.js";
+import type { Queryable, Transaction } from "../client.js";
+import * as z from "zod";
+
+const lookupSchema = z.strictObject({
+  ownerId: z.string().trim().min(1).max(512),
+  connectionId: z.string().trim().min(1).max(512),
+  rawEventId: z.string().trim().min(1).max(512),
+});
+export interface JiraRawPayloadMetadata {
+  ownerId: string;
+  connectionId: string;
+  rawEventId: string;
+  payloadRef: string;
+  payloadDigest: string;
+  payloadSizeBytes: number;
+}
 
 export interface JiraIngressWrite {
   rawEventId: string;
@@ -25,6 +40,37 @@ export interface JiraIngressResult {
 
 /** Atomic Jira raw-ledger + received notification write. */
 export class JiraWebhookIngressRepository {
+  public async findRawPayload(
+    query: Queryable,
+    input: { ownerId: string; connectionId: string; rawEventId: string },
+  ): Promise<JiraRawPayloadMetadata | null> {
+    const valid = lookupSchema.safeParse(input);
+    if (!valid.success) throw new JiraWebhookIngressConflictError("identity");
+    const result = await query.query<{
+      owner_id: string;
+      connection_id: string;
+      raw_event_id: string;
+      payload_ref: string;
+      payload_digest: string;
+      payload_size_bytes: string | null;
+    }>(
+      "SELECT owner_id, connection_id, raw_event_id, payload_ref, payload_digest, payload_size_bytes FROM raw_events WHERE raw_event_id=$1 AND provider='jira' AND owner_id=$2 AND connection_id=$3",
+      [valid.data.rawEventId, valid.data.ownerId, valid.data.connectionId],
+    );
+    const row = result.rows[0];
+    if (!row || row.payload_size_bytes === null) return null;
+    const size = Number(row.payload_size_bytes);
+    if (!Number.isSafeInteger(size) || size < 0)
+      throw new JiraWebhookIngressConflictError("identity");
+    return {
+      ownerId: row.owner_id,
+      connectionId: row.connection_id,
+      rawEventId: row.raw_event_id,
+      payloadRef: row.payload_ref,
+      payloadDigest: row.payload_digest,
+      payloadSizeBytes: size,
+    };
+  }
   public async persist(tx: Transaction, input: JiraIngressWrite): Promise<JiraIngressResult> {
     await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.rawEventId]);
     const raw = await tx.query<{ payload_digest: string }>(
