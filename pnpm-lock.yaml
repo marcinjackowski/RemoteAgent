@@ -172,6 +172,9 @@ importers:
       '@remoteagent/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@remoteagent/workspace-runner':
+        specifier: workspace:*
+        version: link:../workspace-runner
 
   packages/workspace-runner: {}
 

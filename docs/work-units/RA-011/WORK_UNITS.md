@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `5`
+- Plan revision: `6`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -31,8 +31,8 @@
 | `RA-011-WU-01` | `ACCEPTED` | wersjonowane kontrakty i sealed read-only port | RA-010 DONE |
 | `RA-011-WU-02` | `ACCEPTED` | minimalny package scaffold | WU-01 |
 | `RA-011-WU-03` | `ACCEPTED` | deterministic instruction discovery i precedence | WU-02 |
-| `RA-011-WU-04` | `RUNNING` | ograniczone read-only narzędzia discovery | WU-03 |
-| `RA-011-WU-05` | `BLOCKED` | RepositoryProfile związany z base SHA | WU-03, WU-04 |
+| `RA-011-WU-04` | `ACCEPTED` | ograniczone read-only narzędzia discovery | WU-03 |
+| `RA-011-WU-05` | `RUNNING` | RepositoryProfile związany z base SHA | WU-03, WU-04 |
 | `RA-011-WU-06` | `BLOCKED` | complete requirement-to-plan mapping | WU-01, WU-05 |
 | `RA-011-WU-07` | `BLOCKED` | material ambiguity do DecisionRequest | WU-06, RA-008 |
 | `RA-011-WU-08` | `BLOCKED` | stale-plan invalidation | WU-05, WU-06 |
@@ -111,8 +111,8 @@
 
 - Result: deterministic builder tworzy kompletny profil związany z exact base SHA
   i canonical digestem efektywnych instrukcji.
-- Allowed paths: `src/profile.ts`, `src/digest.ts`, `test/profile.test.ts`,
-  `test/fixtures/profile/**`, `src/index.ts`.
+- Allowed paths: `src/profile.ts`, `src/digest.ts`, `src/index.ts`,
+  `test/profile.test.ts`.
 - Context pack: WU-01/03/04 oraz RA-010 snapshot/base identity.
 - Acceptance: ta sama zawartość w innej kolejności odczytu daje identyczny profil;
   każdy fact ma source path/digest; nieczytelny obowiązkowy plik daje typed
