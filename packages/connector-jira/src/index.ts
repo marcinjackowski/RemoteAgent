@@ -13,3 +13,6 @@ export type { JiraIngressContext, ParsedJiraEvent } from "./types.js";
 export * from "./parser.js";
 export * from "./normalize.js";
 export * from "./scope.js";
+export * from "./rest/transport.js";
+export * from "./rest/client.js";
+export * from "./enrichment.js";
