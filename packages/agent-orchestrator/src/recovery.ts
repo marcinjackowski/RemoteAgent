@@ -364,11 +364,22 @@ export function buildRecoveryPlan(input: unknown): RecoveryPlan {
       trust: TrustLevel.UNTRUSTED_DATA,
     })),
   ];
-  const context = buildContext({
-    scope: { caseId: c.caseId as string, ownerId: c.ownerId as string, connections: bs, toolNames },
-    budgetBytes,
-    fragments,
-  });
+  let context: BuiltContext;
+  try {
+    context = buildContext({
+      scope: {
+        caseId: c.caseId as string,
+        ownerId: c.ownerId as string,
+        connections: bs,
+        toolNames,
+      },
+      budgetBytes,
+      fragments,
+    });
+  } catch (error) {
+    if (error instanceof Error && "code" in error) fail(String((error as { code: unknown }).code));
+    throw error;
+  }
   if (a) {
     const ins = arr(a.intents, "INVALID_INTENTS");
     if (!ins.length) fail("ACTIVE_RUN_WITHOUT_INTENT");
