@@ -154,6 +154,21 @@ importers:
 
   packages/event-envelope: {}
 
+  packages/git-lifecycle:
+    dependencies:
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@remoteagent/test-evidence':
+        specifier: workspace:*
+        version: link:../test-evidence
+      '@remoteagent/workspace-runner':
+        specifier: workspace:*
+        version: link:../workspace-runner
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/implementation-tools:
     dependencies:
       '@remoteagent/contracts':
