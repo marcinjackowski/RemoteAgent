@@ -27,13 +27,14 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | ID | Severity | Status | Domknięcie zaplanowane w |
 |---|---|---|---|
 | `CTF-001` | MEDIUM | OTWARTY | `RA-023-WU-00` |
-| `CTF-002` | MEDIUM | **ADRESOWANY dla RA-012** — `packageName` otwarte | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty |
+| `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte (RA-017 usunął swój) | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty |
 | `CTF-005` | MEDIUM | OTWARTY — kształt rozstrzygnięty (`checkpoint_revision`, backfill fail-closed) | RA-022 |
 | `CTF-006` | **HIGH** | OTWARTY — właściciel potwierdził domknięcie w RA-024 | RA-024 (hardening); obejście lokalne w RA-012-WU-05 |
 | `CTF-003` | LOW | **ZAPLANOWANY** | `RA-010-WU-11` (`READY`); przed RA-018/RA-026 |
 | `CTF-004` | LOW | OTWARTY | unit repozytorialny; 6 z 11 pakietów bez pokrycia |
 | `CTF-007` | LOW | OTWARTY | razem z `CTF-003`, przed RA-018/RA-026 |
 | `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
+| `CTF-010` | LOW | **ADRESOWANY procesowo** (ADR-0007) | wzorzec: komentarz != zachowanie; 5 defektów HIGH |
 | `CTF-009` | LOW | OTWARTY — mechanizm domknięty w RA-012 | `isForbiddenPath` nie zna plików instrukcji; RA-015/RA-021 |
 
 ---
@@ -632,3 +633,53 @@ Najbliżsi kandydaci na konsumentów: **RA-015** (independent reviewer czyta rep
 `isProtectedPath` z `implementation-tools`, albo mieć własną, jawną bramkę —
 nie zakładać, że `isForbiddenPath` wystarcza. Wpisane jako warunek wejścia do
 planów obu tasków.
+
+---
+
+## `CTF-010` — wzorzec: komentarz opisuje gwarancję, której kod nie daje
+
+- Severity: **LOW** (jako wpis rejestru), ale opisuje przyczynę **pięciu** defektów
+  klasy HIGH
+- Wykryty: `2026-08-20`, jako wzorzec przekrojowy w RA-012, RA-013, RA-014, RA-015,
+  RA-017
+- Status: **ADRESOWANY procesowo** przez ADR-0007; wpis istnieje jako dowód, że
+  bramka działa
+
+### Dowód
+
+Pięć niezależnych defektów o tej samej strukturze — kod czytał się jako poprawny,
+bo komentarz obok opisywał zachowanie, którego kod nie realizował:
+
+| Task | Komentarz twierdził | Kod robił |
+|---|---|---|
+| RA-012 | „spread czyni kryterium 1 realnym" | ręcznie odtwarzał request, gubiąc pola |
+| RA-012 | (test) „symlink odrzucony" | asercja tylko na `FAILED`, nie na kodzie polityki |
+| RA-014 | „guard odrzuca destrukcyjne komendy" | denylista defeatowalna sześcioma sposobami |
+| RA-015 | „resolution wskazuje evidence poprawki" | dowolny commit i digest czyściły blocker |
+| RA-017 | „URL nie niesie credentiala" | query string przechodził obie bramki |
+
+### Wpływ
+
+Wzorzec jest istotny, bo **przegląd kodu go nie wyłapuje** — komentarz i kod czyta
+się razem, a komentarz nadaje kodowi intencję, której ten nie ma. Wszystkie pięć
+wykryły dopiero: uruchomiona komenda weryfikacyjna (RA-012), mutation testing
+(RA-012 test, RA-015 częściowo) albo sonda adwersarialna audytora (RA-014, RA-015,
+RA-017).
+
+### Wymagana zmiana
+
+Żadna zmiana kodu — to wniosek procesowy, już zapisany w `AGENTS.md` jako zasada 9:
+„Komentarz nie jest dowodem zachowania. Jeżeli komentarz i kod się nie zgadzają,
+uruchomiony test rozstrzyga."
+
+Praktyczne konsekwencje, obowiązujące od teraz:
+
+1. **Asercja na kodzie, nie na klasie wyniku.** Test sprawdzający `FAILED` zamiast
+   konkretnego kodu odmowy przechodzi także wtedy, gdy odmowę wydała inna, słabsza
+   warstwa (RA-014, dowiedzione mutacją).
+2. **Allowlista zamiast denylisty** dla każdej granicy bezpieczeństwa. Denylista musi
+   przewidzieć wszystkie przyszłe wektory; allowlista tylko te używane (RA-014).
+3. **Sonda adwersarialna w każdym audycie.** Pięć na pięć tasków, w których jej
+   użyłem, dało finding, którego nie dały testy unitu. To najtańsza znana tu bramka.
+4. **Fail closed przy pustej konfiguracji.** Dwa defekty (`declaredPaths` w RA-014,
+   `declared.size > 0`) wynikały z traktowania braku deklaracji jako zgody.

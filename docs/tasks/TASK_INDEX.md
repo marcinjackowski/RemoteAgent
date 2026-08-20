@@ -43,8 +43,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 14 | [RA-014](RA-014.md) Local Git lifecycle | DONE | RA-010, RA-012, RA-013 | M2 |
 | 15 | [RA-015](RA-015.md) Independent review and fix loop | DONE | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
 | 16 | [RA-016](RA-016.md) Jira connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
-| 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | READY | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
-| 18 | [RA-018](RA-018.md) Golden path and concurrency proof | BLOCKED_BY_DEPENDENCIES | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
+| 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | DONE | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
+| 18 | [RA-018](RA-018.md) Golden path and concurrency proof | READY | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
 | 19 | [RA-019](RA-019.md) Gmail two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
 | 20 | [RA-020](RA-020.md) Calendar two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
 | 21 | [RA-021](RA-021.md) MCP Tool Broker | BLOCKED_BY_DEPENDENCIES | RA-005, RA-007, RA-009, RA-013, RA-016, RA-017, RA-019, RA-020 | M5 |
@@ -75,7 +75,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-013 work units](../work-units/RA-013/WORK_UNITS.md)
 - [RA-014 work units](../work-units/RA-014/WORK_UNITS.md)
 - [RA-015 work units](../work-units/RA-015/WORK_UNITS.md)
-- [RA-017 work units](../work-units/RA-017/WORK_UNITS.md) — `DRAFT`
+- [RA-017 work units](../work-units/RA-017/WORK_UNITS.md)
 - [RA-018 work units](../work-units/RA-018/WORK_UNITS.md) — `DRAFT`
 - [RA-019 work units](../work-units/RA-019/WORK_UNITS.md) — `DRAFT`
 - [RA-020 work units](../work-units/RA-020/WORK_UNITS.md) — `DRAFT`
