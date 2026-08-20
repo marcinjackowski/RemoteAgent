@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `23`
+- Plan revision: `24`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -36,8 +36,10 @@
 | `RA-008-WU-08A-F1` | `ACCEPTED` | fail-closed mapping snapshotu | WU-08A |
 | `RA-008-WU-08A-F2` | `ACCEPTED` | real-PG happy path i legalne statusy | WU-08A-F1 |
 | `RA-008-WU-08A-F3` | `ACCEPTED` | brakujące recovery negative proofs | WU-08A-F2 |
-| `RA-008-WU-08B` | `READY` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
-| `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B, WU-06 |
+| `RA-008-WU-08B` | `FIX_REQUIRED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
+| `RA-008-WU-08B-F1` | `READY` | fail-closed recovery state table | WU-08B |
+| `RA-008-WU-08B-F2` | `BLOCKED` | exhaustive pure recovery tests | WU-08B-F1 |
+| `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B-F2, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -401,7 +403,7 @@
 
 ## `RA-008-WU-08B` — Recovery plan and context reconstruction
 
-- Status: `READY`
+- Status: `FIX_REQUIRED`
 - Result: czysta funkcja wybiera jedną bezpieczną akcję recovery i odbudowuje
   bounded context bez poprzedniej sesji modelu.
 - Allowed paths: `packages/agent-orchestrator/src/recovery.ts`,
@@ -422,6 +424,41 @@
 - Out of scope: DB writes, wykonanie akcji i multi-role scheduling.
 - Sol gate: exhaustive state table, permutations, over-budget decisions,
   cross-scope fixture oraz deep-freeze inputs.
+
+## `RA-008-WU-08B-F1` — Recovery state-table fixes
+
+- Status: `READY`
+- Result: source implementuje zamkniętą, fail-closed tabelę bieżącego stanu
+  bez mylenia historycznych decyzji i bez poszerzania authority contextu.
+- Allowed paths: `packages/agent-orchestrator/src/recovery.ts`, `src/index.ts`.
+- Context pack: pierwsza próba WU-08B i findingi Sol z source review.
+- Acceptance:
+  - active incomplete zwraca natychmiast wyłącznie reconciliation+NONE; każdy
+    inny active kształt failuje, a status nie może zostać nadpisany dalszą logiką;
+  - planner identyfikuje current decision wyłącznie z prepared request source
+    completion, porównuje pełną semantykę i pozwala zachować historyczne decyzje
+    z rewizji `<= current`; waiting/resume wymagają exact case/status/answer/job;
+  - task/checkpoint/decision są model-origin `UNTRUSTED_DATA`, serializowane przez
+    `SecretRedactor.serialize`; pełny checkpoint JSON nie jest rendererem ani
+    skrótem, bindings są exact scope i sortowane po code units bez locale.
+- Verification: `pnpm --filter @remoteagent/agent-orchestrator typecheck && pnpm --filter @remoteagent/agent-orchestrator build`.
+- Out of scope: test matrix, DB i side effects.
+- Sol gate: manualna kontrola wszystkich gałęzi oraz brak tokenu replay w API.
+
+## `RA-008-WU-08B-F2` — Pure recovery test matrix
+
+- Status: `BLOCKED`
+- Result: publiczny recovery planner posiada exhaustive proof stanu, scope,
+  determinism, redaction, budgetu i non-mutation.
+- Allowed paths: `packages/agent-orchestrator/test/recovery.test.ts` oraz wyłącznie
+  małe source corrections ujawnione przez te testy.
+- Context pack: zaakceptowany WU-08B-F1 i istniejące builder/decision tests.
+- Acceptance: wszystkie statusy i sprzeczne kombinacje mają testy; permutations,
+  historyczne decyzje, duplicate/mismatch jobs, cross-scope, redaction canaries,
+  protected over-budget i deep-freeze są jawnie pokryte.
+- Verification: `pnpm vitest run packages/agent-orchestrator/test/recovery.test.ts`.
+- Out of scope: DB/integration i scheduler.
+- Sol gate: target test, typecheck, build, scoped lint/format i diff-check.
 
 ## `RA-008-WU-08C` — End-to-end crash and resume matrix
 
