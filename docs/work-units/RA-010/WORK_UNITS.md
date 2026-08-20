@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `14`
+- Plan revision: `15`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -26,7 +26,7 @@
 | `RA-010-WU-04` | `ACCEPTED` | confined command runner i limity | WU-02 |
 | `RA-010-WU-05` | `ACCEPTED` | operation log, digest i dirty state | WU-03, WU-04 |
 | `RA-010-WU-06` | `ACCEPTED` | writer fencing | WU-03, RA-009-WU-05 |
-| `RA-010-WU-07` | `READY` | resume i ambiguous recovery | WU-05, WU-06 |
+| `RA-010-WU-07` | `RUNNING` | resume i ambiguous recovery | WU-05, WU-06 |
 | `RA-010-WU-08` | `BLOCKED` | bezpieczny cleanup | WU-02, WU-07 |
 | `RA-010-WU-09` | `BLOCKED` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
 
@@ -116,14 +116,29 @@
 ## `RA-010-WU-07` — Resume and recovery
 
 - Result: restart odtwarza mapping i klasyfikuje workspace jako clean/dirty/ambiguous.
-- Allowed paths: `src/recovery.ts`, `src/local-adapter.ts`,
-  `test/recovery.integration.test.ts`, `src/index.ts`.
-- Context pack: WU-05/06, DB workspace schema, run-safety AMBIGUOUS semantics.
+- Allowed paths: `src/recovery.ts`, `src/operation-log.ts`, `src/local-adapter.ts`,
+  `src/types.ts`, `test/recovery.integration.test.ts`, `test/worktree.integration.test.ts`,
+  `src/index.ts`, `packages/database/src/repositories/workspace.ts`,
+  `packages/database/src/repositories/index.ts`.
+- Context pack: WU-05/06, istniejąca tabela `workspaces`, DB transaction/error
+  patterns, operation receipts i run-safety AMBIGUOUS semantics.
 - Acceptance: brak mapowania nie jest zgadywany; dirty tree nie jest resetowany;
-  przerwany write nie jest automatycznie replayed.
+  przerwany write nie jest automatycznie replayed. Server-owned registry zapisuje
+  exact `(workspace,case,repo,baseSha,branch)` intent przed pierwszą mutacją FS,
+  wykorzystując `tree_digest = NULL` jako rozpoczęty/niepotwierdzony stan bez
+  zmiany istniejącego schematu; exact retry jest idempotentny, konflikt jawny.
+  Po receipt registry ustawia digest warunkowo tylko dla tego samego mappingu.
+  Recovery nigdy nie skanuje ani nie zgaduje ścieżki: wymaga DB mappingu, waliduje
+  canonical target i symlinki, czyta bounded strict operation ledger oraz realny
+  Git/digest. Brak targetu, niepełny/corrupt ledger, receipt bez mappingu albo
+  write bez receipt daje `AMBIGUOUS` i zero replay/reset. Potwierdzony mapping +
+  zgodny digest + clean Git daje `CLEAN`; różnica digestu lub Git dirty daje
+  `DIRTY`. Resume odbudowuje wyłącznie in-memory mapping i nie zapisuje workspace.
 - Verification: `pnpm vitest run packages/workspace-runner/test/recovery.integration.test.ts`.
 - Out of scope: automatyczna naprawa Git.
-- Sol gate: kill points przed i po operation-log receipt.
+- Sol gate: real-PG restart/kill points przed intent, po intent, przed receipt,
+  po receipt i przed digest finalize; missing mapping, symlink i corrupt/truncated
+  ledger fail closed, a żaden path nie jest usuwany ani resetowany.
 
 ## `RA-010-WU-08` — Safe cleanup
 
