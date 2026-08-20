@@ -9,6 +9,11 @@
  * glance. All rendered text is treated as untrusted and sanitized.
  */
 import { sanitizeSingle } from "./sanitize.js";
+import { caseCheckpoint } from "@remoteagent/contracts";
+import { SecretRedactor } from "@remoteagent/observability";
+import * as z from "zod";
+
+const redactor = new SecretRedactor();
 
 export interface CaseStatusProjection {
   caseId: string;
@@ -23,27 +28,85 @@ export interface CaseStatusProjection {
   checkpointRevision: number;
 }
 
+export const StatusProjectionErrorCode = {
+  INVALID_INPUT: "INVALID_INPUT",
+} as const;
+export type StatusProjectionErrorCode =
+  (typeof StatusProjectionErrorCode)[keyof typeof StatusProjectionErrorCode];
+
+export class StatusProjectionError extends Error {
+  public constructor(
+    message: string,
+    public readonly code: StatusProjectionErrorCode,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "StatusProjectionError";
+  }
+}
+
+const statusInput = z.strictObject({
+  checkpoint: z.unknown(),
+  status: z.string().trim().min(1).max(64),
+});
+
+export function projectCheckpointStatus(input: unknown): CaseStatusProjection {
+  const inputResult = statusInput.safeParse(input);
+  if (!inputResult.success) {
+    throw new StatusProjectionError(
+      "Status projection input is invalid",
+      StatusProjectionErrorCode.INVALID_INPUT,
+    );
+  }
+  const checkpointResult = caseCheckpoint.safeParse(inputResult.data.checkpoint);
+  if (!checkpointResult.success) {
+    throw new StatusProjectionError(
+      "Status projection checkpoint is invalid",
+      StatusProjectionErrorCode.INVALID_INPUT,
+    );
+  }
+  const checkpoint = checkpointResult.data;
+  return {
+    caseId: checkpoint.case_id,
+    status: inputResult.data.status,
+    goal: checkpoint.goal,
+    currentPhase: checkpoint.current_phase,
+    summary: checkpoint.summary.value,
+    openQuestions: [...checkpoint.open_questions],
+    nextActions: [...checkpoint.next_actions],
+    blockers: [...checkpoint.blockers],
+    pendingApprovals: [...checkpoint.pending_approvals],
+    checkpointRevision: checkpoint.revision,
+  };
+}
+
 /** Render the pinned status message body (already sanitized and size-bounded). */
 export function renderStatusMessage(projection: CaseStatusProjection): string {
+  const safe = (value: string): string => redactor.redactString(value);
   const lines: string[] = [
-    `**Case ${projection.caseId}** — \`${projection.status}\` (rev ${projection.checkpointRevision})`,
-    `**Phase:** ${projection.currentPhase}`,
-    `**Goal:** ${projection.goal}`,
+    `**Case ${safe(projection.caseId)}** — \`${safe(projection.status)}\` (rev ${projection.checkpointRevision})`,
+    `**Phase:** ${safe(projection.currentPhase)}`,
+    `**Goal:** ${safe(projection.goal)}`,
   ];
   if (projection.summary.trim().length > 0) {
-    lines.push("", projection.summary.trim());
+    lines.push("", safe(projection.summary).trim());
   }
-  appendSection(lines, "Open questions", projection.openQuestions);
-  appendSection(lines, "Next actions", projection.nextActions);
-  appendSection(lines, "Blockers", projection.blockers);
-  appendSection(lines, "Pending approvals", projection.pendingApprovals);
+  appendSection(lines, "Open questions", projection.openQuestions, safe);
+  appendSection(lines, "Next actions", projection.nextActions, safe);
+  appendSection(lines, "Blockers", projection.blockers, safe);
+  appendSection(lines, "Pending approvals", projection.pendingApprovals, safe);
   return sanitizeSingle(lines.join("\n"));
 }
 
-function appendSection(lines: string[], title: string, items: readonly string[]): void {
+function appendSection(
+  lines: string[],
+  title: string,
+  items: readonly string[],
+  safe: (value: string) => string,
+): void {
   if (items.length === 0) return;
   lines.push("", `**${title}:**`);
   for (const item of items) {
-    lines.push(`• ${item}`);
+    lines.push(`• ${safe(item)}`);
   }
 }

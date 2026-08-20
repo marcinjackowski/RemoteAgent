@@ -12,5 +12,6 @@ export * from "./checkpoint/apply-patch.js";
 export * from "./checkpoint/errors.js";
 export * from "./checkpoint/apply-completion.js";
 export * from "./checkpoint/completion-errors.js";
+export * from "./checkpoint/render.js";
 export * from "./decisions/prepare.js";
 export * from "./decisions/errors.js";

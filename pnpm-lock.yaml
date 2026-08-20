@@ -68,6 +68,9 @@ importers:
       '@remoteagent/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:../observability
 
   packages/bedrock-runtime:
     dependencies:
