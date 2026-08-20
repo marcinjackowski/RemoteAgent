@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `15`
+- Plan revision: `16`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -271,7 +271,8 @@
 - Result: czysty algorytm tworzy bounded derived manifest bez mutacji źródeł i
   zachowuje pełny indeks provenance.
 - Allowed paths: `packages/agent-orchestrator/src/context/compaction.ts`,
-  `context/types.ts`, `test/compaction.test.ts`, `src/index.ts`.
+  `context/types.ts`, minimalna rejestracja kind w `context/builder.ts`,
+  `test/compaction.test.ts`, `src/index.ts`.
 - Context pack: WU-02/WU-03, ContextFragment i trust contracts.
 - Acceptance:
   - wynik jest jawnie `derived`, deterministyczny dla kolejności wejścia i ma
