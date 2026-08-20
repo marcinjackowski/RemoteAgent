@@ -84,10 +84,10 @@ pozostaje nietknięty — jego kontrakty są zaakceptowane i konsumowane. Ujęte
 | `RA-012-WU-03` | `ACCEPTED` | bounded read/search/tree/config tools | WU-01B |
 | `RA-012-WU-04` | `ACCEPTED` | journaled multi-file patch ze staging/digest/recovery | WU-02, WU-03 |
 | `RA-012-WU-05` | `ACCEPTED` | server-owned command policy + output/artifact sink | WU-02, WU-03 |
-| `RA-012-WU-06` | `READY` | mkdir w scope + diagnostics | WU-03 |
-| `RA-012-WU-07` | `PENDING` | composition + fault/restart matrix | WU-04, WU-05, WU-06 |
+| `RA-012-WU-06` | `ACCEPTED` | mkdir w scope + diagnostics | WU-03 |
+| `RA-012-WU-07` | `ACCEPTED` | composition + fault/restart matrix | WU-04, WU-05, WU-06 |
 
-Units wykonujemy sekwencyjnie, żeby zachować single-writer na pakiecie.
+Wszystkie units zaakceptowane. Task gotowy do bramki i audytu.
 
 ## `RA-012-WU-01` — Tool contracts and package scaffold
 
@@ -458,6 +458,39 @@ Units wykonujemy sekwencyjnie, żeby zachować single-writer na pakiecie.
 - Coordinator gate: brak `fs.mkdir` poza delegacją do zwalidowanej ścieżki;
   mutation test: pominięcie `validateCreateTarget` musi wywalić testy negatywne;
   pełna suite pakietu, całe repo bez regresji, typecheck/build/lint/format.
+- **Wynik gate'u (`2026-08-20`): ACCEPTED.** 19/19 w pliku unitu, suite pakietu
+  136/136.
+
+  Mutation testing wykrył **realną słabość testów, nie kodu** — warto zapisać, bo
+  to ten sam wzorzec co defekt `WU-05`. Pierwsze dwie mutacje (zamiana
+  `validateCreateTarget` na surowy `path.join`, czyli **usunięcie całej polityki
+  ścieżek**) przeszły 18/18 zielono. Testy symlinkowe asertowały wyłącznie
+  `outcome === FAILED`, a przy usuniętej polityce odmowę przejmował mój własny
+  `lstat`/`isDirectory()` — inny mechanizm, ten sam widoczny wynik.
+
+  Luka jest materialna, nie kosmetyczna: `isDirectory()` **akceptuje** symlink
+  wskazujący na prawdziwy katalog, więc wersja bez polityki adoptowałaby katalog
+  poza workspace jako idempotentny sukces. Sonda potwierdziła, że realna odmowa ma
+  kod `SYMLINK_NOT_ALLOWED` i pochodzi z `validateCreateTarget`.
+
+  Naprawa po stronie testów: asercje na **kod** (`MKDIR_SYMLINK_NOT_ALLOWED`)
+  zamiast samego `FAILED`, plus nowy przypadek „symlinked leaf pointing at a
+  DIRECTORY" — najostrzejszy kształt, którego `isDirectory()` nie łapie. Po tej
+  zmianie ta sama mutacja wywala 3 testy.
+
+  Skorygowałem też komentarz twierdzący, że walidacja każdego prefiksu jest tym, co
+  łapie symlink w komponencie pośrednim. Nieprawda: `validateCreateTarget` sam
+  przechodzi wszystkie komponenty przekazanej ścieżki, więc walidacja liścia
+  wystarcza. Prefiksy są walidowane, bo pętla potrzebuje ich rozwiązanych ścieżek
+  do `lstat`.
+
+  | Mutacja | Wynik |
+  |---|---|
+  | usunięcie `validateCreateTarget` (surowy `join`) | 3 testy FAIL (po wzmocnieniu asercji) |
+  | `if (missing.length === 0)` → `if (false)` (idempotencja) | 2 testy FAIL |
+  | nierozstrzygnięty `INTENT_RECORDED` → `SUCCEEDED` | 1 test FAIL |
+  | `error.code` → `error.message` (wyciek host path) | 3 testy FAIL |
+  | pominięcie kontroli non-directory na komponencie pośrednim | 1 test FAIL |
 
 ## `RA-012-WU-07` — Composition and fault/restart matrix
 
@@ -486,6 +519,37 @@ Units wykonujemy sekwencyjnie, żeby zachować single-writer na pakiecie.
 - Coordinator gate: sonda przecięcia eksportów; przegląd, że `toolset.ts` nie
   obchodzi żadnej polityki niższej warstwy; mutation test dla wstrzykiwania scope;
   **sześć kryteriów akceptacji RA-012 weryfikowanych osobno** przed handoffem.
+- **Wynik gate'u (`2026-08-20`): ACCEPTED.** 15/15 w pliku unitu, suite pakietu
+  136/136, całe repo 1230/1230 (118 plików).
+
+  Kształt rozwiązania: scope jest **domknięciem**, nie parametrem. `identity` jest
+  przekazany raz przy konstrukcji, a wszystkie osiem powierzchni model-facing nie ma
+  pola `identity`/`case_id`/`workspace_id`/`root`/`cwd`. Dwie pierwsze mutacje
+  (dopisanie `...input` do wywołania i mutowalna zmienna `identity` nadpisywana z
+  requestu) **nie dały się zmaterializować** — narzędzia są zbudowane raz, więc
+  wstrzyknięcie scope wymagałoby przebudowania narzędzia per wywołanie. Dopiero
+  mutacja robiąca dokładnie to (`createImplementationWriteTools` per call z
+  `input.identity ?? identity`) wywaliła test adwersarialny. To jest właściwy dowód:
+  wartość, której się nigdy nie przyjmuje, nie może być źle zwalidowana.
+
+  Ochrona ścieżek jest **jedna dla całego setu** (`guardPath` + `isProtectedPath`),
+  nie powtarzana w każdym narzędziu. Pokrywa to, czego nie pokrywa żadna warstwa
+  niżej: `AGENTS.md`/`CLAUDE.md` są dla `discovery-policy` i path policy zwykłymi
+  plikami, a model, który je nadpisze, edytuje instrukcje dla własnego kolejnego
+  przebiegu. Wszystkie asercje sprawdzają **bajty na dysku**, nie tylko kod.
+
+  | Mutacja | Wynik |
+  |---|---|
+  | `...input` do wywołania read (scope override) | 15/15 — mutacja nieosiągalna, scope jest domknięciem |
+  | mutowalny `identity` nadpisywany z requestu | 15/15 — narzędzia zbudowane raz, nie per call |
+  | budowa write toola per call z `input.identity` | **1 test FAIL** (adwersarialny sweep) |
+  | `guardPath` sprawdza tylko pierwszą ścieżkę | 1 test FAIL (przemycenie w batchu `patch`) |
+  | `PROTECTED_FILE_NAMES` wyłączone | 4 testy FAIL |
+
+  Przegląd braku obchodzenia niższych polityk: `toolset.ts` nie importuje `fs`,
+  `child_process`, `pg` ani `workspace-runner`'s path policy bezpośrednio — tylko
+  cztery fabryki narzędzi i kontrakty. Nie ma ścieżki, którą mógłby ominąć limit,
+  katalog komend albo politykę ścieżek warstwy niżej.
 
 ## Pokrycie kryteriów akceptacji RA-012
 
