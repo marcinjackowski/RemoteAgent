@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `19`
+- Plan revision: `20`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -29,6 +29,7 @@
 | `RA-010-WU-07` | `ACCEPTED` | resume i ambiguous recovery | WU-05, WU-06 |
 | `RA-010-WU-08` | `ACCEPTED` | bezpieczny cleanup | WU-02, WU-07 |
 | `RA-010-WU-09` | `ACCEPTED` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
+| `RA-010-WU-10` | `RUNNING` | read-only snapshot lifecycle | WU-07, AUDIT-01 |
 
 ## `RA-010-WU-01` — Workspace contracts
 
@@ -163,6 +164,24 @@
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/workspace-runner/test/isolation.integration.test.ts packages/workspace-runner/test/runner-lifecycle.integration.test.ts`.
 - Out of scope: commit/push i model file tools.
 - Sol gate: pełna macierz kryteriów RA-010, w tym realne filesystem boundaries.
+
+## `RA-010-WU-10` — Snapshot lifecycle audit fix
+
+- Finding: `RA010-A01-F01` z `docs/audits/RA-010/AUDIT-01.md`.
+- Result: publiczny `snapshot` zwraca exact digest i dirty state dla trwałego
+  mappingu bez mutacji workspace, mappingu ani ledgera.
+- Allowed paths: `packages/workspace-runner/src/local-adapter.ts`,
+  `packages/workspace-runner/test/snapshot.integration.test.ts`.
+- Context pack: audit 01, zaakceptowane publiczne APIs WU-01/WU-05/WU-07,
+  `packages/database/src/repositories/workspace.ts` i test harness real-PG.
+- Acceptance: snapshot wymaga server-owned exact mappingu zgodnego z
+  `caseId/workspaceId`; clean/dirty i restart zwracają deterministyczny digest,
+  a foreign/missing/symlink target failują zamknięcie. Operacja jest read-only:
+  nie wymaga writer fence i nie zmienia drzewa, mappingu ani ledgera.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/workspace-runner/test/snapshot.integration.test.ts`.
+- Out of scope: zapis snapshot artifactu, reset/recovery i zmiany kontraktów.
+- Sol gate: porównanie before/after bytes/stat ledgera, mappingu oraz tree digest,
+  wraz ze świeżym adapterem po restarcie.
 
 ## Final task gate
 
