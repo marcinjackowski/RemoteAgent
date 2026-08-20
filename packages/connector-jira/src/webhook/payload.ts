@@ -18,8 +18,13 @@ export interface JiraVerifiedPayloadWithMetadata {
     rawEventId: string;
     ownerId: string;
     connectionId: string;
+    receivedAt: string;
+    traceId: string;
     payloadRef: { ref: string; digest: string; size_bytes: number };
   };
+}
+function traceIdFor(rawEventId: string): string {
+  return `jira_trace_${createHash("sha256").update(rawEventId).digest("hex")}`;
 }
 export class JiraRawPayloadReadError extends Error {
   public readonly code = "JIRA_RAW_PAYLOAD_READ_REJECTED" as const;
@@ -63,6 +68,8 @@ export async function readVerifiedJiraPayloadWithMetadata(
       rawEventId: metadata.rawEventId,
       ownerId: metadata.ownerId,
       connectionId: metadata.connectionId,
+      receivedAt: metadata.receivedAt,
+      traceId: traceIdFor(metadata.rawEventId),
       payloadRef: {
         ref: metadata.payloadRef,
         digest: metadata.payloadDigest,

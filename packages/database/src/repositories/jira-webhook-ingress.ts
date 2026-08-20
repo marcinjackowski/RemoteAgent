@@ -13,6 +13,7 @@ export interface JiraRawPayloadMetadata {
   payloadRef: string;
   payloadDigest: string;
   payloadSizeBytes: number;
+  receivedAt: string;
 }
 
 export interface JiraIngressWrite {
@@ -53,12 +54,17 @@ export class JiraWebhookIngressRepository {
       payload_ref: string;
       payload_digest: string;
       payload_size_bytes: string | null;
+      received_at: Date | string;
     }>(
-      "SELECT owner_id, connection_id, raw_event_id, payload_ref, payload_digest, payload_size_bytes FROM raw_events WHERE raw_event_id=$1 AND provider='jira' AND owner_id=$2 AND connection_id=$3",
+      "SELECT owner_id, connection_id, raw_event_id, payload_ref, payload_digest, payload_size_bytes, received_at FROM raw_events WHERE raw_event_id=$1 AND provider='jira' AND owner_id=$2 AND connection_id=$3",
       [valid.data.rawEventId, valid.data.ownerId, valid.data.connectionId],
     );
     const row = result.rows[0];
     if (!row || row.payload_size_bytes === null) return null;
+    const receivedAt =
+      row.received_at instanceof Date ? row.received_at : new Date(row.received_at);
+    if (!Number.isFinite(receivedAt.getTime()))
+      throw new JiraWebhookIngressConflictError("identity");
     const size = Number(row.payload_size_bytes);
     if (!Number.isSafeInteger(size) || size < 0)
       throw new JiraWebhookIngressConflictError("identity");
@@ -69,6 +75,7 @@ export class JiraWebhookIngressRepository {
       payloadRef: row.payload_ref,
       payloadDigest: row.payload_digest,
       payloadSizeBytes: size,
+      receivedAt: receivedAt.toISOString(),
     };
   }
   public async persist(tx: Transaction, input: JiraIngressWrite): Promise<JiraIngressResult> {

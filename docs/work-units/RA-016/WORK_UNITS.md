@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `21`
+- Plan revision: `22`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -64,8 +64,8 @@
 | `RA-016-WU-07` | `ACCEPTED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
 | `RA-016-WU-08A` | `ACCEPTED` | zweryfikowany odczyt durable raw payloadu | WU-02, WU-07 |
 | `RA-016-WU-08B` | `ACCEPTED` | transaction-capable correlation core | WU-05C, WU-07, WU-08A |
-| `RA-016-WU-08C` | `RUNNING` | restart-stable trusted ingress context | WU-08A |
-| `RA-016-WU-08D` | `BLOCKED` | write-free durable correlation replay | WU-08B |
+| `RA-016-WU-08C` | `ACCEPTED` | restart-stable trusted ingress context | WU-08A |
+| `RA-016-WU-08D` | `RUNNING` | write-free durable correlation replay | WU-08B |
 | `RA-016-WU-08E` | `BLOCKED` | atomic Jira processing runtime | WU-08C, WU-08D |
 | `RA-016-WU-08F` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-08E |
 

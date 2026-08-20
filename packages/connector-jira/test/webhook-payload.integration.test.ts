@@ -88,6 +88,13 @@ describeIntegration(
       expect(calls).toBe(1);
     });
     it("returns exact trusted metadata from the same lookup", async () => {
+      const receivedAt = (
+        await db.query<{ received_at: Date }>(
+          "SELECT received_at FROM raw_events WHERE raw_event_id=$1",
+          [rawEventId],
+        )
+      ).rows[0]?.received_at.toISOString();
+      expect(receivedAt).toBeDefined();
       const result = await readVerifiedJiraPayloadWithMetadata({
         db,
         ownerId: "owner-1",
@@ -99,6 +106,8 @@ describeIntegration(
         rawEventId,
         ownerId: "owner-1",
         connectionId: "conn-1",
+        receivedAt,
+        traceId: `jira_trace_${createHash("sha256").update(rawEventId).digest("hex")}`,
         payloadRef: {
           ref: "opaque-ref",
           digest: `sha256:${createHash("sha256").update(body).digest("hex")}`,
@@ -106,6 +115,32 @@ describeIntegration(
         },
       });
       expect(result.bytes).toEqual(body);
+    });
+    it("returns the same durable context across separate reads and ignores forged context fields", async () => {
+      const reader: RawPayloadReader = { get: async () => body };
+      const first = await readVerifiedJiraPayloadWithMetadata({
+        db,
+        ownerId: "owner-1",
+        connectionId: "conn-1",
+        rawEventId,
+        reader,
+      });
+      const second = await readVerifiedJiraPayloadWithMetadata({
+        db,
+        ownerId: "owner-1",
+        connectionId: "conn-1",
+        rawEventId,
+        reader,
+      });
+      expect(second.metadata).toEqual(first.metadata);
+      expect(second.metadata.traceId).toBe(
+        `jira_trace_${createHash("sha256").update(rawEventId).digest("hex")}`,
+      );
+      const forgedInput = Object.assign(
+        { db, ownerId: "owner-1", connectionId: "conn-1", rawEventId, reader },
+        { traceId: "forged-trace", receivedAt: "2026-01-01T00:00:00.000Z" },
+      );
+      await expect(readVerifiedJiraPayloadWithMetadata(forgedInput)).resolves.toEqual(second);
     });
     it("rejects missing/foreign/tampered/size mismatch without leaking details", async () => {
       let calls = 0;
