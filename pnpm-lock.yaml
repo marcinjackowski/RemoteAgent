@@ -167,6 +167,12 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  packages/repository-planner:
+    dependencies:
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
   packages/workspace-runner: {}
 
 packages:
