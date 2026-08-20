@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `18`
+- Plan revision: `19`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -61,8 +61,9 @@
 | `RA-016-WU-05B` | `ACCEPTED` | scoped correlation lookup i durable receipt | WU-05A |
 | `RA-016-WU-05C` | `ACCEPTED` | atomic case/entity/binding/outbox correlation | WU-05B |
 | `RA-016-WU-06` | `ACCEPTED` | webhook registration health i renewal | WU-02, WU-04, WU-05C |
-| `RA-016-WU-07` | `RUNNING` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
-| `RA-016-WU-08` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-05C, WU-07 |
+| `RA-016-WU-07` | `ACCEPTED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
+| `RA-016-WU-08A` | `RUNNING` | zweryfikowany odczyt durable raw payloadu | WU-02, WU-07 |
+| `RA-016-WU-08B` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-05C, WU-07, WU-08A |
 
 ## `RA-016-WU-01` — Connector contracts and configuration
 
@@ -240,12 +241,33 @@
 - Out of scope: pełny Jira backup.
 - Sol gate: fault injection przed/po watermark commit.
 
-## `RA-016-WU-08` — End-to-end Jira proof
+## `RA-016-WU-08A` — Verified durable raw-payload read boundary
+
+- Result: worker odczytuje plaintext webhooka wyłącznie przez server-owned
+  reader i metadane raw eventu związane z exact owner/connection/raw-event scope.
+- Allowed paths: `packages/connector-jira/src/webhook/payload.ts`,
+  `packages/connector-jira/src/index.ts`,
+  `packages/connector-jira/test/webhook-payload.integration.test.ts`,
+  `packages/database/src/repositories/jira-webhook-ingress.ts`.
+- Context pack: WU-02 ingress, `raw_events` schema, trusted ingress context WU-03
+  i opaque raw-payload store boundary.
+- Acceptance: lookup wymaga server-owned owner, connection i raw event ID oraz
+  `provider=jira`; missing albo foreign scope failuje przed read. Injected reader
+  pobiera wyłącznie opaque `payload_ref`, a wynik przechodzi exact SHA-256 i
+  byte-size verification przed zwróceniem kopii bytes. Błąd nie zawiera
+  plaintextu, refu, digestu, tokenu ani sekretu; ingress result/outbox/DB nie
+  otrzymują plaintextu.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/webhook-payload.integration.test.ts`.
+- Out of scope: JSON parsing, normalizacja, enrichment, correlation i Discord.
+- Sol gate: real-PG exact/foreign/missing lookup, tampered digest/size, reader
+  failure oraz potwierdzenie, że unauthorized ingress nie wywołuje readera.
+
+## `RA-016-WU-08B` — End-to-end Jira proof
 
 - Result: fake Jira przechodzi verified ingress → normalized event → enrichment
   → case/entity → Discord, wraz z duplicate, sparse i lost-event paths.
 - Allowed paths: `test/jira-e2e.integration.test.ts`, `test/fake-jira.ts`,
-  `src/runtime.ts`, `src/index.ts`.
+  `src/runtime.ts`, `src/index.ts` oraz jawnie enumerowane sanitized fixtures.
 - Context pack: wszystkie zaakceptowane public APIs RA-016 i RA-003/004/006.
 - Acceptance: każde kryterium RA-016 ma test; dwa connection scopes pozostają
   rozłączne; restart nie duplikuje normalized event ani projection.

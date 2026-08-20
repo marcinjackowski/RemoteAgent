@@ -26,8 +26,9 @@ describe("Jira enrichment", () =>
         status: { trust: "UNTRUSTED_DATA", value: "" },
         labels: [],
       }),
-      put: async () => {
+      putIfNewer: async () => {
         writes += 1;
+        return "accepted" as const;
       },
     };
     const result = await enrichJiraIssue(
@@ -57,9 +58,10 @@ it("handles equal and newer versions with one valid public snapshot write", asyn
   let writes = 0;
   const store = {
     get: async () => current,
-    put: async (value: JiraEnrichedSnapshot) => {
+    putIfNewer: async (value: JiraEnrichedSnapshot) => {
       writes += 1;
       current = value;
+      return "accepted" as const;
     },
   };
   const client = {

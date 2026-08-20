@@ -16,3 +16,4 @@ export * from "./work-unit.js";
 export * from "./workspace.js";
 export * from "./jira-correlation.js";
 export * from "./jira-webhook-registration.js";
+export * from "./jira-reconciliation.js";
