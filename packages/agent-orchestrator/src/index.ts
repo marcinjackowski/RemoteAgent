@@ -20,3 +20,6 @@ export * from "./recovery.js";
 export * from "./roles/types.js";
 export * from "./roles/prompts.js";
 export * from "./roles/registry.js";
+export * from "./supervisor/state.js";
+export * from "./supervisor/errors.js";
+export * from "./supervisor/machine.js";

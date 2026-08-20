@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `05`
+- Plan revision: `06`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -21,8 +21,8 @@
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
 | `RA-009-WU-01` | `ACCEPTED` | role registry i wersjonowane prompt manifests | — |
-| `RA-009-WU-02` | `RUNNING` | czysta state machine Supervisora | WU-01 |
-| `RA-009-WU-03` | `BLOCKED` | trwały work-unit/run repository | WU-02 |
+| `RA-009-WU-02` | `ACCEPTED` | czysta state machine Supervisora | WU-01 |
+| `RA-009-WU-03` | `READY` | trwały work-unit/run repository | WU-02 |
 | `RA-009-WU-04` | `BLOCKED` | mailbox, semaphores i fairness | WU-03 |
 | `RA-009-WU-05` | `BLOCKED` | single-writer lease i fencing | WU-03 |
 | `RA-009-WU-06` | `BLOCKED` | read-only parallel merge | WU-04, WU-05 |
@@ -58,12 +58,15 @@
 ## `RA-009-WU-03` — Durable work-unit repository
 
 - Result: repository claimuje i finalizuje work units z trwałym run identity.
-- Allowed paths: `packages/database/src/repositories/work-unit.ts`,
-  `repositories/index.ts`, `test/work-unit.integration.test.ts`,
+- Allowed paths: `packages/database/migrations/023_work_units.{up,down}.sql`,
+  `packages/database/src/repositories/work-unit.ts`, `repositories/index.ts`,
+  `packages/database/src/index.ts`, `test/work-unit.integration.test.ts`,
   `packages/database/src/errors.ts`.
 - Context pack: migrations agent_runs/jobs, WU-02, RA-004 lease APIs.
-- Acceptance: dispatch/completion są idempotentne; stale completion nie mutuje
-  nowszego runu; completed unit nie jest claimowany po restarcie.
+- Acceptance: `work_units` jest trwałym źródłem prawdy zgodnym z kontraktem;
+  claim atomowo wiąże dokładnie jeden nowy `agent_run` w stanie `PLANNED`;
+  dispatch/completion są idempotentne; stale completion nie mutuje nowszego runu;
+  completed unit nie jest claimowany po restarcie.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/work-unit.integration.test.ts`.
 - Out of scope: scheduler fairness.
 - Sol gate: concurrent claim test na realnym PostgreSQL.
