@@ -279,6 +279,7 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
         input,
       );
     } catch (error) {
+      if (error instanceof WorkspaceFencingError) throw error;
       if (error instanceof WorkspaceCleanupError) throw error;
       throw new WorkspaceLifecycleError(
         "INVALID_LIFECYCLE",

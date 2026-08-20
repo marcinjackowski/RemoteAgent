@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `18`
+- Plan revision: `19`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -28,7 +28,7 @@
 | `RA-010-WU-06` | `ACCEPTED` | writer fencing | WU-03, RA-009-WU-05 |
 | `RA-010-WU-07` | `ACCEPTED` | resume i ambiguous recovery | WU-05, WU-06 |
 | `RA-010-WU-08` | `ACCEPTED` | bezpieczny cleanup | WU-02, WU-07 |
-| `RA-010-WU-09` | `RUNNING` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
+| `RA-010-WU-09` | `ACCEPTED` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
 
 ## `RA-010-WU-01` — Workspace contracts
 
