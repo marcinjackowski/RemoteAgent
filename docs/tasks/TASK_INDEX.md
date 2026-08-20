@@ -68,6 +68,7 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 - [RA-008 work units](../work-units/RA-008/WORK_UNITS.md)
 - [RA-009 work units](../work-units/RA-009/WORK_UNITS.md)
 - [RA-010 work units](../work-units/RA-010/WORK_UNITS.md)
+- [RA-011 work units](../work-units/RA-011/WORK_UNITS.md)
 - [RA-016 work units](../work-units/RA-016/WORK_UNITS.md)
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
