@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `21`
+- Plan revision: `22`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -34,8 +34,9 @@
 | `RA-008-WU-07B` | `ACCEPTED` | bezpieczna integracja compaction z builderem | WU-07A |
 | `RA-008-WU-08A` | `FIX_REQUIRED` | spójny trwały snapshot recovery | WU-04B, WU-05C |
 | `RA-008-WU-08A-F1` | `SOURCE_ACCEPTED` | fail-closed mapping snapshotu | WU-08A |
-| `RA-008-WU-08A-F2` | `READY` | pełna real-PG macierz snapshotu | WU-08A-F1 |
-| `RA-008-WU-08B` | `BLOCKED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F2, WU-07B |
+| `RA-008-WU-08A-F2` | `PARTIAL` | real-PG happy path i legalne statusy | WU-08A-F1 |
+| `RA-008-WU-08A-F3` | `READY` | brakujące recovery negative proofs | WU-08A-F2 |
+| `RA-008-WU-08B` | `BLOCKED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
 | `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
@@ -357,9 +358,9 @@
 - Out of scope: zmiana kontraktu akcji WU-08B i scheduler RA-009.
 - Sol gate: niezależne uruchomienie wszystkich kontroli z pinned runtime.
 
-## `RA-008-WU-08A-F2` — Recovery snapshot test matrix
+## `RA-008-WU-08A-F2` — Recovery snapshot happy-path matrix
 
-- Status: `READY`
+- Status: `PARTIAL`
 - Result: kontrakt snapshotu ma kompletny real-PG proof zamiast dwóch testów
   smoke oraz akceptuje wszystkie legalne stany trwałej kolejki.
 - Allowed paths: `packages/database/test/case-recovery.integration.test.ts` oraz
@@ -378,6 +379,25 @@
 - Out of scope: nowe API, recovery planner i scheduler.
 - Sol gate: testy dowodzą zachowania publicznego i nie obchodzą constraints przez
   wyłączanie integralności bazy.
+
+## `RA-008-WU-08A-F3` — Recovery snapshot negative proofs
+
+- Status: `READY`
+- Result: brakujące stany recovery są jawnie pokryte publicznymi testami
+  fail-closed bez dalszej zmiany kodu produkcyjnego.
+- Allowed paths: wyłącznie
+  `packages/database/test/case-recovery.integration.test.ts`.
+- Context pack: zaakceptowany source WU-08A/F1 i aktualne 10 testów F2.
+- Acceptance:
+  - osobny test dowodzi active run z intentem i bez completion oraz jawnych
+    `activeRun.completion = null`/`checkpointCompletion = ABSENT`;
+  - missing checkpoint completion oraz malformed persisted completion, decision,
+    answer i strict resume-job payload każde dają `CaseRecoveryStateError`;
+  - drugi case z własnymi decision/answer/job nie pojawia się w snapshot case-1,
+    a target test i wszystkie source gates pozostają zielone.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/case-recovery.integration.test.ts`.
+- Out of scope: modyfikacja production source, nowe API i planner.
+- Sol gate: każdy wymagany negative przypadek ma osobną asercję publicznego błędu.
 
 ## `RA-008-WU-08B` — Recovery plan and context reconstruction
 
