@@ -132,8 +132,10 @@ hardcoduje modeli w kontraktach runtime RemoteAgent.
   `docs/work-units/<TASK_ID>/WORK_UNITS.md`.
 - Jeden work unit ma jeden rezultat, mały context pack, ograniczone ścieżki i
   jedną celowaną weryfikację.
-- Luna wykonuje units sekwencyjnie w ephemerycznych sesjach; nie planuje, nie
-  audytuje i nie zmienia artefaktów workflow.
+- Luna wykonuje units danego taska sekwencyjnie w ephemerycznych sesjach; Sol
+  może prowadzić do trzech niezależnych tasków równolegle, gdy ich zależności i
+  zakresy zapisu są rozłączne. Luna nie planuje, nie audytuje i nie zmienia
+  artefaktów workflow.
 - Sol po każdym unit sprawdza diff i ponawia celowany test, a po całym tasku
   wykonuje pełny niezależny audyt.
 - To workflow służy oszczędzaniu ograniczonego budżetu Sol bez obniżania

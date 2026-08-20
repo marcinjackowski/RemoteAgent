@@ -23,7 +23,9 @@ Luna czyta tylko wskazany unit i nie edytuje tego katalogu.
 - `CANCELLED` — Sol jawnie wycofał unit z uzasadnieniem.
 
 W jednym planie może istnieć najwyżej jeden `READY`, `RUNNING` albo
-`IMPLEMENTED`. Concurrency implementera wynosi `1` z powodu single-writer.
+`IMPLEMENTED`. Daje to concurrency `1` na task. Sol może równolegle prowadzić do
+trzech planów o rozłącznych zakresach; single-writer nadal obowiązuje per task,
+`case_id` i zestaw allowed paths.
 
 Użyj `docs/templates/WORK_UNITS_TEMPLATE.md`. Limity i sposób uruchomienia
 opisują `AGENTS.md` oraz `docs/workflow/LUNA_IMPLEMENTER.md`.

@@ -65,8 +65,10 @@ Każdy work unit dla lokalnego implementera musi spełniać wszystkie warunki:
 4. Jedna celowana komenda weryfikacyjna oraz oczekiwany wynik.
 5. Jawne `Out of scope`, zakaz remote writes i zakaz edycji planów, statusów,
    handoffów oraz audytów.
-6. Nowa, ephemeryczna sesja Luny dla każdego work unit. Concurrency implementera
-   wynosi `1`, aby zachować single-writer; work units są wykonywane sekwencyjnie.
+6. Nowa, ephemeryczna sesja Luny dla każdego work unit. Sol może prowadzić do
+   trzech sesji implementera równolegle, ale najwyżej jedną dla danego taska i
+   wyłącznie przy rozłącznych allowed paths. Work units jednego taska pozostają
+   sekwencyjne, aby zachować single-writer.
 
 Jeżeli work unit nie mieści się w tych granicach, Sol dzieli go ponownie przed
 uruchomieniem Luny. Implementer nie wykonuje tego podziału samodzielnie.
@@ -88,10 +90,12 @@ uruchomieniem Luny. Implementer nie wykonuje tego podziału samodzielnie.
    exit code oraz zwięzłego wyniku.
 10. Jednocześnie tylko jeden implementer może zapisywać do workspace danego
     `case_id`.
-11. Nie edytuj `docs/tasks/`, `docs/work-units/`, `docs/handoffs/`,
+11. Równoległy implementer nie edytuje plików współdzielonych z innym aktywnym
+    taskiem. `TASK_INDEX.md`, plany, handoffy i audyty zawsze serializuje Sol.
+12. Nie edytuj `docs/tasks/`, `docs/work-units/`, `docs/handoffs/`,
     `docs/audits/` ani `docs/decisions/`, chyba że pojedynczy work unit jawnie
     wskazuje konkretny plik dokumentacji jako swój rezultat.
-12. Nie wykonuj `git commit`, `git push`, tworzenia MR ani innych zewnętrznych
+13. Nie wykonuj `git commit`, `git push`, tworzenia MR ani innych zewnętrznych
     zapisów. Luna zwraca wynik Solowi, który kontroluje diff i dalszy lifecycle.
 
 Sol używa Luny do wszystkich zmian kodu produktowego i napraw. Jeżeli model jest
@@ -114,6 +118,11 @@ Po wykonaniu wszystkich work units Sol musi bez zatrzymywania przebiegu:
 Handoff, audyt, `PASS` i granica taska nie są punktami pauzy dla właściciela.
 Sol zatrzymuje ciągły przebieg wyłącznie po poleceniu pauzy, przy materialnym
 `Decision Request` albo realnej zewnętrznej blokadzie.
+
+Sol utrzymuje maksymalnie trzy aktywne strumienie implementacyjne. Każdy strumień
+ma osobny task, bazowy commit/tree, plan, allowlistę i sesję Luny. Sol może
+audytować zakończony task, gdy inne Luny pracują, lecz nie przekazuje audytu
+implementerowi i nie łączy auditora z rolą writera kodu produktowego.
 
 Handoff jest sporządzaną przez Sol syntezą raportów work units, diffu i dowodów.
 Nie jest audytem ani substytutem niezależnego sprawdzenia implementacji.

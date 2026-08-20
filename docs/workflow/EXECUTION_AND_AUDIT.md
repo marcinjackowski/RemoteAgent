@@ -58,15 +58,16 @@ Sol wykonuje poniższe kroki bez proszenia użytkownika o wskazanie taska:
    zmień status na `IN_PROGRESS`, rozpisz każdy finding na mały fix work unit i
    zlecaj je Lunie pojedynczo.
 3. Jeżeli po audycie istnieje `AUDIT_PASSED`, natychmiast zmień go na `DONE`,
-   odblokuj taski, których wszystkie zależności są `DONE`, i rozpocznij pierwszy
-   z nich według kolejności indeksu.
+   odblokuj taski, których wszystkie zależności są `DONE`, i uzupełnij wolne
+   strumienie pierwszymi kwalifikującymi się taskami według kolejności indeksu.
 4. W przeciwnym razie, jeżeli istnieje `IN_PROGRESS`, wznów go na podstawie
    planu work units, ostatniego handoffu i aktualnego stanu repozytorium.
-5. W przeciwnym razie rozpocznij pierwszy `READY`: zapisz bazowy commit/tree,
-   ustaw `IN_PROGRESS`, utwórz lub zrewiduj plan work units i dopiero potem
-   uruchom pierwszy unit.
-6. Jeżeli istnieje `AWAITING_AUDIT`, Sol wykonuje audyt; nie uruchamia nowego
-   work unit przed wydaniem werdyktu.
+5. Dla każdego wolnego strumienia, maksymalnie do trzech łącznie, rozpocznij
+   pierwszy `READY`: zapisz bazowy commit/tree, ustaw `IN_PROGRESS`, utwórz lub
+   zrewiduj plan work units i dopiero potem uruchom pierwszy unit.
+6. Jeżeli istnieje `AWAITING_AUDIT`, Sol priorytetowo wykonuje jego audyt; inne
+   już uruchomione, rozłączne strumienie mogą w tym czasie kontynuować pracę.
+   Kolejny unit audytowanego taska czeka na werdykt.
 7. Po `PASS` albo zakończeniu fix loop wróć do kroku 1 bez oczekiwania na
    kolejną wiadomość właściciela.
 8. Jeżeli nie ma taska możliwego do rozpoczęcia, przedstaw konkretną blokadę.
@@ -80,9 +81,11 @@ ADR, jeśli zmienia architekturę), ustawia task z `BLOCKED` na `IN_PROGRESS` i
 kontynuuje. Sama komenda `continue` nie jest odpowiedzią na nierozstrzygnięte
 pytanie decyzyjne.
 
-Kolejność w indeksie rozstrzyga remis. Nie uruchamiaj dwóch makro-tasków w
-jednym przebiegu. Concurrency implementera wynosi `1` niezależnie od
-tego, czy implementowany produkt testuje współbieżność.
+Kolejność w indeksie rozstrzyga przydział wolnych strumieni. Sol może uruchomić
+do trzech makro-tasków równolegle, jeżeli wszystkie ich zależności są `DONE`,
+plany nie współdzielą plików i każdy task ma najwyżej jeden aktywny work unit.
+Konflikt zależności, pakietu albo allowed paths wymusza wykonanie sekwencyjne.
+Sol serializuje zmiany statusów, planów, handoffów, audytów i integracyjne gate'y.
 
 ## Cykl planowania Sol
 
@@ -94,7 +97,8 @@ tego, czy implementowany produkt testuje współbieżność.
    domyślnie do ośmiu plików, context pack poniżej 80k tokenów i jedną
    weryfikację. Dziel dalej tylko wtedy, gdy unit łączy niezależne zachowania,
    przekracza te granice albo pierwsza próba ujawni rzeczywiste przeciążenie.
-5. Zidentyfikuj zależności między units i tylko jeden oznacz jako `READY`.
+5. Zidentyfikuj zależności między units i tylko jeden unit danego taska oznacz
+   jako `READY`. Inne niezależne taski mogą mieć własny pojedynczy `READY`.
 6. Materialną niejasność zapisz jako Decision Request przed uruchomieniem
    implementera.
 

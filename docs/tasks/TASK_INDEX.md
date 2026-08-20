@@ -2,7 +2,9 @@
 
 Ten plik jest operacyjną kolejką makro-tasków. Statusy zmienia wyłącznie Sol
 jako `COORDINATOR_AUDITOR`, zgodnie z `AGENTS.md`. Lokalny implementer nie edytuje
-tej kolejki. Nie zmieniaj kolejności bez ADR albo decyzji właściciela.
+tej kolejki. Nie zmieniaj kolejności bez ADR albo decyzji właściciela. Sol
+przydziela według niej do trzech równoległych strumieni, pomijając taski z
+niespełnionymi zależnościami albo kolidującym zakresem zapisu.
 
 Każdy rozpoczynany task jest dzielony just-in-time na małe jednostki w
 `docs/work-units/<TASK_ID>/WORK_UNITS.md`. Gotowe plany najbliższych tasków nie

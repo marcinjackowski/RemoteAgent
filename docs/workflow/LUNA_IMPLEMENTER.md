@@ -12,7 +12,7 @@ Przed uruchomieniem unit Sol sprawdza:
 
 1. task i wszystkie zależności mają poprawny status;
 2. working tree oraz bazowy commit/tree są zapisane i rozpoznane;
-3. nie działa inny implementer zapisujący do tego samego zakresu;
+3. nie działa inny implementer tego taska ani zapisujący do tego samego zakresu;
 4. unit ma jeden rezultat, maksymalnie trzy kryteria, jawne allowed paths oraz
    jedną komendę weryfikacyjną;
 5. domyślnie obejmuje do ośmiu plików i context pack poniżej 80k tokenów;
@@ -24,8 +24,9 @@ potrzebuje różnych bramek testowych albo pierwsza próba ujawni scope drift.
 
 ## Dispatch
 
-Sol uruchamia jednego subagenta `gpt-5.6-luna` z reasoning effort `medium` i bez
-forkowania zbędnej historii rozmowy. Prompt zawiera:
+Sol uruchamia dla unit osobnego subagenta `gpt-5.6-luna` z reasoning effort
+`medium` i bez forkowania zbędnej historii rozmowy. Łącznie mogą działać trzy
+takie sesje dla niezależnych tasków o rozłącznych allowed paths. Prompt zawiera:
 
 - rolę `IMPLEMENTER`, task ID i work-unit ID;
 - dokładny rezultat oraz maksymalnie trzy kryteria;
@@ -55,4 +56,3 @@ poza allowlistą i niezależnie ponawia test.
 - Historia Luny nie jest wznawiana między units; źródłem prawdy pozostaje repo.
 - Po dwóch nieudanych próbach tego samego celu Sol dokumentuje finding i zmienia
   strategię podziału zamiast powtarzać identyczny prompt.
-
