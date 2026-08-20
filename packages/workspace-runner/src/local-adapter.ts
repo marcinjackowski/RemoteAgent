@@ -18,6 +18,7 @@ import { computeTreeDigest } from "./digest.js";
 import { OperationLedger } from "./operation-log.js";
 import { WorkspaceFencingError, type WorkspaceFenceValidator } from "./fencing.js";
 import { recoverWorkspace, WorkspaceRecoveryError, type WorkspaceRegistry } from "./recovery.js";
+import { cleanupWorkspace, WorkspaceCleanupError } from "./cleanup.js";
 import type {
   WorkspaceCreateInput,
   WorkspaceCreateResult,
@@ -253,11 +254,37 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
   }
 
   public async destroy(input: WorkspaceDestroyInput): Promise<WorkspaceDestroyResult> {
-    void input;
-    throw new WorkspaceLifecycleError(
-      "INVALID_LIFECYCLE",
-      "Destroy is outside the local adapter worktree unit",
-    );
+    this.validateIdentity(input.identity);
+    if (!this.config.fenceValidator)
+      throw new WorkspaceFencingError("Writer fence validator is required");
+    if (!this.registry)
+      throw new WorkspaceRecoveryError("CONFLICT", "Server-owned workspace registry is required");
+    try {
+      return await cleanupWorkspace(
+        {
+          workspaceRoot: this.config.workspaceRoot,
+          metadataRoot: this.metadataRoot,
+          repositories: Object.fromEntries(
+            Object.entries(this.config.repositories).map(([id, repository]) => [
+              id,
+              {
+                mirrorPath:
+                  repository.mirrorPath ?? join(this.config.workspaceRoot, ".git-mirrors", id),
+              },
+            ]),
+          ),
+          registry: this.registry,
+          fenceValidator: this.config.fenceValidator,
+        },
+        input,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceCleanupError) throw error;
+      throw new WorkspaceLifecycleError(
+        "INVALID_LIFECYCLE",
+        `Unable to cleanup workspace: ${error instanceof Error ? error.message : "cleanup failure"}`,
+      );
+    }
   }
 
   private key(identity: { caseId: string; workspaceId: string }): string {

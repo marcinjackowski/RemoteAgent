@@ -10,3 +10,4 @@ export * from "./digest.js";
 export * from "./operation-log.js";
 export * from "./fencing.js";
 export * from "./recovery.js";
+export * from "./cleanup.js";
