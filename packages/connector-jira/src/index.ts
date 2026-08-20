@@ -7,3 +7,5 @@
 export const packageName = "connector-jira" as const;
 export * from "./contracts.js";
 export * from "./errors.js";
+export * from "./webhook/verify.js";
+export * from "./webhook/ingress.js";

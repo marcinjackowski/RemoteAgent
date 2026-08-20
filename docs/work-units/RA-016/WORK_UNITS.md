@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `04`
+- Plan revision: `05`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -44,8 +44,8 @@
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
 | `RA-016-WU-01` | `ACCEPTED` | wersjonowane kontrakty i bezsekretowa konfiguracja | — |
-| `RA-016-WU-02` | `RUNNING` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
-| `RA-016-WU-03` | `BLOCKED` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
+| `RA-016-WU-02` | `ACCEPTED` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
+| `RA-016-WU-03` | `READY` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
 | `RA-016-WU-04` | `BLOCKED` | read-only REST client i stale-safe enrichment | WU-03 |
 | `RA-016-WU-05` | `BLOCKED` | issue/case correlation i Discord routing | WU-03, WU-04 |
 | `RA-016-WU-06` | `BLOCKED` | webhook registration health i renewal | WU-02, WU-04 |
@@ -86,13 +86,20 @@
 
 ## `RA-016-WU-03` — Parsing, ordering and scoped normalization
 
-- Result: create/update/delete/comment/changelog są parsowane do EventEnvelope i
-  odrzucane przed enrichment, gdy projekt lub owner/connection są poza scope.
-- Allowed paths: `src/parser.ts`, `src/normalize.ts`, `src/scope.ts`,
-  `test/parser.test.ts`, `test/scope.test.ts`, `test/fixtures/**`, `src/index.ts`.
+- Result: `jira:issue_created/updated/deleted` oraz
+  `comment_created/updated/deleted`, wraz z changelogiem `issue_updated`, są
+  parsowane do EventEnvelope i odrzucane przed enrichment, gdy projekt lub
+  owner/connection są poza scope.
+- Allowed paths: `src/contracts.ts`, `src/types.ts`, `src/parser.ts`,
+  `src/normalize.ts`, `src/scope.ts`, `test/parser.test.ts`, `test/scope.test.ts`,
+  `test/fixtures/**`, `src/index.ts`.
 - Context pack: WU-01/02, `EventEnvelope`, sanitized fixtures i Jira event types.
-- Acceptance: pięć klas eventów ma versioned parser; project key pochodzi z
-  autorytatywnego allowlist check; out-of-order/stale event ma jawny ordering key.
+- Acceptance: sześć dokładnych typów webhooków ma bounded, versioned parser;
+  changelog jest dozwolony wyłącznie w `jira:issue_updated`; routingowe
+  owner/connection i `payload_ref` pochodzą wyłącznie z trusted ingress context;
+  project key z payloadu przechodzi autorytatywny allowlist check przed
+  normalizacją; out-of-order/stale event ma deterministyczny ordering key z
+  provider timestamp oraz stabilnego raw-event id.
 - Verification: `pnpm vitest run packages/connector-jira/test/parser.test.ts packages/connector-jira/test/scope.test.ts`.
 - Out of scope: HTTP i case creation.
 - Sol gate: permutacje delivery order i fixture scan na PII/sekrety.

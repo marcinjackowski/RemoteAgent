@@ -92,6 +92,12 @@ importers:
       '@remoteagent/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:../database
+      jose:
+        specifier: 6.2.8
+        version: 6.2.8
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -998,6 +1004,9 @@ packages:
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
+
+  jose@6.2.8:
+    resolution: {integrity: sha512-Bsdjwm3Qsd/P0jR+BHDe3LytDfY7WBq2HmCCLIwuVRHMuEC9ae7/R474GIUdF1NgCyZjzVo/A9DOiOBtXq8ZoQ==}
 
   json-buffer@3.0.1:
     resolution: {integrity: sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==}
@@ -2332,6 +2341,8 @@ snapshots:
   is-number@7.0.0: {}
 
   isexe@2.0.0: {}
+
+  jose@6.2.8: {}
 
   json-buffer@3.0.1: {}
 
