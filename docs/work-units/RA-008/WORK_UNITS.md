@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `25`
+- Plan revision: `26`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -36,10 +36,10 @@
 | `RA-008-WU-08A-F1` | `ACCEPTED` | fail-closed mapping snapshotu | WU-08A |
 | `RA-008-WU-08A-F2` | `ACCEPTED` | real-PG happy path i legalne statusy | WU-08A-F1 |
 | `RA-008-WU-08A-F3` | `ACCEPTED` | brakujące recovery negative proofs | WU-08A-F2 |
-| `RA-008-WU-08B` | `FIX_REQUIRED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
+| `RA-008-WU-08B` | `ACCEPTED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
 | `RA-008-WU-08B-F1` | `ACCEPTED` | fail-closed recovery state table | WU-08B |
-| `RA-008-WU-08B-F2` | `READY` | exhaustive pure recovery tests | WU-08B-F1 |
-| `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B-F2, WU-06 |
+| `RA-008-WU-08B-F2` | `ACCEPTED` | exhaustive pure recovery tests | WU-08B-F1 |
+| `RA-008-WU-08C` | `READY` | end-to-end crash/resume matrix | WU-08B-F2, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -403,7 +403,7 @@
 
 ## `RA-008-WU-08B` — Recovery plan and context reconstruction
 
-- Status: `FIX_REQUIRED`
+- Status: `ACCEPTED`
 - Result: czysta funkcja wybiera jedną bezpieczną akcję recovery i odbudowuje
   bounded context bez poprzedniej sesji modelu.
 - Allowed paths: `packages/agent-orchestrator/src/recovery.ts`,
@@ -447,7 +447,7 @@
 
 ## `RA-008-WU-08B-F2` — Pure recovery test matrix
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: publiczny recovery planner posiada exhaustive proof stanu, scope,
   determinism, redaction, budgetu i non-mutation.
 - Allowed paths: `packages/agent-orchestrator/test/recovery.test.ts` oraz wyłącznie
@@ -462,7 +462,7 @@
 
 ## `RA-008-WU-08C` — End-to-end crash and resume matrix
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: publiczne API RA-008 odtwarza stan i bezpieczną akcję na każdym
   boundary completion/decision/answer po utracie procesu.
 - Allowed paths: `packages/database/test/checkpoint-recovery.integration.test.ts`,
