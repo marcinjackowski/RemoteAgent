@@ -5,50 +5,58 @@
 `AGENTS.md` jest nadrzędnym kontraktem tego repozytorium. Przeczytaj go w całości
 i stosuj przed rozpoczęciem jakiejkolwiek pracy.
 
-Od `2026-08-20` (zob.
-[ADR-0006](docs/decisions/ADR-0006-opus48-implementer.md))
-`Claude Opus 5` prowadzi rolę `COORDINATOR_AUDITOR`, a rolę `IMPLEMENTER` wykonuje
-`Claude Opus 4.8` (`amazon-bedrock/us.anthropic.claude-opus-4-8`, `variant: high`)
-w osobnej, ephemerycznej sesji per work unit. ADR-0006 zastąpił ADR-0005, w którym
-obie role dzieliły tożsamość modelu, ponieważ `Opus 4.8` nie był wtedy osiągalny.
+Od `2026-08-20` obowiązuje
+[ADR-0007](docs/decisions/ADR-0007-verification-first-delivery.md): jest **jedna
+rola wykonawcza**. Ta sesja planuje, implementuje i weryfikuje. Rozdział na
+koordynatora i implementera oraz dispatch osobnych sesji implementera
+(ADR-0006, ADR-0005, ADR-0004, ADR-0003) nie obowiązują. Aliasy `Sol` i `Luna`
+są historyczne.
 
-Implementacji nie wykonujesz nigdy w tej sesji: każdy work unit uruchamiasz jako
-osobną sesję agenta `implementer` (`.opencode/agent/implementer.md`) z zamkniętym
-context packiem i allowlistą ścieżek egzekwowaną przez permissions harnessu. Ta
-sesja pozostaje koordynatorem i audytorem, więc nie może być writerem kodu
-produktowego, który następnie ocenia. Komenda dispatchu:
-`docs/workflow/LUNA_IMPLEMENTER.md`.
+## Reguła nadrzędna
+
+Bramką jest **uruchomiona komenda**, nie dokument. Żaden status nie zmienia się
+na `DONE`, żaden audyt ani handoff nie powstaje, dopóki komenda weryfikacyjna
+nie zwróciła exit code `0`. Zielony przebieg nie wystarcza: mechanizmy
+bezpieczeństwa wymagają mutation checku, a `typecheck`/`build` uruchamiaj z
+`--force`, bo `turbo` raportuje sukces z cache bez uruchomienia czegokolwiek.
+
+Powód jest konkretny: RA-012 stał 99% ukończony za jedną linią, która odwracała
+kryterium „model nie poszerza server-owned policy”. Cztery istniejące testy
+wykrywały to natychmiast. Nikt ich nie uruchomił, a plan orzekł, że unit trzeba
+powtórzyć od zera.
+
+## Środowisko
+
+Przed bramką: `. scripts/dev/env.sh`, potem `RA_REQUIRE_POSTGRES=1`.
+
+Na tej maszynie Homebrew `node` jest zepsuty i przesłania działający
+`/usr/local/bin/node`, a Docker ma niezgodny client/engine. PostgreSQL 17 działa
+lokalnie na `5433` — zgodnie z domyślną konfiguracją repozytorium, więc Docker
+nie jest do niczego potrzebny.
 
 ## Specjalne znaczenie `continue`
 
-W tym repozytorium wiadomość użytkownika zawierająca samo `continue` **nie**
-oznacza „odtwórz poprzednią rozmowę Claude”. Jest trwałą komendą workflow.
+W tym repozytorium wiadomość zawierająca samo `continue` **nie** oznacza
+„odtwórz poprzednią rozmowę”. Jest trwałą komendą workflow.
 
 Po `continue` zawsze:
 
-1. Nie odpowiadaj, że brakuje wcześniejszego taska lub kontekstu sesji.
-2. Odtwórz stan z plików repozytorium, zaczynając od:
-   - `AGENTS.md`
-   - `docs/MASTER_PLAN.md`
-   - `docs/workflow/EXECUTION_AND_AUDIT.md`
-   - `docs/tasks/TASK_INDEX.md`
-3. Wykonaj algorytm wznowienia z `docs/workflow/EXECUTION_AND_AUDIT.md` w roli
-   `COORDINATOR_AUDITOR` i prowadź ciągły przebieg do polecenia pauzy,
-   materialnego Decision Requestu albo realnej blokady.
-
-Kodu produktowego nie piszesz samodzielnie także po `continue`: planujesz, dzielisz
-na work units, uruchamiasz implementerów jako subagentów i niezależnie audytujesz
-ich wynik.
-
-Do `2026-08-20` ten punkt brzmiał „nie implementuj, odeślij do Sol”, ponieważ rolę
-koordynatora prowadził osobny model. Od ADR-0005 (i dalej w ADR-0006) rolę
-koordynatora prowadzi ta sesja — nie ma komu odsyłać, a odesłanie byłoby
-zatrzymaniem przebiegu bez blokady.
+1. Nie odpowiadaj, że brakuje wcześniejszego taska ani kontekstu sesji.
+2. Odtwórz stan z repozytorium: `AGENTS.md`, `docs/MASTER_PLAN.md`,
+   `docs/tasks/TASK_INDEX.md`, plik aktualnego taska,
+   `docs/audits/CROSS_TASK_FINDINGS.md`.
+3. Wybierz task według kolejki (`CHANGES_REQUESTED` → `AUDIT_PASSED` →
+   `IN_PROGRESS` → pierwszy `READY`) i prowadź ciągły przebieg do polecenia
+   pauzy, materialnej decyzji właściciela albo realnej blokady.
 
 Historia chatu może być pusta. Repozytorium jest źródłem prawdy dla stanu pracy.
+
+## Zgoda właściciela
+
+`git commit` wymaga jawnego potwierdzenia. `git push`, MR/PR, merge oraz zmiany
+ticketów — nigdy bez potwierdzenia.
 
 ## MCP
 
 Ostrzeżenie o nieuwierzytelnionym MCP nie blokuje pracy, jeżeli aktualny task nie
 wymaga tego serwera. Nie uruchamiaj logowania ani nie proś o credentials na zapas.
-W szczególności `RA-001` nie wymaga MCP.

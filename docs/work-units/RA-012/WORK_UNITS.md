@@ -3,11 +3,11 @@
 ## Metadata
 
 - Task: `RA-012`
-- Plan revision: `8`
-- Plan owner: `COORDINATOR_AUDITOR`
-- Implementer: `Claude Opus 4.8 / variant high / IMPLEMENTER` (zob. [ADR-0006](../../decisions/ADR-0006-opus48-implementer.md))
 - Plan status: `ACTIVE`
-- Base commit/tree: `b2d6631` (+ niecommitowany, zaakceptowany WIP RA-011 i WIP RA-016)
+- Proces: [ADR-0007](../../decisions/ADR-0007-verification-first-delivery.md) —
+  jedna rola wykonawcza; bramką jest uruchomiona komenda. Pola `Plan revision`,
+  `Context pack` i limit prób zniesione.
+- Base commit: `8680050` (WU-05 zaakceptowany i scommitowany)
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/implementation-tools/test`
 
 ## Global boundaries
@@ -83,13 +83,11 @@ pozostaje nietknięty — jego kontrakty są zaakceptowane i konsumowane. Ujęte
 | `RA-012-WU-02` | `ACCEPTED` | durable operation intent ledger (migracja `027`) | WU-01 |
 | `RA-012-WU-03` | `ACCEPTED` | bounded read/search/tree/config tools | WU-01B |
 | `RA-012-WU-04` | `ACCEPTED` | journaled multi-file patch ze staging/digest/recovery | WU-02, WU-03 |
-| `RA-012-WU-05` | `READY` (próba przerwana, do powtórzenia) | server-owned command policy + output/artifact sink | WU-02, WU-03 |
-| `RA-012-WU-06` | `PENDING` | mkdir w scope + diagnostics | WU-03 |
+| `RA-012-WU-05` | `ACCEPTED` | server-owned command policy + output/artifact sink | WU-02, WU-03 |
+| `RA-012-WU-06` | `READY` | mkdir w scope + diagnostics | WU-03 |
 | `RA-012-WU-07` | `PENDING` | composition + fault/restart matrix | WU-04, WU-05, WU-06 |
 
-Dokładnie jeden unit tego taska jest `READY` w danym momencie (obecnie `WU-05`).
-Kolejny odblokowuje koordynator po akceptacji poprzednika — units jednego taska
-pozostają sekwencyjne, żeby zachować single-writer.
+Units wykonujemy sekwencyjnie, żeby zachować single-writer na pakiecie.
 
 ## `RA-012-WU-01` — Tool contracts and package scaffold
 
@@ -368,36 +366,68 @@ pozostają sekwencyjne, żeby zachować single-writer.
   przegląd kodu; canary secret sprawdzony osobno w logu i w output modelu;
   mutation test: usunięcie redakcji musi wywalić test; pełna suite pakietu, całe
   repo bez regresji, typecheck/build/lint/format.
-- Historia wykonania (`2026-08-20`): pierwsza próba **przerwana przez koordynatora
-  w trakcie pracy**, gdy właściciel polecił pauzę. Implementer zapisał
-  `src/command.ts` (37 KB) i przeszedł typecheck, ale nie zapisał wymaganego
-  `test/command.integration.test.ts` ani nie zaraportował wyniku. Zostawił też
-  poza allowlistą `test/zz-tmp-probe.test.ts` — sondę sprawdzającą rozwiązywanie
-  `@remoteagent/observability` pod vitest, czego pakiet nie ma w `dependencies`.
-  To był materialny Decision Request, którego implementer nie zgłosił.
-  **Unit jest do powtórzenia od zera**: `command.ts` nie ma wartości dowodowej bez
-  testu i raportu. Przy wznowieniu context pack musi jawnie rozstrzygnąć dostęp do
-  `@remoteagent/observability` — albo dodać go do allowlisty `package.json`, albo
-  zabronić i wskazać alternatywę dla redakcji.
-  Ta próba **nie** zużywa limitu dwóch prób tego samego celu, bo została przerwana
-  decyzją koordynatora, a nie zakończona niepowodzeniem merytorycznym.
-  Szczegóły i zapis błędu proceduralnego: `docs/handoffs/RA-012/HANDOFF-01.md`.
-- **Rozstrzygnięcie koordynatora przed drugą próbą (`2026-08-20`, plan rev. 8) —
-  dostęp do `@remoteagent/observability`: ZABRONIONY.** Nie dodajemy tej zależności
-  do `package.json`; `package.json` pozostaje poza allowlistą. Uzasadnienie: (1)
+- **Wynik gate'u (`2026-08-20`): ACCEPTED**, commit `8680050`.
+
+  Historia jest tu istotna, bo pokazuje przyczynę pętli opisanej w ADR-0007.
+  Pierwsza próba została przerwana przez koordynatora w trakcie pracy (drugi
+  incydent zabicia żywej sesji). Plan orzekł wtedy, że `command.ts` „nie ma
+  wartości dowodowej" i **unit trzeba powtórzyć od zera**. To było błędne
+  rozpoznanie: brakowało wyłącznie uruchomienia komendy weryfikacyjnej.
+
+  Faktyczny stan po wznowieniu: `test/command.integration.test.ts` (475 linii,
+  pokrywający wszystkie trzy kryteria) **istniał na dysku**, a `command.ts` był
+  ukończony poza jedną linią. Uruchomienie bramki dało 4 czerwone testy, wszystkie
+  w kryterium 1.
+
+  Defekt: `run` odtwarzał request modelu ręcznie jako
+  `{ operation_id, command }`, przez co `env`, `cwd`, `network`, `timeoutMs` i
+  `outputBytes` znikały **przed** strict parse. Komentarz nad tą linią opisywał
+  zachowanie odwrotne i poprawne — wprost stwierdzał, że spread jest tym, „co
+  czyni kryterium 1 realnym" — więc defekt czytał się jako prawidłowy przy każdym
+  przeglądzie kodu. Request poszerzający policy zwracał `SUCCEEDED` zamiast
+  `FAILED` / `POLICY_NOT_EXTENSIBLE`, czyli kryterium akceptacji 1 taska było
+  **odwrócone**. Naprawa: `const { signal, ...requested } = input;`.
+
+  Wniosek zapisany w `AGENTS.md`: komentarz nie jest dowodem zachowania. Gdy
+  komentarz i kod się nie zgadzają, rozstrzyga uruchomiony test.
+
+  Dowody (wszystkie uruchomione, nie zapowiedziane):
+
+  | Kontrola | Exit | Wynik |
+  |---|---:|---|
+  | `command.integration.test.ts` | 0 | 14/14 |
+  | suite pakietu | 0 | 102/102 |
+  | całe repo, real PG | 0 | **1196/1196**, 116 plików |
+  | `typecheck --force` (uncached) | 0 | 31/31 |
+  | `build --force` (uncached) | 0 | 23/23 |
+  | prettier, `workflow:validate`, `git diff --check` | 0 | clean |
+
+  Mutation check: przywrócenie ręcznie budowanego obiektu odtwarza dokładnie te
+  cztery czerwone testy → są load-bearing, nie przypadkowo zielone.
+
+  Kontrola braku duplikacji: zero `child_process`/`spawn` (jedyne trafienie to
+  komentarz), 17 delegacji do `runProcess`, zero `any`/`as unknown as`, brak
+  `@remoteagent/observability` w `package.json` — rozstrzygnięcie o lokalnej
+  warstwie redakcji zachowane.
+
+  Sondy poza allowlistą (`zz-tmp-probe`, `zz-coord-probe`) nie istnieją.
+
+  Jeden fail `workspace-runner/recovery.integration` w pierwszym pełnym przebiegu
+  okazał się znanym flakiem cross-worker (`CTF-003`/`CTF-007`): 5/5 solo, zielony
+  w powtórzonym pełnym przebiegu. Nie dotyczy tej zmiany.
+- **Rozstrzygnięcie (`2026-08-20`) — dostęp do `@remoteagent/observability`:
+  ZABRONIONY, i tak pozostaje w zaakceptowanym kodzie.** Nie dodajemy tej
+  zależności do `package.json`. Uzasadnienie: (1)
   `SecretRedactor` jest niekompletny dokładnie dla danych, które nosi output
   komendy (absolutne host paths) — patrz `CTF-006`, więc i tak nie wolno na nim
   polegać; (2) rozszerzanie zależności pakietu było `Out of scope` tego unitu; (3)
   ujednolicenie wzorców redakcji należy do RA-024 i ma objąć również tabelę z tego
-  unitu. Wymagana jest więc **lokalna, samowystarczalna warstwa redakcji** w
-  `src/command.ts` (host paths, `glpat-`, `AKIA`, `-----BEGIN … PRIVATE KEY-----`,
-  JWT `eyJ…`, `Bearer`/`Basic`, znane literały sekretów przekazane przez serwer),
-  z jawnym komentarzem, że jest to stan przejściowy do domknięcia w RA-024.
-- **Materiał wyjściowy:** `packages/implementation-tools/src/command.ts` z
-  przerwanej próby (37 KB) pozostaje na dysku i jest w allowliście. Implementer może
-  go zachować, przerobić albo napisać od zera — decyzja jest jego, ale plik **nie
-  jest** zaakceptowany i bez testu oraz raportu nie ma wartości dowodowej. Zawiera
-  już lokalną tabelę `redactCommandOutput`, zgodną z rozstrzygnięciem powyżej.
+  unitu. Zrealizowane jako **lokalna, samowystarczalna warstwa redakcji**
+  (`redactCommandOutput` w `src/command.ts`) pokrywająca host paths, `glpat-`,
+  `AKIA`, `-----BEGIN … PRIVATE KEY-----`, JWT `eyJ…`, `Bearer`/`Basic` i znane
+  literały sekretów przekazane przez serwer, z jawnym komentarzem `Transitional`
+  wskazującym `CTF-006`/RA-024. Zwinięcie tej tabeli do wspólnego zestawu
+  pozostaje w zakresie RA-024 — patrz `CTF-006`, punkt 3.
 
 ## `RA-012-WU-06` — Scoped mkdir and diagnostics
 

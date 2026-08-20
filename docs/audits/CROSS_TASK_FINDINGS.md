@@ -33,6 +33,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-003` | LOW | **ZAPLANOWANY** | `RA-010-WU-11` (`READY`); przed RA-018/RA-026 |
 | `CTF-004` | LOW | OTWARTY | unit repozytorialny; 6 z 11 pakietów bez pokrycia |
 | `CTF-007` | LOW | OTWARTY | razem z `CTF-003`, przed RA-018/RA-026 |
+| `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
 
 ---
 
@@ -346,6 +347,11 @@ Konsekwencje, które muszą obowiązywać do RA-024:
 1. Żaden unit nie zalicza kryterium redakcji wyłącznie na `SecretRedactor`.
 2. `RA-012-WU-05` dostaje **lokalną** tabelę wzorców (host paths, `glpat-`, `AKIA`,
    klucze prywatne, JWT) i jawny komentarz, że jest to stan przejściowy.
+   **Wykonane `2026-08-20`** (commit `8680050`): `redactCommandOutput` w
+   `packages/implementation-tools/src/command.ts`, oznaczone `Transitional` ze
+   wskazaniem na ten finding. Test canary sprawdza host paths i tokeny providerów
+   jawnie, nie polegając na `SecretRedactor`. To **trzecie** miejsce z własnym
+   zestawem wzorców — zakres RA-024 obejmuje je razem z pozostałymi dwoma.
 3. Zakres domknięcia w RA-024 obejmuje **również** zwinięcie tej lokalnej tabeli z
    `implementation-tools` do wspólnego zestawu — inaczej RA-024 ujednolici dwa
    miejsca, zostawiając trzecie.
@@ -515,3 +521,55 @@ skutek zamknięcia, nie jako unhandled exception. Domykać razem z `CTF-003` (te
 charakter: flake harnessu testowego) i przed finalnymi bramkami `RA-018`/`RA-026`.
 Zakres: `packages/workspace-runner` i/lub `packages/database/test` — oba należą do
 tasków `DONE`, więc wymaga pełnego cyklu audytowego.
+
+---
+
+## `CTF-008` — `pnpm run lint` jest czerwony na `main`
+
+- Severity: **LOW**
+- Wykryty: `2026-08-20`, podczas reformy procesu (ADR-0007), przy pierwszym
+  uruchomieniu **repozytorialnej** bramki lint
+- Dotyczy: `packages/bedrock-runtime` (RA-007, `DONE`)
+- Status: **OTWARTY**
+
+### Dowód
+
+```text
+packages/bedrock-runtime/src/fake-transport.ts
+  36:43  error  '_config' is defined but never used   @typescript-eslint/no-unused-vars
+packages/bedrock-runtime/src/retry.ts
+  42:13  error  'handle' is never reassigned. Use 'const' instead   prefer-const
+packages/bedrock-runtime/test/runtime.integration.test.ts
+  11:8   error  'RuntimeTransport' is defined but never used   @typescript-eslint/no-unused-vars
+✖ 3 problems (3 errors, 0 warnings)   exit 1
+```
+
+Potwierdzone jako **preexistujące**: te same trzy błędy występują po odłożeniu
+wszystkich zmian reformy (`git stash -u`), więc nie pochodzą z ADR-0007 ani z
+commita `8680050`.
+
+### Wpływ
+
+Sam kod jest poprawny — to nieużywane symbole i jeden `let`, który powinien być
+`const`. Istotne jest co innego: **`pnpm run check` nie może przejść na `main`**,
+bo `lint` jest jego pierwszym krokiem. Każdy handoff deklarujący „scoped ESLint
+PASS" był prawdziwy tylko dla wybranego pakietu; bramka repozytorialna nigdy nie
+była zielona. To dokładnie ta klasa różnicy między „bramka zadeklarowana" a
+„bramka uruchomiona", którą adresuje ADR-0007 — i została znaleziona pierwszym
+uruchomieniem pełnego linta, nie przeglądem dokumentów.
+
+Osobno: `_config` z podkreśleniem sugeruje intencję „świadomie nieużywany", ale
+konfiguracja ESLint nie ma dla tego wzorca wyjątku (`argsIgnorePattern`), więc
+konwencja i bramka się rozjeżdżają.
+
+### Wymagana zmiana
+
+Usunąć trzy nieużywane symbole i zamienić `let handle` na `const`, albo — dla
+`_config` — dodać `argsIgnorePattern: "^_"` do konfiguracji ESLint, jeżeli
+podkreślenie ma być obowiązującą konwencją. Rozstrzygnąć jedno i drugie razem, żeby
+nie zostawić trzeciej wersji tej samej reguły.
+
+Zakres dotyka `packages/bedrock-runtime`, który jest `DONE`, więc zmiana wymaga
+pełnego cyklu audytowego (jak `CTF-003` i `CTF-007`). Domykać razem z nimi, przed
+finalnymi bramkami `RA-018`/`RA-026`, które opierają dowodowość na zielonym
+`check`.

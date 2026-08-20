@@ -1,5 +1,14 @@
 # Implementer — kontrakt uruchomienia
 
+> **`SUPERSEDED` od `2026-08-20`** —
+> [ADR-0007](../decisions/ADR-0007-verification-first-delivery.md) zniósł rolę
+> osobnego implementera i dispatch przez `opencode run --agent implementer`. Jest
+> jedna rola wykonawcza; obowiązującym kontraktem jest `AGENTS.md`.
+>
+> Ten plik zostaje jako zapis stanu z chwili powstania i punkt rollbacku do
+> ADR-0006 (konfiguracja agenta w `.opencode/agent/implementer.md` jest
+> nienaruszona). **Nie stosuj go do nowej pracy.**
+
 ## Cel
 
 Implementer wykonuje skupione work units przygotowane przez koordynatora. Nie

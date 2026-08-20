@@ -1,14 +1,16 @@
 # Task Index
 
-Ten plik jest operacyjną kolejką makro-tasków. Statusy zmienia wyłącznie Sol
-jako `COORDINATOR_AUDITOR`, zgodnie z `AGENTS.md`. Lokalny implementer nie edytuje
-tej kolejki. Nie zmieniaj kolejności bez ADR albo decyzji właściciela. Sol
-przydziela według niej do trzech równoległych strumieni, pomijając taski z
-niespełnionymi zależnościami albo kolidującym zakresem zapisu.
+Ten plik jest operacyjną kolejką makro-tasków i jedynym źródłem statusów. Nie
+zmieniaj kolejności bez ADR albo decyzji właściciela. Task zaczynasz tylko wtedy,
+gdy wszystkie jego zależności są `DONE`.
 
-Każdy rozpoczynany task jest dzielony just-in-time na małe jednostki w
+Każdy rozpoczynany task jest dzielony just-in-time na kroki w
 `docs/work-units/<TASK_ID>/WORK_UNITS.md`. Gotowe plany najbliższych tasków nie
 zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
+
+Status zmienia się na `DONE` wyłącznie po uruchomionej bramce i audycie `PASS` —
+zob. [ADR-0007](../decisions/ADR-0007-verification-first-delivery.md). Po każdej
+zmianie statusu uruchom `pnpm workflow:validate`.
 
 ## Status legend
 
