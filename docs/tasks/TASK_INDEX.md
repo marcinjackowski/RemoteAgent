@@ -39,8 +39,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 10 | [RA-010](RA-010.md) Isolated workspace runner | DONE | RA-001, RA-003, RA-004, RA-005 | M2 |
 | 11 | [RA-011](RA-011.md) Repository discovery and planning | DONE | RA-008, RA-010 | M2 |
 | 12 | [RA-012](RA-012.md) Implementation toolset | DONE | RA-005, RA-007, RA-009, RA-010, RA-011 | M2 |
-| 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | READY | RA-010, RA-012 | M2 |
-| 14 | [RA-014](RA-014.md) Local Git lifecycle | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012, RA-013 | M2 |
+| 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | DONE | RA-010, RA-012 | M2 |
+| 14 | [RA-014](RA-014.md) Local Git lifecycle | READY | RA-010, RA-012, RA-013 | M2 |
 | 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
 | 16 | [RA-016](RA-016.md) Jira connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
 | 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
