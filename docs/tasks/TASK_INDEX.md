@@ -34,8 +34,8 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 | 7 | [RA-007](RA-007.md) Bedrock Converse runtime | DONE | RA-001, RA-002, RA-005 | M1 |
 | 8 | [RA-008](RA-008.md) Checkpoints, context and decisions | DONE | RA-002, RA-003, RA-004, RA-007 | M1 |
 | 9 | [RA-009](RA-009.md) Multi-agent orchestrator | DONE | RA-004, RA-006, RA-007, RA-008 | M1 |
-| 10 | [RA-010](RA-010.md) Isolated workspace runner | AUDIT_PASSED | RA-001, RA-003, RA-004, RA-005 | M2 |
-| 11 | [RA-011](RA-011.md) Repository discovery and planning | BLOCKED_BY_DEPENDENCIES | RA-008, RA-010 | M2 |
+| 10 | [RA-010](RA-010.md) Isolated workspace runner | DONE | RA-001, RA-003, RA-004, RA-005 | M2 |
+| 11 | [RA-011](RA-011.md) Repository discovery and planning | IN_PROGRESS | RA-008, RA-010 | M2 |
 | 12 | [RA-012](RA-012.md) Implementation toolset | BLOCKED_BY_DEPENDENCIES | RA-007, RA-009, RA-010, RA-011 | M2 |
 | 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012 | M2 |
 | 14 | [RA-014](RA-014.md) Local Git lifecycle | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012, RA-013 | M2 |
