@@ -90,11 +90,17 @@ export const gitlabRemote = z
     try {
       const url = new URL(value);
       // Either half of userinfo is a credential channel.
-      return url.username === "" && url.password === "";
+      if (url.username !== "" || url.password !== "") return false;
+      // A query string or fragment is a credential channel too, and an easier one
+      // to overlook: `?private_token=glpat-...` is a documented GitLab
+      // authentication method, and an audit probe confirmed it passed both the
+      // userinfo refinement and `assertNoCredentialInUrl`. A clone URL needs
+      // neither, so both are refused outright rather than filtered.
+      return url.search === "" && url.hash === "";
     } catch {
       return false;
     }
-  }, "remote must not embed credentials");
+  }, "remote must not embed credentials, a query string or a fragment");
 
 /**
  * An allowlisted project. Obtainable ONLY from {@link GitLabProjectAllowlist}.

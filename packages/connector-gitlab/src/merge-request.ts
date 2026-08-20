@@ -72,10 +72,22 @@ export function redactGitLabOutput(value: string, broker: CredentialBroker): str
 export function assertNoCredentialInUrl(url: string): void {
   try {
     const parsed = new URL(url);
-    if (parsed.username !== "" || parsed.password !== "") {
+    // Userinfo AND the query/fragment. An audit probe showed
+    // `?private_token=glpat-...` passing this check: it is a documented GitLab
+    // authentication method, so treating only userinfo as "the credential part of a
+    // URL" leaves the easier channel open. A clone or web URL needs neither.
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
       // The URL itself is deliberately NOT included in the message: it contains the
       // credential this error exists to report.
-      throw new GitLabConnectorError(GITLAB_CREDENTIAL_IN_URL, "remote URL carries credentials");
+      throw new GitLabConnectorError(
+        GITLAB_CREDENTIAL_IN_URL,
+        "remote URL carries credentials, a query string or a fragment",
+      );
     }
   } catch (error) {
     if (error instanceof GitLabConnectorError) throw error;
@@ -132,16 +144,32 @@ export interface BranchPusher {
  * omitting the heading, because a missing section reads as "not considered" while an
  * explicit "none" is a claim someone can be held to.
  */
-export function renderMergeRequestDescription(intent: GitLabMergeRequestIntent): string {
+export function renderMergeRequestDescription(
+  intent: GitLabMergeRequestIntent,
+  broker?: CredentialBroker,
+): string {
+  /**
+   * Redact the prose fields.
+   *
+   * `task_summary` and `unresolved_risks` are the only model-authored text in this
+   * package, and this description is PUBLISHED to a remote where it cannot be
+   * unpublished. An audit probe put a token in `task_summary` and watched it reach
+   * the rendered output verbatim. Redacting here covers that channel and also the
+   * likelier accident: a summary quoting a command whose output contained an
+   * absolute host path.
+   */
+  const safe = (value: string): string =>
+    redactCommandOutput(value, broker?.redactionLiterals() ?? []);
+
   const risks =
     intent.unresolved_risks.length === 0
       ? "None known."
-      : intent.unresolved_risks.map((risk) => `- ${risk}`).join("\n");
+      : intent.unresolved_risks.map((risk) => `- ${safe(risk)}`).join("\n");
 
   return [
     "## What and why",
     "",
-    intent.task_summary,
+    safe(intent.task_summary),
     "",
     "## Test evidence",
     "",
@@ -206,7 +234,7 @@ export class GitLabMergeRequestPublisher {
     }
     const intent = gitlabMergeRequestIntent.parse(rawIntent);
     assertNoCredentialInUrl(project.remote);
-    const description = renderMergeRequestDescription(intent);
+    const description = renderMergeRequestDescription(intent, this.#broker);
 
     return this.#broker.use({ projectId: project.project_id }, async (token) => {
       let pushOutput: string;

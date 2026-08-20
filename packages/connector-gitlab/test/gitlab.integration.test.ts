@@ -295,6 +295,50 @@ describe("gitlab connector", () => {
       expect(gitlabRemote.safeParse("git@gitlab.example.com:acme/repo.git").success).toBe(true);
     });
 
+    it("refuses a token carried in a URL QUERY STRING or fragment", () => {
+      // Found by an audit probe. `?private_token=...` is a documented GitLab
+      // authentication method, so treating only userinfo as "the credential part of
+      // a URL" left the easier channel wide open — and both guards passed it.
+      for (const bad of [
+        `https://gitlab.example.com/acme/repo.git?private_token=${TOKEN}`,
+        `https://gitlab.example.com/acme/repo.git?access_token=${TOKEN}`,
+        `https://gitlab.example.com/acme/repo.git#${TOKEN}`,
+      ]) {
+        expect(gitlabRemote.safeParse(bad).success, bad).toBe(false);
+        try {
+          assertNoCredentialInUrl(bad);
+          throw new Error(`expected a refusal for ${bad}`);
+        } catch (error) {
+          expect((error as { code?: string }).code, bad).toBe(GITLAB_CREDENTIAL_IN_URL);
+        }
+      }
+      // A plain clone URL with a port is still fine; it needs neither.
+      expect(gitlabRemote.safeParse("https://gitlab.example.com:8443/acme/repo.git").success).toBe(
+        true,
+      );
+    });
+
+    it("redacts a token that a model smuggled into the MR description", async () => {
+      // Found by an audit probe: `task_summary` is model-authored prose that gets
+      // PUBLISHED to a remote, where it cannot be unpublished.
+      const { api, seen } = fakeApi();
+      const { pusher } = fakePusher();
+      const publisher = new GitLabMergeRequestPublisher({ api, pusher, broker: broker() });
+
+      await publisher.publish(
+        allowlist(true).resolve(42),
+        intent({
+          task_summary: `Reproduced with token ${TOKEN} against /Users/victim/repo`,
+          unresolved_risks: [`Retry needs ${TOKEN}`],
+        }),
+      );
+
+      const created = seen.find((call) => typeof call["description"] === "string");
+      const description = String(created?.["description"]);
+      expect(description).not.toContain(TOKEN);
+      expect(description).not.toContain("/Users/victim");
+    });
+
     it("never puts the token in the URL handed to the pusher", async () => {
       const { api } = fakeApi();
       const { pusher, seen } = fakePusher();
