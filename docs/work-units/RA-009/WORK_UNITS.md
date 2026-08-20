@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-009`
-- Plan revision: `08`
+- Plan revision: `09`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -23,7 +23,7 @@
 | `RA-009-WU-01` | `ACCEPTED` | role registry i wersjonowane prompt manifests | — |
 | `RA-009-WU-02` | `ACCEPTED` | czysta state machine Supervisora | WU-01 |
 | `RA-009-WU-03` | `ACCEPTED` | trwały work-unit/run repository | WU-02 |
-| `RA-009-WU-04` | `READY` | mailbox, semaphores i fairness | WU-03 |
+| `RA-009-WU-04` | `RUNNING` | mailbox, semaphores i fairness | WU-03 |
 | `RA-009-WU-05` | `BLOCKED` | single-writer lease i fencing | WU-03 |
 | `RA-009-WU-06` | `BLOCKED` | read-only parallel merge | WU-04, WU-05 |
 | `RA-009-WU-07` | `BLOCKED` | budgets, pause, cancel i waiting resume | WU-04 |
