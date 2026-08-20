@@ -280,6 +280,38 @@ describe("test evidence layer", () => {
       ).toThrow();
     });
 
+    it("withholds PASSED when a required command produced NO receipt at all", async () => {
+      // Found by an adversarial audit probe. Checking only "at least one required
+      // run exists" returned PASSED while a second required command had never run
+      // — a partially-executed suite indistinguishable from a complete one, which
+      // is the more dangerous form of "nothing ran renders as fine".
+      const built = await runner([
+        entry("green", "process.exit(0)"),
+        entry("never-ran", "process.exit(0)"),
+      ]);
+      const green = await built.run({ command_name: "green" });
+
+      const verdict = deriveVerdict([green], built.requiredCommands);
+
+      // INCONCLUSIVE, not FAILED: the command reported nothing, not a regression.
+      expect(verdict.verdict).toBe(EvidenceVerdict.INCONCLUSIVE);
+      expect(verdict.blocking.join(" ")).toContain("never-ran");
+      expect(verdict.blocking.join(" ")).toContain("no receipt");
+    });
+
+    it("reaches PASSED only once every required command has a receipt", async () => {
+      const built = await runner([
+        entry("green", "process.exit(0)"),
+        entry("also-green", "process.exit(0)"),
+      ]);
+      const runs = [
+        await built.run({ command_name: "green" }),
+        await built.run({ command_name: "also-green" }),
+      ];
+
+      expect(deriveVerdict(runs, built.requiredCommands).verdict).toBe(EvidenceVerdict.PASSED);
+    });
+
     it("refuses a command that is not in the server-owned manifest", async () => {
       const built = await runner([entry("green", "process.exit(0)")]);
       // No receipt at all, rather than a fabricated INFRASTRUCTURE one.

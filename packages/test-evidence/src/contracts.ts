@@ -410,18 +410,32 @@ export function deriveVerdict(
     throw new EvidenceContractError("a verdict requires at least one required run");
   }
 
-  const blocking = runs
-    .filter((run) => run.outcome !== TestOutcome.PASSED)
-    .map((run) => run.command_name)
-    .sort();
+  // EVERY required command must have a receipt, not merely one of them.
+  //
+  // Found by an adversarial audit probe: checking `required.length === 0` alone
+  // returned PASSED when one required command was green and another had never run
+  // at all. That is the same "nothing ran renders as fine" hole this function
+  // exists to close, at command granularity instead of at set granularity — and it
+  // is the more dangerous form, because a partially-executed suite looks like a
+  // fully-executed one. A missing receipt is INCONCLUSIVE rather than FAILED: the
+  // command did not report a regression, it reported nothing.
+  const executed = new Set(runs.map((run) => run.command_name));
+  const missing = [...requiredCommands].filter((name) => !executed.has(name)).sort();
 
-  // Order matters: a non-assertion outcome must win over FAILED, so a killed run
-  // is never reported as a regression in the code under test.
-  const verdict = required.some((run) => isNonAssertionOutcome(run.outcome))
-    ? EvidenceVerdict.INCONCLUSIVE
-    : required.some((run) => run.outcome === TestOutcome.FAILED)
-      ? EvidenceVerdict.FAILED
-      : EvidenceVerdict.PASSED;
+  const blocking = [
+    ...runs.filter((run) => run.outcome !== TestOutcome.PASSED).map((run) => run.command_name),
+    ...missing.map((name) => `${name} (no receipt)`),
+  ].sort();
+
+  // Order matters twice over. A missing receipt and a non-assertion outcome both
+  // win over FAILED, so neither an unexecuted command nor a killed run is ever
+  // reported as a regression in the code under test.
+  const verdict =
+    missing.length > 0 || required.some((run) => isNonAssertionOutcome(run.outcome))
+      ? EvidenceVerdict.INCONCLUSIVE
+      : required.some((run) => run.outcome === TestOutcome.FAILED)
+        ? EvidenceVerdict.FAILED
+        : EvidenceVerdict.PASSED;
 
   return evidenceVerdict.parse({
     schema_version: 1,
