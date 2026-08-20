@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `19`
+- Plan revision: `20`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -32,8 +32,9 @@
 | `RA-008-WU-06` | `ACCEPTED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07A` | `ACCEPTED` | deterministyczny derived compaction manifest | WU-02, WU-03 |
 | `RA-008-WU-07B` | `ACCEPTED` | bezpieczna integracja compaction z builderem | WU-07A |
-| `RA-008-WU-08A` | `READY` | spójny trwały snapshot recovery | WU-04B, WU-05C |
-| `RA-008-WU-08B` | `BLOCKED` | deterministyczny recovery plan i odbudowa contextu | WU-08A, WU-07B |
+| `RA-008-WU-08A` | `FIX_REQUIRED` | spójny trwały snapshot recovery | WU-04B, WU-05C |
+| `RA-008-WU-08A-F1` | `READY` | fail-closed mapping i pełny gate snapshotu | WU-08A |
+| `RA-008-WU-08B` | `BLOCKED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F1, WU-07B |
 | `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
@@ -314,7 +315,7 @@
 
 ## `RA-008-WU-08A` — Durable recovery snapshot
 
-- Status: `READY`
+- Status: `FIX_REQUIRED`
 - Result: jedna read-only operacja zwraca spójny, runtime-validated snapshot
   autorytatywnego stanu case potrzebnego po restarcie.
 - Allowed paths: `packages/database/src/repositories/case-recovery.ts`,
@@ -335,6 +336,25 @@
 - Out of scope: interpretacja następnej akcji, zmiana run/case i scheduler RA-009.
 - Sol gate: real-PG consistent lock snapshot, invalid persisted JSON, cross-case
   isolation i read-only proof.
+
+## `RA-008-WU-08A-F1` — Recovery snapshot gate fixes
+
+- Status: `READY`
+- Result: snapshot nie maskuje niespójnych persisted fields i posiada pełny
+  dowód real-PG dla uzgodnionego kontraktu WU-08A.
+- Allowed paths: takie same jak WU-08A.
+- Context pack: diff pierwszej próby WU-08A i findingi Sol z gate'u.
+- Acceptance:
+  - mapper odpowiedzi waliduje zapisane aliasy decision/case/revision zamiast
+    zastępować je polami requestu; IDs, provider i job status/payload przechodzą
+    jawne runtime schemas, a kod nie używa `any`;
+  - testy obejmują pełny happy snapshot, active intent bez completion,
+    confirmed active/checkpoint completion, decyzję+answer+resume job, brakujący
+    lub wadliwy stan, cross-case isolation, stabilny order i brak writes;
+  - target test, database typecheck, scoped lint, format i diff-check przechodzą.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/case-recovery.integration.test.ts`.
+- Out of scope: zmiana kontraktu akcji WU-08B i scheduler RA-009.
+- Sol gate: niezależne uruchomienie wszystkich kontroli z pinned runtime.
 
 ## `RA-008-WU-08B` — Recovery plan and context reconstruction
 
