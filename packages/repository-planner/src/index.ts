@@ -52,6 +52,8 @@ export { compileImplementationPlan } from "./plan.js";
 export { PlanCompilationError } from "./plan-errors.js";
 export type { CompilePlanInput, CompilePlanResult, ServerRequirement } from "./plan.js";
 export type { PlanCompilationErrorCode } from "./plan-errors.js";
+export { checkPlanStaleness, PlanStalenessError } from "./staleness.js";
+export type { PlanStaleReason, PlanStalenessInput, PlanStalenessResult } from "./staleness.js";
 export {
   PlanningAmbiguityClass,
   PlanningDecisionError,

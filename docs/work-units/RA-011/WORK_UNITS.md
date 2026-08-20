@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `9`
+- Plan revision: `10`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -35,8 +35,8 @@
 | `RA-011-WU-05` | `ACCEPTED` | RepositoryProfile związany z base SHA | WU-03, WU-04 |
 | `RA-011-WU-06` | `ACCEPTED` | complete requirement-to-plan mapping | WU-01, WU-05 |
 | `RA-011-WU-07` | `ACCEPTED` | material ambiguity do DecisionRequest | WU-06, RA-008 |
-| `RA-011-WU-08` | `RUNNING` | stale-plan invalidation | WU-05, WU-06 |
-| `RA-011-WU-09` | `BLOCKED` | read-only Planner integration proof | WU-04, WU-07, WU-08 |
+| `RA-011-WU-08` | `ACCEPTED` | stale-plan invalidation | WU-05, WU-06 |
+| `RA-011-WU-09` | `RUNNING` | read-only Planner integration proof | WU-04, WU-07, WU-08 |
 
 ## `RA-011-WU-01` — Repository, plan and read-port contracts
 
