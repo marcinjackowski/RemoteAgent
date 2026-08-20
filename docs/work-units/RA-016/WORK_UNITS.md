@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `02`
+- Plan revision: `03`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -21,12 +21,30 @@
   dokumentacji Atlassian przed units dotykającymi auth/webhook/REST.
 - Luna nie edytuje planu, statusów, handoffów, audytów ani decyzji.
 
+## Zweryfikowany kontrakt Jira Cloud — 2026-08-20
+
+- Docelowy wariant to OAuth 2.0 dynamic webhooks z `POST /rest/api/3/webhook`,
+  zgodny z wymaganym przez Master Plan cyklem odnowienia. Admin webhook/HMAC nie
+  jest domyślnym fallbackiem i wymagałby jawnej zmiany konfiguracji/decyzji.
+- OAuth webhook niesie bearer JWT w `Authorization`, podpisany client secretem
+  aplikacji. WU-02 używa sprawdzonej biblioteki i secret-ref/vault boundary;
+  token ani client secret nie wchodzą do publicznej konfiguracji lub logów.
+- Dynamiczne webhooks wygasają po 30 dniach i są przedłużane przez
+  `PUT /rest/api/3/webhook/refresh`; limit OAuth to 5 webhooks na
+  app/user/tenant. Scheduler odnawia przed deadline, nie po stałym założeniu.
+- Jira zaleca szybką odpowiedź i asynchroniczne enqueue. Delivery jest best
+  effort, dlatego reconciliation z WU-07 pozostaje obowiązkowe.
+- JQL ogranicza dynamiczne issue/comment webhooks server-side, ale lokalny
+  project allowlist nadal jest twardą granicą przed enrichment.
+- Źródła: [Atlassian Jira Cloud webhooks](https://developer.atlassian.com/cloud/jira/software/webhooks/)
+  oraz [Jira REST v3 webhooks](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-webhooks/).
+
 ## Unit index
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-016-WU-01` | `RUNNING` | wersjonowane kontrakty i bezsekretowa konfiguracja | — |
-| `RA-016-WU-02` | `BLOCKED` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
+| `RA-016-WU-01` | `ACCEPTED` | wersjonowane kontrakty i bezsekretowa konfiguracja | — |
+| `RA-016-WU-02` | `READY` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
 | `RA-016-WU-03` | `BLOCKED` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
 | `RA-016-WU-04` | `BLOCKED` | read-only REST client i stale-safe enrichment | WU-03 |
 | `RA-016-WU-05` | `BLOCKED` | issue/case correlation i Discord routing | WU-03, WU-04 |
@@ -53,8 +71,8 @@
 
 ## `RA-016-WU-02` — Verified durable webhook ingress
 
-- Result: request jest uwierzytelniony zgodnie z aktualnym Jira Cloud contract,
-  limitowany i szybko zapisany z trwałym dedupe przed dalszym processingiem.
+- Result: OAuth dynamic webhook bearer JWT jest zweryfikowany, body limitowany i
+  szybko zapisany z trwałym dedupe przed dalszym processingiem.
 - Allowed paths: `src/webhook/verify.ts`, `webhook/ingress.ts`,
   `test/webhook-ingress.integration.test.ts`, `package.json`, `src/index.ts`,
   konieczne repozytorium database i jego test.

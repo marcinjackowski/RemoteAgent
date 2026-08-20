@@ -5,3 +5,5 @@
  * Domain logic is intentionally out of scope and arrives in later tasks.
  */
 export const packageName = "connector-jira" as const;
+export * from "./contracts.js";
+export * from "./errors.js";
