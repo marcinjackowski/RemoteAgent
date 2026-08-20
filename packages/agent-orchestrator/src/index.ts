@@ -29,3 +29,5 @@ export * from "./scheduler/fairness.js";
 export * from "./supervisor/writer-lease.js";
 export * from "./supervisor/parallel.js";
 export * from "./supervisor/merge.js";
+export * from "./supervisor/budget.js";
+export * from "./supervisor/control.js";
