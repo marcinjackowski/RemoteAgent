@@ -1,5 +1,6 @@
 import { TrustLevel } from "@remoteagent/contracts";
 import { assertPositiveBudget, utf8ByteLength } from "./budget.js";
+import { compactContextFragments, ContextCompactionBudgetError } from "./compaction.js";
 import type {
   BuiltContext,
   ContextBuildInput,
@@ -43,6 +44,14 @@ export class ContextScopeViolationError extends ContextBuilderError {
     super(message, "CONTEXT_SCOPE_VIOLATION");
   }
 }
+export class InvalidContextCompactionOptionError extends ContextBuilderError {
+  constructor(value: unknown) {
+    super(
+      `Compaction maxDerivedBytes must be a positive safe integer: ${String(value)}`,
+      "INVALID_CONTEXT_COMPACTION_OPTION",
+    );
+  }
+}
 
 function scopeError(message: string): never {
   throw new ContextScopeViolationError(message);
@@ -50,6 +59,9 @@ function scopeError(message: string): never {
 
 function validateFragment(fragment: ContextFragment, input: ContextBuildInput): void {
   const { scope } = input;
+  if (fragment.sourceReferences !== undefined || fragment.sourceByteMetrics !== undefined) {
+    scopeError("Derived context fragments cannot be supplied as original input");
+  }
   if (fragment.provenance.origin !== "system" && fragment.trust !== TrustLevel.UNTRUSTED_DATA) {
     scopeError(`${fragment.provenance.origin} content cannot be TRUSTED`);
   }
@@ -86,6 +98,13 @@ function validateFragment(fragment: ContextFragment, input: ContextBuildInput): 
 
 export function buildContext(input: ContextBuildInput): BuiltContext {
   assertPositiveBudget(input.budgetBytes);
+  if (
+    input.compaction !== undefined &&
+    (!Number.isSafeInteger(input.compaction.maxDerivedBytes) ||
+      input.compaction.maxDerivedBytes <= 0)
+  ) {
+    throw new InvalidContextCompactionOptionError(input.compaction.maxDerivedBytes);
+  }
   const seen = new Set<string>();
   for (const fragment of input.fragments) {
     if (seen.has(fragment.provenance.reference))
@@ -99,22 +118,18 @@ export function buildContext(input: ContextBuildInput): BuiltContext {
     if (count !== 1)
       throw new MandatoryContextFragmentError(`${kind} must occur exactly once (got ${count})`);
   }
-  const ordered = [...input.fragments].sort((a, b) => {
-    const byKind = priority[a.kind] - priority[b.kind];
-    if (byKind !== 0) return byKind;
-    return a.provenance.reference < b.provenance.reference
-      ? -1
-      : a.provenance.reference > b.provenance.reference
-        ? 1
-        : 0;
-  });
+  const ordered = [...input.fragments].sort((a, b) =>
+    compareFragments({ fragment: a }, { fragment: b }),
+  );
   const fragments = [] as BuiltContext["fragments"];
   const omitted = [] as BuiltContext["omitted"];
   let usedBytes = 0;
   for (const fragment of ordered) {
     const bytes = utf8ByteLength(fragment.content);
     if (
-      (fragment.kind === "task" || fragment.kind === "checkpoint") &&
+      (fragment.kind === "task" ||
+        fragment.kind === "checkpoint" ||
+        fragment.kind === "decision") &&
       usedBytes + bytes > input.budgetBytes
     ) {
       throw new MandatoryContextFragmentError(`Budget is too small for mandatory ${fragment.kind}`);
@@ -124,5 +139,38 @@ export function buildContext(input: ContextBuildInput): BuiltContext {
       usedBytes += bytes;
     } else omitted.push({ fragment, bytes, reason: "budget" });
   }
+  if (input.compaction !== undefined && omitted.length > 0) {
+    const availableBytes = input.budgetBytes - usedBytes;
+    const maxDerivedBytes = Math.min(availableBytes, input.compaction.maxDerivedBytes);
+    if (maxDerivedBytes > 0) {
+      try {
+        const derived = compactContextFragments({
+          fragments: omitted.map(({ fragment }) => fragment),
+          maxBytes: maxDerivedBytes,
+        });
+        if (seen.has(derived.fragment.provenance.reference)) {
+          throw new DuplicateProvenanceError(derived.fragment.provenance.reference);
+        }
+        fragments.push(derived);
+        fragments.sort(compareFragments);
+        usedBytes += derived.bytes;
+      } catch (error) {
+        if (!(error instanceof ContextCompactionBudgetError)) throw error;
+      }
+    }
+  }
   return { fragments, omitted, usedBytes, budgetBytes: input.budgetBytes };
+}
+
+function compareFragments(
+  a: { fragment: ContextFragment },
+  b: { fragment: ContextFragment },
+): number {
+  const byKind = priority[a.fragment.kind] - priority[b.fragment.kind];
+  if (byKind !== 0) return byKind;
+  return a.fragment.provenance.reference < b.fragment.provenance.reference
+    ? -1
+    : a.fragment.provenance.reference > b.fragment.provenance.reference
+      ? 1
+      : 0;
 }

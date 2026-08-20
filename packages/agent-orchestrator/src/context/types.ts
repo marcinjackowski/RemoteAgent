@@ -49,6 +49,9 @@ export interface ContextBuildInput {
   scope: ContextScope;
   budgetBytes: number;
   fragments: readonly ContextFragment[];
+  compaction?: {
+    maxDerivedBytes: number;
+  };
 }
 
 export interface ContextSelection {
