@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `14`
+- Plan revision: `15`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -30,8 +30,9 @@
 | `RA-008-WU-05B` | `ACCEPTED` | trwała materializacja waiting | WU-05A |
 | `RA-008-WU-05C` | `ACCEPTED` | atomic answer i resume job | WU-05B |
 | `RA-008-WU-06` | `ACCEPTED` | Markdown/pinned-status projection | WU-03 |
-| `RA-008-WU-07` | `READY` | bounded compaction bez utraty decyzji | WU-02, WU-03 |
-| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07 |
+| `RA-008-WU-07A` | `READY` | deterministyczny derived compaction manifest | WU-02, WU-03 |
+| `RA-008-WU-07B` | `BLOCKED` | bezpieczna integracja compaction z builderem | WU-07A |
+| `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07B |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -264,18 +265,49 @@
 - Out of scope: Discord gateway lifecycle.
 - Sol gate: snapshot diff reviewed manualnie.
 
-## `RA-008-WU-07` — Safe compaction
+## `RA-008-WU-07A` — Derived compaction manifest
 
 - Status: `READY`
-- Result: derived summary redukuje kontekst bez usuwania decyzji i provenance.
+- Result: czysty algorytm tworzy bounded derived manifest bez mutacji źródeł i
+  zachowuje pełny indeks provenance.
 - Allowed paths: `packages/agent-orchestrator/src/context/compaction.ts`,
-  `context/builder.ts`, `test/compaction.test.ts`, `src/index.ts`.
-- Context pack: WU-02/WU-03, checkpoint required fields, trust contracts.
-- Acceptance: decisions/open questions/receipts pozostają verbatim refs;
-  compaction jest odtwarzalna; utrata derived data nie uszkadza source of truth.
+  `context/types.ts`, `test/compaction.test.ts`, `src/index.ts`.
+- Context pack: WU-02/WU-03, ContextFragment i trust contracts.
+- Acceptance:
+  - wynik jest jawnie `derived`, deterministyczny dla kolejności wejścia i ma
+    stabilną provenance identity z treści źródeł;
+  - manifest zawiera verbatim `kind`, `origin`, `provenance.reference` i `trust`
+    każdego źródła; dopiero pozostały budżet może zawierać bounded excerpt;
+  - `task`, `checkpoint` i nowy kind `decision` są chronione i nie mogą wejść do
+    compaction; receipt content może być skrócony, lecz jego reference nie;
+  - zbyt mały budżet na pełny indeks failuje typed error zamiast zgubić referencję;
+    input pozostaje nietknięty i jest wystarczający do ponownego odtworzenia.
 - Verification: `pnpm vitest run packages/agent-orchestrator/test/compaction.test.ts`.
 - Out of scope: wywołanie modelu do semantycznego summary bez osobnej decyzji Sol.
-- Sol gate: adversarial test, który nie pozwala zgubić DecisionRequest.
+- Sol gate: Unicode byte-boundaries, collisions, order invariance i adversarial
+  próba kompaktowania DecisionRequest/checkpoint.
+
+## `RA-008-WU-07B` — Builder compaction integration
+
+- Status: `BLOCKED`
+- Result: builder opcjonalnie dołącza derived manifest dla omissions, zachowując
+  autorytatywne fragmenty i pełny ślad odtworzenia.
+- Allowed paths: `packages/agent-orchestrator/src/context/builder.ts`,
+  `context/types.ts`, `test/compaction-builder.test.ts`, `src/index.ts`.
+- Context pack: WU-02 i zaakceptowany WU-07A.
+- Acceptance:
+  - istniejące zachowanie bez opcji compaction nie zmienia się;
+  - dokładnie jeden task/checkpoint oraz każdy `decision` pozostają verbatim i
+    over-budget protected fragment failuje zamiast zostać pominięty;
+  - omissions pozostają oryginalnymi fragmentami w wyniku, a manifest jest tylko
+    dodatkową derived selection i nigdy source of truth;
+  - receipt provenance refs i trust pozostają w manifeście; scope/trust/tool
+    validation zachodzi przed compaction, więc derived content nie poszerza scope;
+  - wynik mieści się w byte budget i jest identyczny dla permutacji inputu.
+- Verification: `pnpm vitest run packages/agent-orchestrator/test/compaction-builder.test.ts packages/agent-orchestrator/test/context-builder.test.ts`.
+- Out of scope: trwałe usuwanie fragmentów i modelowy semantic summary.
+- Sol gate: adversarial DecisionRequest + cross-scope + utrata derived fragmentu
+  nadal pozostawia wszystkie oryginalne omissions do rekonstrukcji.
 
 ## `RA-008-WU-08` — Recovery and resume integration
 
