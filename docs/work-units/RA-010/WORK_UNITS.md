@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `12`
+- Plan revision: `13`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -25,7 +25,7 @@
 | `RA-010-WU-03` | `ACCEPTED` | repository mirror i create worktree | WU-02 |
 | `RA-010-WU-04` | `ACCEPTED` | confined command runner i limity | WU-02 |
 | `RA-010-WU-05` | `ACCEPTED` | operation log, digest i dirty state | WU-03, WU-04 |
-| `RA-010-WU-06` | `READY` | writer fencing | WU-03, RA-009-WU-05 |
+| `RA-010-WU-06` | `RUNNING` | writer fencing | WU-03, RA-009-WU-05 |
 | `RA-010-WU-07` | `BLOCKED` | resume i ambiguous recovery | WU-05, WU-06 |
 | `RA-010-WU-08` | `BLOCKED` | bezpieczny cleanup | WU-02, WU-07 |
 | `RA-010-WU-09` | `BLOCKED` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
@@ -96,14 +96,22 @@
 ## `RA-010-WU-06` — Writer fencing
 
 - Result: każda mutacja workspace wymaga aktualnego fencing tokenu.
-- Allowed paths: `src/fencing.ts`, `src/local-adapter.ts`,
-  `test/fencing.integration.test.ts`, `src/index.ts`.
-- Context pack: WU-03, RA-004 lease/fencing API, workspace identity.
+- Allowed paths: `src/fencing.ts`, `src/local-adapter.ts`, `src/types.ts`,
+  `test/fencing.integration.test.ts`, `test/worktree.integration.test.ts`,
+  `src/index.ts`.
+- Context pack: WU-03, zaakceptowany RA-009-WU-05 `WorkspaceFence` i
+  `JobStore.assertCurrentLease`, workspace identity.
 - Acceptance: stale writer nie tworzy ani nie modyfikuje pliku; validation następuje
-  bezpośrednio przed mutacją; odczyty pozostają read-only.
+  bezpośrednio przed każdą mutacją. Runner przyjmuje wyłącznie server-owned,
+  wstrzyknięty validator authority; nie ufa samym polom owner/token z inputu.
+  Validator wiąże workspace case z dokładnym RA-009 writer fence i wywołuje jego
+  durable `assertCurrent` przy użyciu query poza modelem. Brak validatora,
+  mismatch case/owner/token i wygasły/reclaimed lease failują przed `mkdir`, Git
+  i ledger append; operacje odczytu nie wymagają writer lease i nie mutują.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/workspace-runner/test/fencing.integration.test.ts`.
 - Out of scope: orchestrator scheduler.
-- Sol gate: race revoke-token vs write.
+- Sol gate: real-PG race revoke/reclaim-token vs create/write, drugi writer i
+  forged fields; po odmowie brak pliku, worktree i operation receipt.
 
 ## `RA-010-WU-07` — Resume and recovery
 
