@@ -7,6 +7,7 @@ import { LocalWorkspaceAdapter } from "../src/index.js";
 
 const run = promisify(execFile);
 const roots: string[] = [];
+const fenceValidator = { assertCurrent: async () => undefined };
 
 async function fixtureRepo(): Promise<{ parent: string; source: string; baseSha: string }> {
   const parent = await mkdtemp(join("/tmp", "workspace-runner-git-"));
@@ -35,6 +36,7 @@ describe("local worktree adapter", () => {
     const adapter = new LocalWorkspaceAdapter({
       workspaceRoot: join(parent, "sandbox"),
       repositories: { repo: { sourcePath: source } },
+      fenceValidator,
     });
     const first = await adapter.create({
       identity: { caseId: "case-a", workspaceId: "workspace-a" },
@@ -65,6 +67,7 @@ describe("local worktree adapter", () => {
     const adapter = new LocalWorkspaceAdapter({
       workspaceRoot: join(parent, "sandbox"),
       repositories: {},
+      fenceValidator,
     });
     await expect(
       adapter.create({
@@ -85,6 +88,7 @@ describe("local worktree adapter", () => {
     const adapter = new LocalWorkspaceAdapter({
       workspaceRoot: join(parent, "sandbox"),
       repositories: { repo: { sourcePath: source } },
+      fenceValidator,
     });
     const input = {
       identity: { caseId: "case-retry", workspaceId: "workspace-retry" },
@@ -109,6 +113,7 @@ describe("local worktree adapter", () => {
     const adapter = new LocalWorkspaceAdapter({
       workspaceRoot: join(parent, "sandbox"),
       repositories: { repo: { sourcePath: source } },
+      fenceValidator,
     });
     await expect(
       adapter.create({
@@ -134,6 +139,7 @@ describe("local worktree adapter", () => {
       workspaceRoot: workspace,
       ledgerRoot: ledgerPath,
       repositories: { repo: { sourcePath: source } },
+      fenceValidator,
     });
     await expect(
       adapter.create({
@@ -147,6 +153,35 @@ describe("local worktree adapter", () => {
     await expect(readFile(join(workspace, "operations.jsonl"))).rejects.toThrow();
     await expect(
       readFile(join(workspace, "case-link", "workspace-link", "README.md")),
+    ).rejects.toThrow();
+  });
+
+  it("fails closed before mkdir when server-owned fence validation is absent or stale", async () => {
+    const { parent, source, baseSha } = await fixtureRepo();
+    const input = {
+      identity: { caseId: "case-fence", workspaceId: "workspace-fence" },
+      fence: { leaseOwner: "forged", fencingToken: 999 },
+      repositoryId: "repo",
+      baseSha,
+      branchName: "case-fence/workspace-fence",
+    } as const;
+    const missing = new LocalWorkspaceAdapter({
+      workspaceRoot: join(parent, "sandbox"),
+      repositories: { repo: { sourcePath: source } },
+    });
+    await expect(missing.create(input)).rejects.toMatchObject({ code: "INVALID_FENCE" });
+    const stale = new LocalWorkspaceAdapter({
+      workspaceRoot: join(parent, "sandbox"),
+      repositories: { repo: { sourcePath: source } },
+      fenceValidator: {
+        assertCurrent: async () => {
+          throw new Error("stale or reclaimed lease");
+        },
+      },
+    });
+    await expect(stale.create(input)).rejects.toThrow("stale or reclaimed lease");
+    await expect(
+      readFile(join(parent, "sandbox", "case-fence", "workspace-fence", "README.md")),
     ).rejects.toThrow();
   });
 });

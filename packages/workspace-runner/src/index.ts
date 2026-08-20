@@ -8,3 +8,4 @@ export * from "./process-runner.js";
 export * from "./network-policy.js";
 export * from "./digest.js";
 export * from "./operation-log.js";
+export * from "./fencing.js";

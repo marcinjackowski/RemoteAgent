@@ -16,6 +16,7 @@ import {
 } from "./path-policy.js";
 import { computeTreeDigest } from "./digest.js";
 import { OperationLedger } from "./operation-log.js";
+import { WorkspaceFencingError, type WorkspaceFenceValidator } from "./fencing.js";
 import type {
   WorkspaceCreateInput,
   WorkspaceCreateResult,
@@ -33,6 +34,7 @@ export type LocalWorkspaceAdapterConfig = Readonly<{
   workspaceRoot: string;
   repositories: Readonly<Record<string, LocalRepositoryConfig>>;
   ledgerRoot?: string;
+  fenceValidator?: WorkspaceFenceValidator;
 }>;
 
 type CreatedWorkspace = Readonly<{
@@ -79,6 +81,8 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
       throw new WorkspaceLifecycleError("WORKSPACE_CONFLICT", "Workspace already exists");
     }
     const policy = await this.rootPolicyPromise;
+    if (!this.config.fenceValidator)
+      throw new WorkspaceFencingError("Writer fence validator is required");
     const metadataParent = dirname(this.metadataRoot);
     const canonicalParent = await realpath(metadataParent).catch(() => {
       throw new WorkspaceLifecycleError("INVALID_LIFECYCLE", "Ledger parent must already exist");
@@ -116,30 +120,51 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
         "Ledger root must be outside the command workspace",
       );
     }
+    await this.config.fenceValidator.assertCurrent({
+      identity: input.identity,
+      fence: input.fence,
+    });
     await mkdir(canonicalMetadataRoot, { recursive: true });
     await validateWorkspaceRoot(canonicalMetadataRoot);
     const operationId = randomUUID();
     const relativeRoot = join(input.identity.caseId, input.identity.workspaceId);
     const target = await policy.validateCreateTarget(relativeRoot);
+    await this.config.fenceValidator.assertCurrent({
+      identity: input.identity,
+      fence: input.fence,
+    });
     await mkdir(join(policy.root, input.identity.caseId), { recursive: true });
     const mirrorPath =
       repositoryConfig.mirrorPath ?? join(policy.root, ".git-mirrors", input.repositoryId);
     const repository: GitRepository = { sourcePath: repositoryConfig.sourcePath, mirrorPath };
     try {
+      await this.config.fenceValidator.assertCurrent({
+        identity: input.identity,
+        fence: input.fence,
+      });
       await ensureMirror(repository);
       const exactBaseSha = await verifyCommit(repository, input.baseSha);
+      await this.config.fenceValidator.assertCurrent({
+        identity: input.identity,
+        fence: input.fence,
+      });
       await addWorktree(repository, target, input.branchName, exactBaseSha);
       const head = await worktreeHead(target);
       if (head.toLowerCase() !== exactBaseSha.toLowerCase())
         throw new Error("Worktree was not created at base SHA");
       try {
+        const afterDigest = await computeTreeDigest(target);
+        await this.config.fenceValidator.assertCurrent({
+          identity: input.identity,
+          fence: input.fence,
+        });
         await this.ledger.append({
           version: 1,
           operationId,
           identity: input.identity,
           kind: "CREATE_WORKTREE",
           beforeDigest: null,
-          afterDigest: await computeTreeDigest(target),
+          afterDigest,
           outcome: "SUCCEEDED",
         });
       } catch (error) {
