@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `24`
+- Plan revision: `25`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -37,8 +37,8 @@
 | `RA-008-WU-08A-F2` | `ACCEPTED` | real-PG happy path i legalne statusy | WU-08A-F1 |
 | `RA-008-WU-08A-F3` | `ACCEPTED` | brakujące recovery negative proofs | WU-08A-F2 |
 | `RA-008-WU-08B` | `FIX_REQUIRED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
-| `RA-008-WU-08B-F1` | `READY` | fail-closed recovery state table | WU-08B |
-| `RA-008-WU-08B-F2` | `BLOCKED` | exhaustive pure recovery tests | WU-08B-F1 |
+| `RA-008-WU-08B-F1` | `ACCEPTED` | fail-closed recovery state table | WU-08B |
+| `RA-008-WU-08B-F2` | `READY` | exhaustive pure recovery tests | WU-08B-F1 |
 | `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B-F2, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
@@ -427,7 +427,7 @@
 
 ## `RA-008-WU-08B-F1` — Recovery state-table fixes
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: source implementuje zamkniętą, fail-closed tabelę bieżącego stanu
   bez mylenia historycznych decyzji i bez poszerzania authority contextu.
 - Allowed paths: `packages/agent-orchestrator/src/recovery.ts`, `src/index.ts`.
@@ -447,7 +447,7 @@
 
 ## `RA-008-WU-08B-F2` — Pure recovery test matrix
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: publiczny recovery planner posiada exhaustive proof stanu, scope,
   determinism, redaction, budgetu i non-mutation.
 - Allowed paths: `packages/agent-orchestrator/test/recovery.test.ts` oraz wyłącznie
