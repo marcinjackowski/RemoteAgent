@@ -17,3 +17,6 @@ export * from "./checkpoint/render.js";
 export * from "./decisions/prepare.js";
 export * from "./decisions/errors.js";
 export * from "./recovery.js";
+export * from "./roles/types.js";
+export * from "./roles/prompts.js";
+export * from "./roles/registry.js";
