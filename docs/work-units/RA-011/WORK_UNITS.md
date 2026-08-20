@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `6`
+- Plan revision: `7`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -32,8 +32,8 @@
 | `RA-011-WU-02` | `ACCEPTED` | minimalny package scaffold | WU-01 |
 | `RA-011-WU-03` | `ACCEPTED` | deterministic instruction discovery i precedence | WU-02 |
 | `RA-011-WU-04` | `ACCEPTED` | ograniczone read-only narzędzia discovery | WU-03 |
-| `RA-011-WU-05` | `RUNNING` | RepositoryProfile związany z base SHA | WU-03, WU-04 |
-| `RA-011-WU-06` | `BLOCKED` | complete requirement-to-plan mapping | WU-01, WU-05 |
+| `RA-011-WU-05` | `ACCEPTED` | RepositoryProfile związany z base SHA | WU-03, WU-04 |
+| `RA-011-WU-06` | `RUNNING` | complete requirement-to-plan mapping | WU-01, WU-05 |
 | `RA-011-WU-07` | `BLOCKED` | material ambiguity do DecisionRequest | WU-06, RA-008 |
 | `RA-011-WU-08` | `BLOCKED` | stale-plan invalidation | WU-05, WU-06 |
 | `RA-011-WU-09` | `BLOCKED` | read-only Planner integration proof | WU-04, WU-07, WU-08 |
