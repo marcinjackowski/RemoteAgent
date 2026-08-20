@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `23`
+- Plan revision: `24`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -66,7 +66,7 @@
 | `RA-016-WU-08B` | `ACCEPTED` | transaction-capable correlation core | WU-05C, WU-07, WU-08A |
 | `RA-016-WU-08C` | `ACCEPTED` | restart-stable trusted ingress context | WU-08A |
 | `RA-016-WU-08D` | `ACCEPTED` | write-free durable correlation replay | WU-08B |
-| `RA-016-WU-08E` | `RUNNING` | atomic Jira processing runtime | WU-08C, WU-08D |
+| `RA-016-WU-08E` | `BLOCKED` | atomic Jira processing runtime | WU-08C, WU-08D |
 | `RA-016-WU-08F` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-08E |
 
 ## `RA-016-WU-01` — Connector contracts and configuration
@@ -338,6 +338,11 @@
 - Out of scope: live Jira, Discord transport i scheduler.
 - Sol gate: sześć event types, exact/concurrent replay, REST identity mismatch,
   stale ordering, delete 404 avoidance i fault matrix.
+- Blocker (2026-08-20): po dwóch nieudanych poprawkach zapis jest atomowy i
+  odporny na konflikt primary key, ale concurrent exact delivery nadal wykonuje
+  REST przed per-event lockiem. Nie spełnia to literalnej bramki „replay przed
+  ponownym REST”. Automatyczne ponawianie zatrzymano zgodnie z workflow; wymagany
+  jest jawny reset limitu albo nowa decyzja właściciela o zakresie.
 
 ## `RA-016-WU-08F` — End-to-end Jira proof
 

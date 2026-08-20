@@ -40,7 +40,7 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 | 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012 | M2 |
 | 14 | [RA-014](RA-014.md) Local Git lifecycle | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012, RA-013 | M2 |
 | 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
-| 16 | [RA-016](RA-016.md) Jira connector | IN_PROGRESS | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
+| 16 | [RA-016](RA-016.md) Jira connector | BLOCKED | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
 | 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
 | 18 | [RA-018](RA-018.md) Golden path and concurrency proof | BLOCKED_BY_DEPENDENCIES | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
 | 19 | [RA-019](RA-019.md) Gmail two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
