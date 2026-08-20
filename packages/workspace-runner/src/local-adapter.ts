@@ -14,10 +14,15 @@ import {
   validateWorkspaceRoot,
   type VerifiedWorkspacePath,
 } from "./path-policy.js";
-import { computeTreeDigest } from "./digest.js";
+import { computeTreeDigest, inspectWorkspace } from "./digest.js";
 import { OperationLedger } from "./operation-log.js";
 import { WorkspaceFencingError, type WorkspaceFenceValidator } from "./fencing.js";
-import { recoverWorkspace, WorkspaceRecoveryError, type WorkspaceRegistry } from "./recovery.js";
+import {
+  recoverWorkspace,
+  WorkspaceRecoveryError,
+  type WorkspaceMapping,
+  type WorkspaceRegistry,
+} from "./recovery.js";
 import { cleanupWorkspace, WorkspaceCleanupError } from "./cleanup.js";
 import type {
   WorkspaceCreateInput,
@@ -246,11 +251,55 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
   }
 
   public async snapshot(input: WorkspaceSnapshotInput): Promise<WorkspaceSnapshotResult> {
-    void input;
-    throw new WorkspaceLifecycleError(
-      "INVALID_LIFECYCLE",
-      "Snapshot is outside the local adapter worktree unit",
-    );
+    this.validateIdentity(input.identity);
+    const registry = this.config.workspaceRegistry;
+    if (!registry)
+      throw new WorkspaceRecoveryError("CONFLICT", "Server-owned workspace registry is required");
+    let mapping: WorkspaceMapping | null;
+    try {
+      mapping = await registry.find(input.identity.workspaceId);
+    } catch {
+      throw new WorkspaceRecoveryError("AMBIGUOUS", "Workspace mapping target is not canonical");
+    }
+    if (!mapping)
+      throw new WorkspaceRecoveryError("MISSING_MAPPING", "Workspace mapping is required");
+    if (
+      mapping.caseId !== input.identity.caseId ||
+      mapping.workspaceId !== input.identity.workspaceId
+    )
+      throw new WorkspaceRecoveryError("CONFLICT", "Workspace mapping identity mismatch");
+    const policy = await this.rootPolicyPromise;
+    const target = resolve(mapping.target);
+    const targetRelative = relative(policy.root, target);
+    if (
+      !targetRelative ||
+      targetRelative === ".." ||
+      targetRelative.startsWith(`..${sep}`) ||
+      isAbsolute(targetRelative)
+    ) {
+      throw new WorkspaceRecoveryError("AMBIGUOUS", "Workspace mapping target is outside the root");
+    }
+    let verifiedTarget: VerifiedWorkspacePath;
+    try {
+      verifiedTarget = await policy.validateDestructiveTarget(targetRelative);
+    } catch {
+      throw new WorkspaceRecoveryError("AMBIGUOUS", "Workspace target is not canonical");
+    }
+    if (verifiedTarget !== mapping.target)
+      throw new WorkspaceRecoveryError("AMBIGUOUS", "Workspace mapping target changed");
+    let snapshot;
+    try {
+      snapshot = await inspectWorkspace(verifiedTarget);
+    } catch {
+      throw new WorkspaceRecoveryError("AMBIGUOUS", "Workspace inspection failed");
+    }
+    return {
+      operationId: `snapshot:${input.identity.caseId}:${input.identity.workspaceId}`,
+      identity: input.identity,
+      lifecycle: "SNAPSHOTTED",
+      treeDigest: snapshot.treeDigest,
+      dirtyState: snapshot.dirtyState,
+    };
   }
 
   public async destroy(input: WorkspaceDestroyInput): Promise<WorkspaceDestroyResult> {

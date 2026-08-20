@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `20`
+- Plan revision: `21`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -29,7 +29,7 @@
 | `RA-010-WU-07` | `ACCEPTED` | resume i ambiguous recovery | WU-05, WU-06 |
 | `RA-010-WU-08` | `ACCEPTED` | bezpieczny cleanup | WU-02, WU-07 |
 | `RA-010-WU-09` | `ACCEPTED` | dwa izolowane worktrees end-to-end | WU-04, WU-08 |
-| `RA-010-WU-10` | `RUNNING` | read-only snapshot lifecycle | WU-07, AUDIT-01 |
+| `RA-010-WU-10` | `ACCEPTED` | read-only snapshot lifecycle | WU-07, AUDIT-01 |
 
 ## `RA-010-WU-01` — Workspace contracts
 
