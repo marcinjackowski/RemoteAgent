@@ -3,14 +3,59 @@
 ## Metadata
 
 - Task: `RA-013`
-- Plan revision: `1`
-- Plan owner: `COORDINATOR_AUDITOR`
-- Implementer: `Claude Opus 5 / high / IMPLEMENTER` (zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md))
-- Plan status: `DRAFT` — task jest `BLOCKED_BY_DEPENDENCIES` (RA-010 `DONE`,
-  RA-012 `IN_PROGRESS`). Plan nie zmienia statusu taska ani nie omija zależności;
-  koordynator sprawdzi go ponownie z aktualnym kodem przy starcie.
-- Base commit/tree: do zapisania przy starcie
+- Plan status: `ACTIVE` (zrewidowany `2026-08-20` przy starcie; RA-010 i RA-012
+  oba `DONE`)
+- Proces: [ADR-0007](../../decisions/ADR-0007-verification-first-delivery.md) —
+  jedna rola wykonawcza; bramką jest uruchomiona komenda
+- Base commit: `7346cd4`
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/test-evidence/test`
+
+## Weryfikacja założeń planu przy starcie (`2026-08-20`)
+
+Sprawdzone w kodzie, nie przyjęte z rewizji 1:
+
+| Założenie rewizji 1 | Stan faktyczny |
+|---|---|
+| brak kontraktów `TestRun`/`ArtifactReference` | potwierdzone — do stworzenia |
+| `runProcess` z `timedOut`, `outputTruncated`, env allowlistą | potwierdzone |
+| `computeTreeDigest`/`inspectWorkspace` istnieją | potwierdzone |
+| najwyższa migracja `026` | **nieaktualne** — RA-012 zajął `027`, RA-013 bierze **`028`** |
+| „RA-013 musi **użyć** `SecretRedactor`; duplikat byłby findingiem" | **nieaktualne** — patrz decyzja o redakcji niżej |
+
+### Decyzja o redakcji (koryguje rewizję 1)
+
+Rewizja 1 nakazywała użyć `SecretRedactor` z `@remoteagent/observability` i
+uznawała własny mechanizm za finding. Od tego czasu `CTF-006` (HIGH) wykazał
+sondą, że `SecretRedactor` **przepuszcza** dokładnie te klasy, które nosi output
+testów: absolutne host paths, `glpat-`, `AKIA`, klucze prywatne i JWT. Jego
+`INLINE_PATTERNS` pokrywają tylko `Bearer`/`Basic`, URL-e z hasłem i wrażliwe
+klucze `k=v`.
+
+AC5 wymaga redakcji w excerptach **i** w pełnych logach, a output testów jest
+pełen absolutnych ścieżek. Użycie samego `SecretRedactor` nie spełniłoby więc
+kryterium, mimo że „redakcja jest włączona".
+
+**Decyzja: RA-013 konsumuje `redactCommandOutput` z
+`@remoteagent/implementation-tools`** (RA-012, `DONE`, zaakceptowane), które ma
+pełny zestaw wzorców. Uzasadnienie:
+
+1. nie tworzy **czwartej** niezależnej tabeli wzorców — `CTF-006` punkt 3 wymaga,
+   by RA-024 zwinął wszystkie, a każda nowa kopia zwiększa ten dług;
+2. nie narusza decyzji właściciela z `CTF-006`, że domknięcie zostaje w RA-024 —
+   nie dotykamy `observability` ani `repository-planner`, które są `DONE`;
+3. zależność `package → package` jest dozwolona przez `eslint.config.mjs`.
+
+Koszt: `test-evidence` zależy od `implementation-tools` dla jednej funkcji. To
+świadomy, tymczasowy koszt; RA-024 przeniesie wzorce do `observability` i wtedy
+oba pakiety będą konsumować wspólne źródło. Odnotowane w `CTF-006`.
+
+### Uwaga do AC4 (OOM)
+
+`runProcess` odrzuca `cpuTimeMs`/`memoryBytes` kodem `NOT_ENFORCEABLE`, więc OOM
+**nie jest** wykrywalny limitem pamięci. Rozpoznajemy go po sygnale procesu i
+nigdy nie raportujemy „OOM detected" na podstawie limitu. SIGKILL, który nie
+pochodzi z naszego timeoutu, jest klasyfikowany jako `INFRASTRUCTURE`, nie jako
+regresja testu — to bezpieczny kierunek.
 
 ## Global boundaries
 
