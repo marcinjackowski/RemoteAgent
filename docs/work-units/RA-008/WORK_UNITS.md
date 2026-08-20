@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `18`
+- Plan revision: `19`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -32,7 +32,9 @@
 | `RA-008-WU-06` | `ACCEPTED` | Markdown/pinned-status projection | WU-03 |
 | `RA-008-WU-07A` | `ACCEPTED` | deterministyczny derived compaction manifest | WU-02, WU-03 |
 | `RA-008-WU-07B` | `ACCEPTED` | bezpieczna integracja compaction z builderem | WU-07A |
-| `RA-008-WU-08` | `READY` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07B |
+| `RA-008-WU-08A` | `READY` | spójny trwały snapshot recovery | WU-04B, WU-05C |
+| `RA-008-WU-08B` | `BLOCKED` | deterministyczny recovery plan i odbudowa contextu | WU-08A, WU-07B |
+| `RA-008-WU-08C` | `BLOCKED` | end-to-end crash/resume matrix | WU-08B, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -310,19 +312,75 @@
 - Sol gate: adversarial DecisionRequest + cross-scope + utrata derived fragmentu
   nadal pozostawia wszystkie oryginalne omissions do rekonstrukcji.
 
-## `RA-008-WU-08` — Recovery and resume integration
+## `RA-008-WU-08A` — Durable recovery snapshot
 
 - Status: `READY`
-- Result: nowy proces odtwarza context/checkpoint/decision po crashu model call.
+- Result: jedna read-only operacja zwraca spójny, runtime-validated snapshot
+  autorytatywnego stanu case potrzebnego po restarcie.
+- Allowed paths: `packages/database/src/repositories/case-recovery.ts`,
+  `repositories/index.ts`, `src/errors.ts`, `src/index.ts`,
+  `test/case-recovery.integration.test.ts`.
+- Context pack: migracje runs/checkpoints/decisions/jobs, WU-04B i WU-05B/C.
+- Acceptance:
+  - repository posiada `Database`, otwiera jedną transakcję, lockuje case i
+    zwraca bieżący checkpoint, autorytatywne provider/connection bindings,
+    active run z intentami/completion, completion wskazane przez checkpoint,
+    wszystkie decyzje z odpowiedziami oraz związane `case.resume` jobs;
+  - persisted JSON przechodzi kontrakty runtime, rekordy są kanonicznie
+    uporządkowane, a brak lub niespójność case/revision/run/decision/job daje
+    typed recovery error zamiast częściowego snapshotu;
+  - operacja nie zapisuje danych i nie może zwrócić rekordu innego case/owner;
+    snapshot rozróżnia brak completion od potwierdzonego completion.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/database/test/case-recovery.integration.test.ts`.
+- Out of scope: interpretacja następnej akcji, zmiana run/case i scheduler RA-009.
+- Sol gate: real-PG consistent lock snapshot, invalid persisted JSON, cross-case
+  isolation i read-only proof.
+
+## `RA-008-WU-08B` — Recovery plan and context reconstruction
+
+- Status: `BLOCKED`
+- Result: czysta funkcja wybiera jedną bezpieczną akcję recovery i odbudowuje
+  bounded context bez poprzedniej sesji modelu.
 - Allowed paths: `packages/agent-orchestrator/src/recovery.ts`,
-  `test/recovery.integration.test.ts`, `packages/database/test/checkpoint-recovery.integration.test.ts`,
-  `src/index.ts`.
-- Context pack: zaakceptowane RA-008 units, RA-004 reconciliation, RA-007 call result.
-- Acceptance: intent bez completion jest reconciled, nie replayed w ciemno;
-  materialne decyzje wracają bez starej sesji; status jest jednoznaczny.
+  `test/recovery.test.ts`, `src/index.ts`.
+- Context pack: publiczny snapshot WU-08A, WU-02/05A/07B i run safety state.
+- Acceptance:
+  - active run z intentem bez potwierdzonego completion daje wyłącznie
+    `RECONCILIATION_REQUIRED` i `automaticAction: NONE`; planner nigdy nie
+    proponuje replay model call ani resume job;
+  - committed `WAITING_FOR_USER` completion bez requestu daje
+    `MATERIALIZE_DECISION` z requestem związanym do committed checkpointu,
+    request bez answer daje `WAITING_FOR_USER`, a answer z jednym zgodnym jobem
+    daje `RESUME_QUEUED`; sprzeczne kombinacje failują typed error;
+  - wynikowy context powstaje przez istniejący builder z autorytatywnego scope,
+    checkpointu i wszystkich decyzji/odpowiedzi jako chronionych, untrusted
+    fragmentów; jest bounded, deterministyczny i nie mutuje snapshotu.
+- Verification: `pnpm vitest run packages/agent-orchestrator/test/recovery.test.ts`.
+- Out of scope: DB writes, wykonanie akcji i multi-role scheduling.
+- Sol gate: exhaustive state table, permutations, over-budget decisions,
+  cross-scope fixture oraz deep-freeze inputs.
+
+## `RA-008-WU-08C` — End-to-end crash and resume matrix
+
+- Status: `BLOCKED`
+- Result: publiczne API RA-008 odtwarza stan i bezpieczną akcję na każdym
+  boundary completion/decision/answer po utracie procesu.
+- Allowed paths: `packages/database/test/checkpoint-recovery.integration.test.ts`,
+  `packages/agent-orchestrator/test/recovery.integration.test.ts`.
+- Context pack: zaakceptowane WU-04B, WU-05B/C, WU-08A/B i RA-004 recovery rules.
+- Acceptance:
+  - crash przed completion pozostaje `RECONCILIATION_REQUIRED` bez nowych writes;
+    crash po atomic completion wykrywa dokładnie brakującą materializację i
+    idempotentnie przechodzi do `WAITING_FOR_USER` przez istniejące API;
+  - po answer/restart jeden `case.resume` job i nowy context zawierają pełny
+    request oraz answer bez danych starej sesji, a exact replay nie duplikuje
+    checkpointu, decision, answer, job ani outbox;
+  - macierz sprawdza crash przed/po każdym atomic boundary i obcy case nie może
+    wejść do contextu ani zmienić statusu recovery.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/agent-orchestrator/test/recovery.integration.test.ts packages/database/test/checkpoint-recovery.integration.test.ts`.
-- Out of scope: multi-role scheduling.
-- Sol gate: pełne crash-before/after matrix.
+- Out of scope: wykonanie nowego model call i scheduler RA-009.
+- Sol gate: pełna real-PG crash-before/after matrix oraz liczności wszystkich
+  trwałych ledgerów.
 
 ## Final task gate
 
