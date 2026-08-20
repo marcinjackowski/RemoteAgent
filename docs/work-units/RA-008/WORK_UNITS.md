@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `16`
+- Plan revision: `17`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -30,8 +30,8 @@
 | `RA-008-WU-05B` | `ACCEPTED` | trwała materializacja waiting | WU-05A |
 | `RA-008-WU-05C` | `ACCEPTED` | atomic answer i resume job | WU-05B |
 | `RA-008-WU-06` | `ACCEPTED` | Markdown/pinned-status projection | WU-03 |
-| `RA-008-WU-07A` | `READY` | deterministyczny derived compaction manifest | WU-02, WU-03 |
-| `RA-008-WU-07B` | `BLOCKED` | bezpieczna integracja compaction z builderem | WU-07A |
+| `RA-008-WU-07A` | `ACCEPTED` | deterministyczny derived compaction manifest | WU-02, WU-03 |
+| `RA-008-WU-07B` | `READY` | bezpieczna integracja compaction z builderem | WU-07A |
 | `RA-008-WU-08` | `BLOCKED` | crash recovery i end-to-end resume | WU-04B, WU-05C, WU-06, WU-07B |
 
 ## `RA-008-WU-01` — Decision repository
@@ -267,7 +267,7 @@
 
 ## `RA-008-WU-07A` — Derived compaction manifest
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: czysty algorytm tworzy bounded derived manifest bez mutacji źródeł i
   zachowuje pełny indeks provenance.
 - Allowed paths: `packages/agent-orchestrator/src/context/compaction.ts`,
@@ -290,7 +290,7 @@
 
 ## `RA-008-WU-07B` — Builder compaction integration
 
-- Status: `BLOCKED`
+- Status: `READY`
 - Result: builder opcjonalnie dołącza derived manifest dla omissions, zachowując
   autorytatywne fragmenty i pełny ślad odtworzenia.
 - Allowed paths: `packages/agent-orchestrator/src/context/builder.ts`,
