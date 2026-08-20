@@ -1,0 +1,23 @@
+{
+  "name": "@remoteagent/review-loop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@remoteagent/contracts": "workspace:*",
+    "@remoteagent/test-evidence": "workspace:*",
+    "zod": "4.4.3"
+  }
+}
