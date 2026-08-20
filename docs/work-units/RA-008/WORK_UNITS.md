@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `26`
+- Plan revision: `27`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -39,7 +39,7 @@
 | `RA-008-WU-08B` | `ACCEPTED` | deterministyczny recovery plan i odbudowa contextu | WU-08A-F3, WU-07B |
 | `RA-008-WU-08B-F1` | `ACCEPTED` | fail-closed recovery state table | WU-08B |
 | `RA-008-WU-08B-F2` | `ACCEPTED` | exhaustive pure recovery tests | WU-08B-F1 |
-| `RA-008-WU-08C` | `READY` | end-to-end crash/resume matrix | WU-08B-F2, WU-06 |
+| `RA-008-WU-08C` | `ACCEPTED` | end-to-end crash/resume matrix | WU-08B-F2, WU-06 |
 
 ## `RA-008-WU-01` — Decision repository
 
@@ -462,7 +462,7 @@
 
 ## `RA-008-WU-08C` — End-to-end crash and resume matrix
 
-- Status: `READY`
+- Status: `ACCEPTED`
 - Result: publiczne API RA-008 odtwarza stan i bezpieczną akcję na każdym
   boundary completion/decision/answer po utracie procesu.
 - Allowed paths: `packages/database/test/checkpoint-recovery.integration.test.ts`,
