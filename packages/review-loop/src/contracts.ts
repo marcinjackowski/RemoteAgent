@@ -197,6 +197,17 @@ export const reviewResolution = valueObject({
   commit_sha: z.string().regex(/^[0-9a-f]{40}$/iu),
   /** `receipt_digest` of the `TestRun`s that vouch for that commit. */
   run_receipts: z.array(sha256Digest).min(1).max(128),
+  /**
+   * Digest of the diff the fix produced — i.e. the state AFTER the fix.
+   *
+   * Required because a resolution is otherwise self-certifying: an audit probe
+   * cleared a BLOCKER with an arbitrary 40-hex commit and an arbitrary receipt
+   * digest, neither of which had anything to do with the finding. Recording the
+   * resulting diff digest lets {@link deriveReadiness} refuse a resolution that
+   * claims to fix the very diff still under review — the shape a rubber-stamp takes
+   * when the code never actually changed.
+   */
+  fixed_diff_digest: sha256Digest,
 });
 
 export type ReviewResolution = z.infer<typeof reviewResolution>;
@@ -217,6 +228,17 @@ export const reviewReport = versionedContract({
   /** Tree digest the review was performed against. */
   tree_digest: sha256Digest,
   findings: z.array(reviewFinding).max(MAX_FINDINGS),
+  /**
+   * How many diff lines the reviewer examined.
+   *
+   * Required because an empty finding list is ambiguous: it means either "I read
+   * this and found nothing" or "I did not read it". An audit probe showed the second
+   * rendering as `READY`, which is rubber-stamping by omission — the easiest kind to
+   * miss, because a clean report looks like good news. A reviewer claiming zero
+   * findings must state a non-zero examination, and {@link deriveReadiness} refuses
+   * a report that reviewed nothing.
+   */
+  lines_examined: z.int().nonnegative(),
 });
 
 export type ReviewReport = z.infer<typeof reviewReport>;
@@ -362,6 +384,11 @@ export function deriveReadiness(input: {
   if (iterationLimit <= 0) {
     throw new ReviewContractError("the iteration limit must be positive");
   }
+  // A reviewer that examined nothing produced no evidence, so its silence cannot
+  // vouch for the change. Refused rather than treated as a clean report.
+  if (reports.every((report) => report.lines_examined === 0)) {
+    throw new ReviewContractError("no reviewer examined the diff");
+  }
 
   const merged = mergeReviewReports(reports);
   const dismissed = new Set(
@@ -369,7 +396,19 @@ export function deriveReadiness(input: {
       .filter((record) => record.disposition !== ReviewDisposition.ACCEPTED)
       .map((record) => record.finding_id),
   );
-  const resolved = new Set(input.resolutions.map((resolution) => resolution.finding_id));
+  const [firstReport] = reports;
+  const reviewedDigest = firstReport?.diff_digest;
+
+  // A resolution counts ONLY if it produced a diff different from the one being
+  // reviewed. A resolution whose `fixed_diff_digest` equals the reviewed digest is
+  // claiming to have fixed the code without changing it, which is precisely the
+  // rubber-stamp an audit probe demonstrated: any 40-hex commit plus any receipt
+  // digest used to clear a BLOCKER outright.
+  const resolved = new Set(
+    input.resolutions
+      .filter((resolution) => resolution.fixed_diff_digest !== reviewedDigest)
+      .map((resolution) => resolution.finding_id),
+  );
 
   const unresolved = merged
     .filter(

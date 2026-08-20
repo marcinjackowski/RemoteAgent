@@ -152,11 +152,22 @@ export function guardReviewer(reviewer: Reviewer): Reviewer {
       const produced = reviewReport.parse(await reviewer.review(context));
       assertReviewedRealDiff(context, produced);
 
+      // A reviewer cannot overstate how much it read: the count is capped at the
+      // diff's actual size. Understating is permitted — that is the reviewer
+      // admitting it only looked at part of the change.
+      const diffLines = context.diff.split("\n").filter((line) => line.length > 0).length;
+      const examined = Math.min(produced.lines_examined, diffLines);
+
       const unsupported = new Set(findUnsupportedFindings(context, produced.findings));
-      if (unsupported.size === 0) return produced;
+      if (unsupported.size === 0) {
+        return examined === produced.lines_examined
+          ? produced
+          : reviewReport.parse({ ...produced, lines_examined: examined });
+      }
 
       return reviewReport.parse({
         ...produced,
+        lines_examined: examined,
         findings: produced.findings.map((finding) =>
           unsupported.has(finding.finding_id)
             ? {

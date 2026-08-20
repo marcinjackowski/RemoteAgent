@@ -57,6 +57,8 @@ import type { ReviewFinding, ReviewReport, Reviewer, ReviewerContext } from "../
 const TREE = `sha256:${"c".repeat(64)}`;
 const RECEIPT = `sha256:${"d".repeat(64)}`;
 const COMMIT = "a".repeat(40);
+/** Digest of the diff AFTER a fix; must differ from the reviewed diff. */
+const FIXED_DIFF = `sha256:${"f".repeat(64)}`;
 
 /**
  * A diff with a REAL defect: the comparison uses `==` where the surrounding code
@@ -103,6 +105,7 @@ function report(findings: readonly ReviewFinding[], overrides: Partial<ReviewRep
     diff_digest: canonicalDigest(DIFF_WITH_BUG),
     tree_digest: TREE,
     findings: [...findings],
+    lines_examined: 6,
     ...overrides,
   });
 }
@@ -119,6 +122,7 @@ function stubReviewer(id: string, findings: readonly ReviewFinding[]): Reviewer 
         diff_digest: ctx.diff_digest,
         tree_digest: ctx.tree_digest,
         findings: [...findings],
+        lines_examined: 6,
       }),
   };
 }
@@ -227,6 +231,98 @@ describe("independent review loop", () => {
       }
     });
 
+    it("refuses a report from a reviewer that examined nothing", () => {
+      // Found by an audit probe: an empty finding list rendered as READY, so a
+      // reviewer that never read the diff passed the change. An empty list is
+      // ambiguous — "read it, found nothing" vs "did not read it" — and only the
+      // examination count distinguishes them. Rubber-stamping by omission is the
+      // easiest kind to miss, because a clean report looks like good news.
+      expect(() =>
+        deriveReadiness({
+          reports: [report([], { lines_examined: 0 })],
+          dispositions: [],
+          resolutions: [],
+          iterationsUsed: 1,
+          iterationLimit: 3,
+        }),
+      ).toThrow(ReviewContractError);
+
+      // A reviewer that did read it and found nothing is a legitimate READY.
+      expect(
+        deriveReadiness({
+          reports: [report([], { lines_examined: 6 })],
+          dispositions: [],
+          resolutions: [],
+          iterationsUsed: 1,
+          iterationLimit: 3,
+        }).readiness,
+      ).toBe(ReviewReadiness.READY);
+    });
+
+    it("refuses a resolution that claims to fix the diff still under review", () => {
+      // Found by an audit probe: any 40-hex commit plus any receipt digest cleared a
+      // BLOCKER, because nothing tied the resolution to an actual change. A
+      // resolution whose resulting diff equals the reviewed diff is claiming to have
+      // fixed the code without changing it.
+      const reviewed = canonicalDigest(DIFF_WITH_BUG);
+      const selfCertifying = reviewResolution.parse({
+        finding_id: "f1",
+        commit_sha: COMMIT,
+        run_receipts: [RECEIPT],
+        fixed_diff_digest: reviewed,
+      });
+
+      expect(
+        deriveReadiness({
+          reports: [report([finding()])],
+          dispositions: [],
+          resolutions: [selfCertifying],
+          iterationsUsed: 1,
+          iterationLimit: 3,
+        }).readiness,
+      ).toBe(ReviewReadiness.CHANGES_REQUIRED);
+
+      // A resolution that produced a genuinely different diff does clear it.
+      expect(
+        deriveReadiness({
+          reports: [report([finding()])],
+          dispositions: [],
+          resolutions: [
+            reviewResolution.parse({
+              finding_id: "f1",
+              commit_sha: COMMIT,
+              run_receipts: [RECEIPT],
+              fixed_diff_digest: FIXED_DIFF,
+            }),
+          ],
+          iterationsUsed: 1,
+          iterationLimit: 3,
+        }).readiness,
+      ).toBe(ReviewReadiness.READY);
+    });
+
+    it("caps a reviewer's claimed examination at the real diff size", async () => {
+      // A reviewer must not be able to overstate how much it read.
+      const boastful = guardReviewer({
+        reviewer_id: "boastful",
+        review: async (ctx) =>
+          reviewReport.parse({
+            schema_version: 1,
+            report_id: "r-boast",
+            reviewer_id: "boastful",
+            diff_digest: ctx.diff_digest,
+            tree_digest: ctx.tree_digest,
+            findings: [],
+            lines_examined: 100_000,
+          }),
+      });
+
+      const produced = await boastful.review(context());
+      expect(produced.lines_examined).toBeLessThanOrEqual(
+        DIFF_WITH_BUG.split("\n").filter((line) => line.length > 0).length,
+      );
+    });
+
     it("refuses to derive readiness with no reports at all", () => {
       // "Nobody reviewed" must never render as READY.
       expect(() =>
@@ -272,6 +368,7 @@ describe("independent review loop", () => {
               finding_id: "f1",
               commit_sha: COMMIT,
               run_receipts: [RECEIPT],
+              fixed_diff_digest: FIXED_DIFF,
             }),
           ],
         }).readiness,
@@ -464,6 +561,7 @@ describe("independent review loop", () => {
                 diff_digest: ctx.diff_digest,
                 tree_digest: ctx.tree_digest,
                 findings: fixed ? [] : [finding()],
+                lines_examined: 6,
               }),
           },
         ],
@@ -475,6 +573,7 @@ describe("independent review loop", () => {
               finding_id: f.finding_id,
               commit_sha: COMMIT,
               run_receipts: [RECEIPT],
+              fixed_diff_digest: FIXED_DIFF,
             }),
           );
         },
@@ -498,6 +597,7 @@ describe("independent review loop", () => {
               finding_id: `${f.finding_id}-attempt-${String(calls)}`,
               commit_sha: COMMIT,
               run_receipts: [RECEIPT],
+              fixed_diff_digest: FIXED_DIFF,
             }),
           );
         },
@@ -547,6 +647,7 @@ describe("independent review loop", () => {
               finding_id: `${f.finding_id}-x`,
               commit_sha: COMMIT,
               run_receipts: [RECEIPT],
+              fixed_diff_digest: FIXED_DIFF,
             }),
           ),
         iterationLimit: 10,
@@ -600,6 +701,7 @@ describe("independent review loop", () => {
               finding_id: `${f.finding_id}-r`,
               commit_sha: COMMIT,
               run_receipts: [RECEIPT],
+              fixed_diff_digest: FIXED_DIFF,
             }),
           ),
         iterationLimit: 2,
