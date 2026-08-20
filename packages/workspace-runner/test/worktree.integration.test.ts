@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocalWorkspaceAdapter } from "../src/index.js";
+import { InMemoryWorkspaceRegistry } from "../src/index.js";
 
 const run = promisify(execFile);
 const roots: string[] = [];
@@ -37,6 +38,7 @@ describe("local worktree adapter", () => {
       workspaceRoot: join(parent, "sandbox"),
       repositories: { repo: { sourcePath: source } },
       fenceValidator,
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
     });
     const first = await adapter.create({
       identity: { caseId: "case-a", workspaceId: "workspace-a" },
@@ -68,6 +70,7 @@ describe("local worktree adapter", () => {
       workspaceRoot: join(parent, "sandbox"),
       repositories: {},
       fenceValidator,
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
     });
     await expect(
       adapter.create({
@@ -89,6 +92,7 @@ describe("local worktree adapter", () => {
       workspaceRoot: join(parent, "sandbox"),
       repositories: { repo: { sourcePath: source } },
       fenceValidator,
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
     });
     const input = {
       identity: { caseId: "case-retry", workspaceId: "workspace-retry" },
@@ -101,7 +105,13 @@ describe("local worktree adapter", () => {
     await expect(
       readFile(join(parent, "sandbox", "case-retry", "workspace-retry", "README.md")),
     ).rejects.toThrow();
-    await expect(adapter.create({ ...input, baseSha })).resolves.toMatchObject({ baseSha });
+    const retryAdapter = new LocalWorkspaceAdapter({
+      workspaceRoot: join(parent, "sandbox"),
+      repositories: { repo: { sourcePath: source } },
+      fenceValidator,
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
+    });
+    await expect(retryAdapter.create({ ...input, baseSha })).resolves.toMatchObject({ baseSha });
   });
 
   it("reports ambiguous ledger failure after worktree creation without FAILED replay", async () => {
@@ -114,6 +124,7 @@ describe("local worktree adapter", () => {
       workspaceRoot: join(parent, "sandbox"),
       repositories: { repo: { sourcePath: source } },
       fenceValidator,
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
     });
     await expect(
       adapter.create({
@@ -140,6 +151,7 @@ describe("local worktree adapter", () => {
       ledgerRoot: ledgerPath,
       repositories: { repo: { sourcePath: source } },
       fenceValidator,
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
     });
     await expect(
       adapter.create({
@@ -178,10 +190,24 @@ describe("local worktree adapter", () => {
           throw new Error("stale or reclaimed lease");
         },
       },
+      workspaceRegistry: new InMemoryWorkspaceRegistry(),
     });
     await expect(stale.create(input)).rejects.toThrow("stale or reclaimed lease");
     await expect(
       readFile(join(parent, "sandbox", "case-fence", "workspace-fence", "README.md")),
     ).rejects.toThrow();
+  });
+
+  it("fails closed on resume when the server-owned registry is absent", async () => {
+    const { parent } = await fixtureRepo();
+    const adapter = new LocalWorkspaceAdapter({
+      workspaceRoot: join(parent, "sandbox"),
+      repositories: {},
+    });
+    await expect(
+      adapter.resume({
+        identity: { caseId: "case-resume", workspaceId: "workspace-resume" },
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });

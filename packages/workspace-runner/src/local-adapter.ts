@@ -17,6 +17,7 @@ import {
 import { computeTreeDigest } from "./digest.js";
 import { OperationLedger } from "./operation-log.js";
 import { WorkspaceFencingError, type WorkspaceFenceValidator } from "./fencing.js";
+import { recoverWorkspace, WorkspaceRecoveryError, type WorkspaceRegistry } from "./recovery.js";
 import type {
   WorkspaceCreateInput,
   WorkspaceCreateResult,
@@ -35,6 +36,7 @@ export type LocalWorkspaceAdapterConfig = Readonly<{
   repositories: Readonly<Record<string, LocalRepositoryConfig>>;
   ledgerRoot?: string;
   fenceValidator?: WorkspaceFenceValidator;
+  workspaceRegistry?: WorkspaceRegistry;
 }>;
 
 type CreatedWorkspace = Readonly<{
@@ -53,9 +55,11 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
   private readonly rootPolicyPromise;
   private readonly ledger: OperationLedger;
   private readonly metadataRoot: string;
+  private readonly registry: WorkspaceRegistry | undefined;
 
   public constructor(private readonly config: LocalWorkspaceAdapterConfig) {
     this.rootPolicyPromise = createWorkspacePathPolicy(config.workspaceRoot);
+    void this.rootPolicyPromise.catch(() => undefined);
     this.metadataRoot = resolve(
       config.ledgerRoot ??
         join(
@@ -64,6 +68,7 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
         ),
     );
     this.ledger = new OperationLedger(this.metadataRoot);
+    this.registry = config.workspaceRegistry;
   }
 
   public async create(input: WorkspaceCreateInput): Promise<WorkspaceCreateResult> {
@@ -83,6 +88,15 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
     const policy = await this.rootPolicyPromise;
     if (!this.config.fenceValidator)
       throw new WorkspaceFencingError("Writer fence validator is required");
+    await this.config.fenceValidator.assertCurrent({
+      identity: input.identity,
+      fence: input.fence,
+    });
+    if (!this.config.workspaceRegistry)
+      throw new WorkspaceRecoveryError("CONFLICT", "Server-owned workspace registry is required");
+    const registry = this.registry;
+    if (!registry)
+      throw new WorkspaceRecoveryError("CONFLICT", "Server-owned workspace registry is required");
     const metadataParent = dirname(this.metadataRoot);
     const canonicalParent = await realpath(metadataParent).catch(() => {
       throw new WorkspaceLifecycleError("INVALID_LIFECYCLE", "Ledger parent must already exist");
@@ -120,6 +134,16 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
         "Ledger root must be outside the command workspace",
       );
     }
+    const relativeRoot = join(input.identity.caseId, input.identity.workspaceId);
+    const target = await policy.validateCreateTarget(relativeRoot);
+    const mapping = await registry.recordIntent({
+      workspaceId: input.identity.workspaceId,
+      caseId: input.identity.caseId,
+      repo: input.repositoryId,
+      baseSha: input.baseSha,
+      branchName: input.branchName,
+      target,
+    });
     await this.config.fenceValidator.assertCurrent({
       identity: input.identity,
       fence: input.fence,
@@ -127,8 +151,6 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
     await mkdir(canonicalMetadataRoot, { recursive: true });
     await validateWorkspaceRoot(canonicalMetadataRoot);
     const operationId = randomUUID();
-    const relativeRoot = join(input.identity.caseId, input.identity.workspaceId);
-    const target = await policy.validateCreateTarget(relativeRoot);
     await this.config.fenceValidator.assertCurrent({
       identity: input.identity,
       fence: input.fence,
@@ -167,6 +189,11 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
           afterDigest,
           outcome: "SUCCEEDED",
         });
+        if (!(await registry.finalize(mapping, afterDigest)))
+          throw new WorkspaceLifecycleError(
+            "INVALID_LIFECYCLE",
+            "Workspace mapping finalize conflict",
+          );
       } catch (error) {
         throw new WorkspaceLifecycleError(
           "INVALID_LIFECYCLE",
@@ -194,11 +221,27 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
   }
 
   public async resume(input: WorkspaceResumeInput): Promise<WorkspaceResumeResult> {
-    void input;
-    throw new WorkspaceLifecycleError(
-      "INVALID_LIFECYCLE",
-      "Resume is outside the local adapter worktree unit",
+    this.validateIdentity(input.identity);
+    if (!this.registry)
+      throw new WorkspaceRecoveryError("CONFLICT", "Server-owned workspace registry is required");
+    const recovered = await recoverWorkspace(
+      this.registry,
+      input.identity.workspaceId,
+      this.metadataRoot,
     );
+    if (recovered.mapping.caseId !== input.identity.caseId)
+      throw new WorkspaceRecoveryError("CONFLICT", "Workspace mapping case binding mismatch");
+    this.workspaces.set(this.key(input.identity), {
+      path: recovered.mapping.target as VerifiedWorkspacePath,
+      baseSha: recovered.mapping.baseSha,
+      branchName: recovered.mapping.branchName,
+    });
+    return {
+      operationId: randomUUID(),
+      identity: input.identity,
+      lifecycle: "RESUMED",
+      dirtyState: recovered.state,
+    };
   }
 
   public async snapshot(input: WorkspaceSnapshotInput): Promise<WorkspaceSnapshotResult> {
