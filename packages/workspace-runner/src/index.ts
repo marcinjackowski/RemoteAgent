@@ -4,3 +4,5 @@ export * from "./runner.js";
 export * from "./path-policy.js";
 export * from "./git.js";
 export * from "./local-adapter.js";
+export * from "./process-runner.js";
+export * from "./network-policy.js";
