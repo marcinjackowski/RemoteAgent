@@ -415,6 +415,45 @@ describeIntegration(
         expect(made.outcome).toBe(ToolOutcome.SUCCEEDED);
       });
 
+      it("does not return protected file CONTENTS through search", async () => {
+        // Found by an adversarial audit probe, not by the unit's own tests: the
+        // discovery policy's `isForbiddenPath` covers `.git` and credentials but
+        // NOT instruction files, so before the outbound filter a query matching
+        // `AGENTS.md` returned its contents — reaching by search exactly what
+        // `read` refuses by path.
+        await writeFile(join(root, "AGENTS.md"), "INSTRUCTION_MARKER=do-not-surface\n");
+        const set = await toolset();
+
+        const result = await set.search({ operation_id: "s-leak", query: "INSTRUCTION_MARKER" });
+
+        expect(JSON.stringify(result)).not.toContain("INSTRUCTION_MARKER=do-not-surface");
+        expect(JSON.stringify(result)).not.toContain("AGENTS.md");
+      });
+
+      it("does not enumerate protected entries through a root tree listing", async () => {
+        const set = await toolset();
+        const result = await set.tree({ operation_id: "s-tree-leak" });
+        const serialized = JSON.stringify(result);
+
+        expect(serialized).not.toContain("AGENTS.md");
+        expect(serialized).not.toContain(".env");
+        // The ordinary entries are still listed, so the filter is not a blanket
+        // refusal dressed up as a success.
+        expect(serialized).toContain("src");
+      });
+
+      it("accounts for filtered entries instead of dropping them silently", async () => {
+        const set = await toolset();
+        const result = await set.tree({ operation_id: "s-tree-count" });
+        expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+
+        const payload = body(result);
+        // A filtered listing must not claim to be exhaustive.
+        expect(payload["complete"]).toBe(false);
+        expect(payload["dropped"]).toBeGreaterThan(0);
+        expect(result.output.truncated).toBe(true);
+      });
+
       it("does not echo the model-supplied path back into the payload", async () => {
         const set = await toolset();
         const result = await set.read({

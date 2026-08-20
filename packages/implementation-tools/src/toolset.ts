@@ -233,6 +233,69 @@ function refuseProtected(
 }
 
 /**
+ * Remove protected entries from a listing-shaped payload.
+ *
+ * `search` and a root `tree` accept no path, so they cannot be gated on the way
+ * in — a protected file is reachable only as a RESULT. This rewrites the payload
+ * to drop those results and re-renders the envelope.
+ *
+ * Removal is accounted for rather than silent: dropped items are added to the
+ * payload's own `dropped` counter and `complete` goes false, which is the same
+ * vocabulary `read-tools.ts` already uses for byte-clipping. A caller therefore
+ * cannot mistake a filtered listing for an exhaustive one.
+ *
+ * The digest is deliberately left untouched. It is taken over the *observed*
+ * state, and filtering changes what is reported, not what was observed; recomputing
+ * it here would make two identical observations produce different digests
+ * depending on this policy.
+ */
+function filterResultPaths(result: ImplementationToolResult): ImplementationToolResult {
+  if (result.outcome !== ToolOutcome.SUCCEEDED) return result;
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(result.output.value) as Record<string, unknown>;
+  } catch {
+    // Not a payload this layer understands. Fail closed: a listing that cannot be
+    // inspected cannot be certified as free of protected paths.
+    return refuseProtected("filter", result.kind, result.identity, result.operation_id);
+  }
+  const items = payload["items"];
+  if (!Array.isArray(items)) return result;
+
+  const kept = items.filter((item) => {
+    const path = (item as { relative_path?: unknown }).relative_path;
+    return typeof path !== "string" || !isProtectedPath(path);
+  });
+  if (kept.length === items.length) return result;
+
+  const previouslyDropped = typeof payload["dropped"] === "number" ? payload["dropped"] : 0;
+  const value = canonicalJsonStringify({
+    ...payload,
+    complete: false,
+    dropped: previouslyDropped + (items.length - kept.length),
+    items: kept,
+  });
+  return implementationToolResult.parse({
+    schema_version: 1,
+    operation_id: result.operation_id,
+    identity: result.identity,
+    kind: result.kind,
+    outcome: ToolOutcome.SUCCEEDED,
+    before_digest: result.before_digest,
+    after_digest: result.after_digest,
+    changed_files: [...result.changed_files],
+    output: {
+      trust: TrustLevel.UNTRUSTED_DATA,
+      value,
+      // The carried bytes shrank relative to the observation, which is exactly
+      // what `truncated` means in this contract.
+      truncated: true,
+      original_byte_length: result.output.original_byte_length,
+    },
+  });
+}
+
+/**
  * Compose the full toolset over one workspace and one scope.
  *
  * Construction is where every server-owned decision is fixed: the root, the
@@ -303,16 +366,24 @@ export async function createImplementationToolset(
         input.operation_id,
         input.relative_path === undefined ? [] : [input.relative_path],
       ) ??
-      reads.tree(
-        input.relative_path === undefined
-          ? { operation_id: input.operation_id }
-          : { operation_id: input.operation_id, relative_path: input.relative_path },
+      filterResultPaths(
+        await reads.tree(
+          input.relative_path === undefined
+            ? { operation_id: input.operation_id }
+            : { operation_id: input.operation_id, relative_path: input.relative_path },
+        ),
       ),
 
-    // `search` takes a query, not a path. Protected files are still excluded from
-    // its results, because the discovery policy's own `isForbiddenPath` filters
-    // the scan — this layer has no path to gate here.
-    search: async (input) => reads.search({ operation_id: input.operation_id, query: input.query }),
+    // `search` and a root `tree` take no path to gate, so they are filtered on
+    // the way OUT instead. This is not belt-and-braces: the discovery policy's
+    // `isForbiddenPath` covers `.git` and credential material but NOT repository
+    // instructions, so without this filter a query matching `AGENTS.md` returns
+    // its contents and a root listing enumerates it — reaching by search exactly
+    // what `read` refuses by path. Verified by probe, not assumed.
+    search: async (input) =>
+      filterResultPaths(
+        await reads.search({ operation_id: input.operation_id, query: input.query }),
+      ),
 
     write: async (input) =>
       guardPath("write", ToolKind.WRITE_FILE, input.operation_id, [input.relative_path]) ??
