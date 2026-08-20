@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `07`
+- Plan revision: `08`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -36,6 +36,16 @@
   effort, dlatego reconciliation z WU-07 pozostaje obowiązkowe.
 - JQL ogranicza dynamiczne issue/comment webhooks server-side, ale lokalny
   project allowlist nadal jest twardą granicą przed enrichment.
+- WU-04 używa wyłącznie `GET /rest/api/3/issue/{issueIdOrKey}` z jawnym
+  allowlistem pól oraz `GET /rest/api/3/search/jql` dla tokenowej paginacji.
+  Wycofywane endpointy `/rest/api/3/search` nie są dozwolone.
+- Enhanced JQL zwraca token `nextPageToken`; klient ogranicza liczbę stron,
+  elementów i powtórzenie tokenu. Jira zaznacza, że search może być opóźniony,
+  więc reconciliation nie traktuje odpowiedzi search jako nowszej od snapshotu
+  issue tylko z powodu czasu pobrania.
+- Odpowiedź `429` jest ponawiana wyłącznie w ograniczonym budżecie i respektuje
+  `Retry-After`; także `503` może nieść ten nagłówek. Opóźnienie, clock i jitter
+  są wstrzykiwane, żeby testy nie spały ani nie zależały od zegara ściennego.
 - Źródła: [Atlassian Jira Cloud webhooks](https://developer.atlassian.com/cloud/jira/software/webhooks/)
   oraz [Jira REST v3 webhooks](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-webhooks/).
 
@@ -46,7 +56,7 @@
 | `RA-016-WU-01` | `ACCEPTED` | wersjonowane kontrakty i bezsekretowa konfiguracja | — |
 | `RA-016-WU-02` | `ACCEPTED` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
 | `RA-016-WU-03` | `ACCEPTED` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
-| `RA-016-WU-04` | `READY` | read-only REST client i stale-safe enrichment | WU-03 |
+| `RA-016-WU-04` | `RUNNING` | read-only REST client i stale-safe enrichment | WU-03 |
 | `RA-016-WU-05` | `BLOCKED` | issue/case correlation i Discord routing | WU-03, WU-04 |
 | `RA-016-WU-06` | `BLOCKED` | webhook registration health i renewal | WU-02, WU-04 |
 | `RA-016-WU-07` | `BLOCKED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
@@ -112,11 +122,24 @@
   `test/rest-client.test.ts`, `test/enrichment.test.ts`, `src/index.ts`.
 - Context pack: WU-01/03, oficjalne REST pagination/rate/auth semantics,
   RA-005 connection secret boundary.
-- Acceptance: tylko read methods; auth/rate/pagination mają typed bounded wynik;
-  snapshot stosuje monotoniczną wersję i provenance.
+- Acceptance: transport przyjmuje wyłącznie `GET`, dokładnie allowlisted origin
+  i stałe ścieżki Jira v3; redirect, dowolny URL, write method i obce pole są
+  odrzucane przed requestem. Credential jest pobierany przez callback secret
+  boundary na czas requestu i nie jest przechowywany, zwracany ani logowany.
+  `getIssue` żąda wyłącznie `id,key,project,summary,description,status,updated`;
+  provider text pozostaje bounded `UNTRUSTED_DATA`. Enhanced JQL używa
+  `nextPageToken`, wykrywa cykl i ma limity stron/elementów. `429` oraz transient
+  `503` z `Retry-After` mają typed, bounded retry z injected delay/clock/jitter;
+  brak albo przekroczenie dozwolonego delay failuje jawnie. Snapshot ma
+  provenance connection/issue/source timestamp, a jego monotoniczną wersją jest
+  poprawnie sparsowany epoch-ms pola Jira `fields.updated`; odpowiedź o wersji
+  `<=` bieżącej nie mutuje stanu.
 - Verification: `pnpm vitest run packages/connector-jira/test/rest-client.test.ts packages/connector-jira/test/enrichment.test.ts`.
 - Out of scope: Jira writes i webhook renewal.
-- Sol gate: stale response po nowszym webhooku niczego nie mutuje.
+- Sol gate: stale response po nowszym webhooku niczego nie mutuje; testy
+  odrzucają redirect/foreign origin/write method, pagination-token cycle,
+  oversized result i sekret w error/log representation; retry nie używa real
+  sleep.
 
 ## `RA-016-WU-05` — Correlation and Discord projection
 
