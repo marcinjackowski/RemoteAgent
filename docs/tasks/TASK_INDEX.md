@@ -36,18 +36,18 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 | 9 | [RA-009](RA-009.md) Multi-agent orchestrator | DONE | RA-004, RA-006, RA-007, RA-008 | M1 |
 | 10 | [RA-010](RA-010.md) Isolated workspace runner | DONE | RA-001, RA-003, RA-004, RA-005 | M2 |
 | 11 | [RA-011](RA-011.md) Repository discovery and planning | IN_PROGRESS | RA-008, RA-010 | M2 |
-| 12 | [RA-012](RA-012.md) Implementation toolset | BLOCKED_BY_DEPENDENCIES | RA-007, RA-009, RA-010, RA-011 | M2 |
+| 12 | [RA-012](RA-012.md) Implementation toolset | BLOCKED_BY_DEPENDENCIES | RA-005, RA-007, RA-009, RA-010, RA-011 | M2 |
 | 13 | [RA-013](RA-013.md) Tests, artifacts and snapshots | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012 | M2 |
 | 14 | [RA-014](RA-014.md) Local Git lifecycle | BLOCKED_BY_DEPENDENCIES | RA-010, RA-012, RA-013 | M2 |
-| 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-012, RA-013, RA-014 | M2 |
+| 15 | [RA-015](RA-015.md) Independent review and fix loop | BLOCKED_BY_DEPENDENCIES | RA-009, RA-011, RA-012, RA-013, RA-014 | M2 |
 | 16 | [RA-016](RA-016.md) Jira connector | IN_PROGRESS | RA-002, RA-003, RA-004, RA-005, RA-006 | M3 |
-| 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-014 | M3 |
+| 17 | [RA-017](RA-017.md) GitLab connector and Merge Requests | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-013, RA-014, RA-015 | M3 |
 | 18 | [RA-018](RA-018.md) Golden path and concurrency proof | BLOCKED_BY_DEPENDENCIES | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
 | 19 | [RA-019](RA-019.md) Gmail two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
 | 20 | [RA-020](RA-020.md) Calendar two-account connector | BLOCKED_BY_DEPENDENCIES | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
-| 21 | [RA-021](RA-021.md) MCP Tool Broker | BLOCKED_BY_DEPENDENCIES | RA-005, RA-007, RA-009, RA-017, RA-019, RA-020 | M5 |
-| 22 | [RA-022](RA-022.md) Policy, approvals and action executor | BLOCKED_BY_DEPENDENCIES | RA-003, RA-004, RA-005, RA-006, RA-021 | M5 |
-| 23 | [RA-023](RA-023.md) AgentCore Gateway and official MCP targets | BLOCKED_BY_DEPENDENCIES | RA-021, RA-022 | M5 |
+| 21 | [RA-021](RA-021.md) MCP Tool Broker | BLOCKED_BY_DEPENDENCIES | RA-005, RA-007, RA-009, RA-013, RA-016, RA-017, RA-019, RA-020 | M5 |
+| 22 | [RA-022](RA-022.md) Policy, approvals and action executor | BLOCKED_BY_DEPENDENCIES | RA-003, RA-004, RA-005, RA-006, RA-008, RA-021 | M5 |
+| 23 | [RA-023](RA-023.md) AgentCore Gateway and official MCP targets | BLOCKED_BY_DEPENDENCIES | RA-010, RA-016, RA-021, RA-022 | M5 |
 | 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | BLOCKED_BY_DEPENDENCIES | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
 | 25 | [RA-025](RA-025.md) AWS deployment and disaster recovery | BLOCKED_BY_DEPENDENCIES | RA-024 | M6 |
 | 26 | [RA-026](RA-026.md) Final acceptance and production readiness | BLOCKED_BY_DEPENDENCIES | RA-025 | M6 |
@@ -73,3 +73,17 @@ zmieniają ich statusu ani nie omijają zależności z poniższej tabeli.
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
 przy starcie i dopiero wtedy oznacza pierwszy unit jako gotowy do wykonania.
+
+## Dependency rationale — 2026-08-20
+
+- RA-012 jawnie zależy od zaakceptowanego secret/network boundary RA-005.
+- RA-015 konsumuje wersjonowany plan i profile RA-011.
+- RA-017 nie tworzy draft MR bez prawdziwego test evidence RA-013 i review
+  evidence RA-015.
+- RA-021 wymaga artifact boundary RA-013 i zaakceptowanych Jira read APIs RA-016.
+- RA-022 wiąże approval z checkpoint/decision revision RA-008.
+- RA-023 korzysta z workspace/runtime RA-010 i targetu Jira RA-016.
+
+RA-019 i RA-020 pozostają semantycznie niezależne. Ich units dotykające migracji
+i `repositories/index.ts` są serializowane przez Sol jako konflikt allowed paths;
+tymczasowy migration lane nie jest kodowany jako fałszywa zależność domenowa.
