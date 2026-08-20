@@ -9,3 +9,7 @@ export * from "./contracts.js";
 export * from "./errors.js";
 export * from "./webhook/verify.js";
 export * from "./webhook/ingress.js";
+export type { JiraIngressContext, ParsedJiraEvent } from "./types.js";
+export * from "./parser.js";
+export * from "./normalize.js";
+export * from "./scope.js";

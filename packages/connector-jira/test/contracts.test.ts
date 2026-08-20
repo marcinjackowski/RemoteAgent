@@ -42,6 +42,7 @@ describe("Jira runtime contracts", () => {
       occurred_at: "2026-08-20T10:00:00Z",
       received_at: "2026-08-20T10:01:00Z",
       summary: { trust: TrustLevel.UNTRUSTED_DATA, value: "Title" },
+      ordering_key: "2026-01-01T00:00:00.000Z:abc",
     };
     expect(jiraEventContract.parse(event).summary?.trust).toBe(TrustLevel.UNTRUSTED_DATA);
     expect(() =>

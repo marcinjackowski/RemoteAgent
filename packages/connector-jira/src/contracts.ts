@@ -31,7 +31,8 @@ const jiraEventKind = z.enum([
   "issue_updated",
   "issue_deleted",
   "comment_created",
-  "changelog",
+  "comment_updated",
+  "comment_deleted",
 ]);
 
 /** Normalized Jira event. Provider text is always explicitly untrusted. */
@@ -48,6 +49,18 @@ export const jiraEventContract = versionedContract({
   description: jiraText.optional(),
   comment: jiraText.optional(),
   status: jiraText.optional(),
+  ordering_key: idString.max(256),
+  changes: z
+    .array(z.strictObject({ field: jiraText, from: jiraText.optional(), to: jiraText.optional() }))
+    .max(128)
+    .optional(),
+}).superRefine((value, ctx) => {
+  if (value.event_type !== "issue_updated" && value.changes !== undefined)
+    ctx.addIssue({
+      code: "custom",
+      path: ["changes"],
+      message: "changes are only valid for issue_updated",
+    });
 });
 
 export type JiraEvent = z.infer<typeof jiraEventContract>;
