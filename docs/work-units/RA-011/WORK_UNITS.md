@@ -3,10 +3,10 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `10`
+- Plan revision: `13`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
-- Plan status: `ACTIVE`
+- Plan status: `BLOCKED`
 - Base commit/tree: `a9e25dca0d29d4c96b0ad9c7d78daa258abc7647`
 - Full-task verification: `pnpm vitest run packages/repository-planner/test`
 
@@ -36,7 +36,9 @@
 | `RA-011-WU-06` | `ACCEPTED` | complete requirement-to-plan mapping | WU-01, WU-05 |
 | `RA-011-WU-07` | `ACCEPTED` | material ambiguity do DecisionRequest | WU-06, RA-008 |
 | `RA-011-WU-08` | `ACCEPTED` | stale-plan invalidation | WU-05, WU-06 |
-| `RA-011-WU-09` | `RUNNING` | read-only Planner integration proof | WU-04, WU-07, WU-08 |
+| `RA-011-WU-09` | `CHANGES_REQUESTED` | read-only Planner integration proof | WU-04, WU-07, WU-08 |
+| `RA-011-WU-09F` | `CHANGES_REQUESTED` | domknięcie snapshot/authority binding Plannera | WU-09 |
+| `RA-011-WU-09G` | `BLOCKED` | trwałe i niewymijalne bindingi Plannera | WU-09F |
 
 ## `RA-011-WU-01` — Repository, plan and read-port contracts
 
@@ -178,6 +180,62 @@
 - Verification: `pnpm vitest run packages/repository-planner/test/planner.integration.test.ts`.
 - Out of scope: implementer dispatch i Git lifecycle.
 - Sol gate: before/after tree digest, reviewed tool manifest i restart proof.
+
+## `RA-011-WU-09F` — Planner snapshot and authority binding fix
+
+- Result: Planner zwraca plan albo decyzję wyłącznie dla nadal niezmienionego,
+  server-resolved workspace mappingu i strict requirement setu, a staleness jest
+  związane z exact case/workspace/tree snapshotem.
+- Allowed paths: `packages/repository-planner/src/planner.ts`,
+  `packages/repository-planner/test/planner.integration.test.ts`.
+- Context pack: findingi niezależnego audytu WU-09; accepted RA-010
+  `WorkspaceMappingStore`/snapshot boundary; `profile.ts` binding digest;
+  `plan.ts` strict requirement rules; `staleness.ts` profile checks.
+- Acceptance:
+  1. Context powstaje z server-owned `WorkspaceMappingStore` i workspace ID;
+     foreign case/root/repository/base mapping, także o identycznym tree digest,
+     failuje przed discovery lub draftem.
+  2. Snapshot digest jest ponownie sprawdzany po `draftPort.propose`; mutacja w
+     trakcie plan i decision path kończy się typed `SNAPSHOT_CHANGED`, a plan
+     oraz staleness wiążą exact case/workspace/tree przez binding digest.
+  3. Requirements są strict, bounded, unikalne i zamrożone przed draft call;
+     świeży restart zachowuje exact plan i decision binding.
+- Verification: `pnpm vitest run packages/repository-planner/test/planner.integration.test.ts`
+  z oczekiwanym wynikiem wszystkich testów `passed` i exit code `0`.
+- Out of scope: zmiana publicznych schemas `RepositoryProfile` i
+  `ImplementationPlan`, filesystem writes, command execution, Git lifecycle,
+  edycja dokumentacji/statusów/handoffów/audytów, commit oraz remote writes.
+- Sol gate: pełny diff mieści się w dwóch plikach; dwa identyczne rooty nie mogą
+  podmienić mappingu; mutation-after-draft jest odrzucone dla planu i decyzji;
+  staleness obcego bindingu nie jest `VALID`; pełna suite Plannera pozostaje
+  zielona.
+
+## `RA-011-WU-09G` — Durable planner binding correction
+
+- Result: usuwa pozostałe obejścia authority i nietrwały in-memory binding z
+  WU-09F, zachowując publiczny Planner wyłącznie nad durable RA-010 mappingiem.
+- Allowed paths: `packages/repository-planner/src/planner.ts`,
+  `packages/repository-planner/test/planner.integration.test.ts`.
+- Context pack: WU-09F diff i cztery findingi jego Sol gate; accepted
+  `WorkspaceMappingStore`; `RepositoryProfileBuildResult.bindingDigest`;
+  `checkPlanStaleness`; strict `text`/`idString` contracts.
+- Acceptance:
+  1. Publiczne `createPlannerContext` przyjmuje wyłącznie server-owned mapping
+     store + workspace ID; legacy root/identity/snapshot/repo/base overload i
+     publiczne obejście nie istnieją, a identyczny foreign root/mapping failuje.
+  2. Plan `task_id` jest deterministycznie związany z profile binding digest;
+     `checkPlannerStaleness` przyjmuje trwałe build results zamiast WeakMap i po
+     serializacji/restarcie odrzuca foreign case/workspace/tree binding.
+  3. Requirement summary przechodzi bounded `text.parse`; plan i decision
+     mutation podczas draftu dają typed `SNAPSHOT_CHANGED`, a świeży mapping
+     restart zachowuje exact plan ID i decision ID/binding.
+- Verification: `pnpm vitest run packages/repository-planner/test/planner.integration.test.ts`
+  z exit code `0`.
+- Out of scope: zmiana contracts schemas, nowe pliki, dokumentacja/statusy,
+  command/write tools, commit i remote writes.
+- Sol gate: brak `WeakMap` dla bindingu, brak publicznego raw-root konstruktora,
+  testy obejmują oba proposal kinds i serialized restart; pełne contracts +
+  repository-planner suite, typecheck, build, scoped lint/format i diff-check.
 
 ## Final task gate
 
