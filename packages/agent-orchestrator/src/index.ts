@@ -27,3 +27,5 @@ export * from "./scheduler/mailbox.js";
 export * from "./scheduler/semaphore.js";
 export * from "./scheduler/fairness.js";
 export * from "./supervisor/writer-lease.js";
+export * from "./supervisor/parallel.js";
+export * from "./supervisor/merge.js";
