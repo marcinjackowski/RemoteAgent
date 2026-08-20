@@ -23,3 +23,6 @@ export * from "./roles/registry.js";
 export * from "./supervisor/state.js";
 export * from "./supervisor/errors.js";
 export * from "./supervisor/machine.js";
+export * from "./scheduler/mailbox.js";
+export * from "./scheduler/semaphore.js";
+export * from "./scheduler/fairness.js";
