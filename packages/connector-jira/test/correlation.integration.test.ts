@@ -5,7 +5,7 @@ import { ChannelRegistry } from "@remoteagent/discord";
 import { createTestDatabase } from "../../database/test/harness.js";
 import { describeIntegration, ensurePostgres } from "../../database/test/integration-base.js";
 import { JiraContractError } from "../src/errors.js";
-import { correlateJiraIssue } from "../src/correlation.js";
+import { correlateJiraIssue, correlateJiraIssueInTransaction } from "../src/correlation.js";
 
 const available = await ensurePostgres();
 
@@ -368,6 +368,41 @@ describeIntegration(
       await expect(
         correlateJiraIssue({ eventId: "later", issueKey: "PROJ-1" }, options()),
       ).rejects.toBeInstanceOf(JiraContractError);
+    });
+    it("runs inside a caller transaction and rolls back after the core returns", async () => {
+      const outerOptions = options();
+      await expect(
+        db.withTransaction(async (tx) => {
+          const { db: ignoredDb, ...coreOptions } = outerOptions;
+          void ignoredDb;
+          const result = await correlateJiraIssueInTransaction(
+            tx,
+            { eventId: "outer-event", issueKey: "PROJ-1", summary: "outer" },
+            coreOptions,
+          );
+          expect(result.replay).toBe(false);
+          throw new Error("caller fault after correlation");
+        }),
+      ).rejects.toThrow("caller fault");
+      expect(await counts()).toEqual({
+        cases: "0",
+        entities: "0",
+        bindings: "0",
+        outbox: "0",
+        dispatch: "0",
+        receipts: "0",
+      });
+      const committed = await db.withTransaction(async (tx) => {
+        const { db: ignoredDb, ...coreOptions } = options();
+        void ignoredDb;
+        return correlateJiraIssueInTransaction(
+          tx,
+          { eventId: "outer-success", issueKey: "PROJ-1" },
+          coreOptions,
+        );
+      });
+      expect(committed.replay).toBe(false);
+      expect((await counts()).cases).toBe("1");
     });
   },
   available,

@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `20`
+- Plan revision: `21`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -63,8 +63,11 @@
 | `RA-016-WU-06` | `ACCEPTED` | webhook registration health i renewal | WU-02, WU-04, WU-05C |
 | `RA-016-WU-07` | `ACCEPTED` | bounded reconciliation utraconych eventów | WU-04, WU-06 |
 | `RA-016-WU-08A` | `ACCEPTED` | zweryfikowany odczyt durable raw payloadu | WU-02, WU-07 |
-| `RA-016-WU-08B` | `RUNNING` | transaction-capable correlation core | WU-05C, WU-07, WU-08A |
-| `RA-016-WU-08C` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-08B |
+| `RA-016-WU-08B` | `ACCEPTED` | transaction-capable correlation core | WU-05C, WU-07, WU-08A |
+| `RA-016-WU-08C` | `RUNNING` | restart-stable trusted ingress context | WU-08A |
+| `RA-016-WU-08D` | `BLOCKED` | write-free durable correlation replay | WU-08B |
+| `RA-016-WU-08E` | `BLOCKED` | atomic Jira processing runtime | WU-08C, WU-08D |
+| `RA-016-WU-08F` | `BLOCKED` | Jira-to-case-to-Discord proof | WU-08E |
 
 ## `RA-016-WU-01` — Connector contracts and configuration
 
@@ -284,13 +287,66 @@
 - Sol gate: test z sentinel write w tej samej transakcji, brak nested transaction
   oraz pełna dotychczasowa macierz correlation.
 
-## `RA-016-WU-08C` — End-to-end Jira proof
+## `RA-016-WU-08C` — Restart-stable trusted ingress context
+
+- Result: verified raw payload zwraca trwały `receivedAt` oraz deterministyczny
+  `traceId`, aby restart nie zmieniał znormalizowanego eventu.
+- Allowed paths: `packages/database/src/repositories/jira-webhook-ingress.ts`,
+  `packages/connector-jira/src/webhook/payload.ts`,
+  `packages/connector-jira/test/webhook-payload.integration.test.ts`.
+- Context pack: WU-02 raw ledger i accepted WU-08A verified read.
+- Acceptance: `receivedAt` pochodzi wyłącznie z durable
+  `raw_events.received_at`; `traceId` jest server-derived z raw event ID i nie
+  zależy od payloadu/callera. Dwa odczyty po restart simulation zwracają exact
+  ten sam context. Foreign/missing/tampered read pozostaje typed/redacted i nie
+  zwraca częściowego contextu.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/webhook-payload.integration.test.ts`.
+- Out of scope: JSON parse, REST, normalized event i correlation.
+- Sol gate: exact DB timestamp, stable trace oraz brak caller-controlled override.
+
+## `RA-016-WU-08D` — Write-free durable correlation replay
+
+- Result: runtime może rozpoznać już zakończony event przed ponownym REST i
+  zwrócić zweryfikowany receipt bez nowego sequence/outboxu.
+- Allowed paths: `packages/connector-jira/src/correlation.ts`,
+  `packages/connector-jira/test/correlation.integration.test.ts`.
+- Context pack: WU-05C receipt integrity i accepted WU-08B transaction core.
+- Acceptance: replay lookup wymaga exact event/owner/connection/issue scope,
+  sprawdza receipt, case binding i strict root/thread outbox payload, a potem
+  zwraca `JiraCorrelationResult` z `replay=true`. Brak receiptu zwraca `null`;
+  foreign/tampered state failuje zamknięcie. Operacja nie rezerwuje sequence,
+  nie wywołuje ID factories i nie wykonuje żadnego zapisu.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/correlation.integration.test.ts`.
+- Out of scope: porównanie z nowym REST snapshotem i runtime composition.
+- Sol gate: DB before/after equality i replay po zmianie fake REST inputu.
+
+## `RA-016-WU-08E` — Atomic Jira processing runtime
+
+- Result: server-owned runtime składa verified payload, normalize, REST snapshot
+  i jedną transakcję normalized event + snapshot + correlation.
+- Allowed paths: `packages/connector-jira/src/runtime.ts`,
+  `packages/connector-jira/test/runtime.integration.test.ts`,
+  `packages/connector-jira/src/index.ts`.
+- Context pack: WU-03/04, WU-07 snapshot authority i WU-08A–D.
+- Acceptance: exact replay jest rozpoznany przed ponownym REST i nie zapisuje
+  niczego; nowy non-delete event pobiera exact issue/project i atomowo zapisuje
+  event, przyjęty snapshot, projection oraz receipt. Stale snapshot bez receiptu
+  nie projektuje; `issue_deleted` nie wykonuje GET i używa bounded normalized
+  inputu. Fault w dowolnym logicznym zapisie rollbackuje cały DB result, a dwa
+  owner/connection scopes pozostają rozłączne.
+- Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/runtime.integration.test.ts`.
+- Out of scope: live Jira, Discord transport i scheduler.
+- Sol gate: sześć event types, exact/concurrent replay, REST identity mismatch,
+  stale ordering, delete 404 avoidance i fault matrix.
+
+## `RA-016-WU-08F` — End-to-end Jira proof
 
 - Result: fake Jira przechodzi verified ingress → normalized event → enrichment
   → case/entity → Discord, wraz z duplicate, sparse i lost-event paths.
 - Allowed paths: `test/jira-e2e.integration.test.ts`, `test/fake-jira.ts`,
-  `src/runtime.ts`, `src/index.ts` oraz jawnie enumerowane sanitized fixtures.
-- Context pack: wszystkie zaakceptowane public APIs RA-016 i RA-003/004/006.
+  `test/fixtures/e2e-events.ts`, `test/fixtures/e2e-issues.ts`.
+- Context pack: wszystkie zaakceptowane public APIs RA-016 i RA-003/004/006,
+  w tym atomic runtime z WU-08E.
 - Acceptance: każde kryterium RA-016 ma test; dwa connection scopes pozostają
   rozłączne; restart nie duplikuje normalized event ani projection.
 - Verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/connector-jira/test/jira-e2e.integration.test.ts`.
