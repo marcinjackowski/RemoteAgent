@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-011`
-- Plan revision: `4`
+- Plan revision: `5`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -30,8 +30,8 @@
 |---|---|---|---|
 | `RA-011-WU-01` | `ACCEPTED` | wersjonowane kontrakty i sealed read-only port | RA-010 DONE |
 | `RA-011-WU-02` | `ACCEPTED` | minimalny package scaffold | WU-01 |
-| `RA-011-WU-03` | `RUNNING` | deterministic instruction discovery i precedence | WU-02 |
-| `RA-011-WU-04` | `BLOCKED` | ograniczone read-only narzędzia discovery | WU-03 |
+| `RA-011-WU-03` | `ACCEPTED` | deterministic instruction discovery i precedence | WU-02 |
+| `RA-011-WU-04` | `RUNNING` | ograniczone read-only narzędzia discovery | WU-03 |
 | `RA-011-WU-05` | `BLOCKED` | RepositoryProfile związany z base SHA | WU-03, WU-04 |
 | `RA-011-WU-06` | `BLOCKED` | complete requirement-to-plan mapping | WU-01, WU-05 |
 | `RA-011-WU-07` | `BLOCKED` | material ambiguity do DecisionRequest | WU-06, RA-008 |
@@ -93,7 +93,9 @@
   inspection nad zweryfikowanym workspace.
 - Allowed paths: `src/read-tools.ts`, `src/discovery-policy.ts`,
   `src/config-discovery.ts`, `test/read-tools.test.ts`,
-  `test/config-discovery.test.ts`, `test/fixtures/discovery/**`, `src/index.ts`.
+  `test/config-discovery.test.ts`, `src/index.ts`, `package.json`,
+  `pnpm-lock.yaml`. Testy tworzą jawne tymczasowe fixture programowo zamiast
+  szerokiego globu plików.
 - Context pack: WU-01/03, accepted RA-010 confinement i snapshot boundary,
   typowe manifests/README/CONTRIBUTING/CI configs.
 - Acceptance: limity bytes/files/depth/results są server-owned; binary, secret
