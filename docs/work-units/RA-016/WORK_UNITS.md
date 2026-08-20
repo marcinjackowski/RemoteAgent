@@ -3,7 +3,7 @@
 ## Metadata
 
 - Task: `RA-016`
-- Plan revision: `01`
+- Plan revision: `02`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
 - Plan status: `ACTIVE`
@@ -25,7 +25,7 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-016-WU-01` | `READY` | wersjonowane kontrakty i bezsekretowa konfiguracja | — |
+| `RA-016-WU-01` | `RUNNING` | wersjonowane kontrakty i bezsekretowa konfiguracja | — |
 | `RA-016-WU-02` | `BLOCKED` | zweryfikowany durable webhook ingress i dedupe | WU-01 |
 | `RA-016-WU-03` | `BLOCKED` | parser i scoped normalization eventów Jira | WU-01, WU-02 |
 | `RA-016-WU-04` | `BLOCKED` | read-only REST client i stale-safe enrichment | WU-03 |
