@@ -486,6 +486,54 @@ describe("git lifecycle", () => {
       expect(() => assertPermitted(["checkout", "HEAD", "--", "src/app.ts"])).not.toThrow();
     });
 
+    it("refuses the bypasses an audit probe actually found", () => {
+      // Every entry here defeated the original denylist. `-C` and `--git-dir`
+      // redirect the command at another repository; `-c` defines an alias or a
+      // hooksPath, which is arbitrary code execution; and `stash drop`,
+      // `update-ref -d` and `branch -D` are destructive verbs a denylist simply
+      // had not enumerated. The allowlist refuses all of them by default.
+      for (const argv of [
+        ["-C", "/tmp", "push", "origin", "HEAD"],
+        ["--git-dir", "/tmp/x", "push"],
+        ["-c", "alias.p=push", "p"],
+        ["-c", "core.hooksPath=/tmp/evil", "commit", "-m", "x"],
+        ["--exec-path=/tmp", "push"],
+        ["stash", "drop"],
+        ["update-ref", "-d", "refs/heads/main"],
+        ["branch", "-D", "main"],
+        ["branch", "-d", "main"],
+        ["branch", "-M", "main", "other"],
+        ["worktree", "remove", "/tmp"],
+        ["fetch", "origin"],
+        ["cherry-pick", "abc"],
+        ["revert", "abc"],
+      ]) {
+        try {
+          assertPermitted(argv);
+          throw new Error(`expected a refusal for: ${argv.join(" ")}`);
+        } catch (error) {
+          expect((error as { code?: string }).code, argv.join(" ")).toBe(GIT_OPERATION_FORBIDDEN);
+        }
+      }
+    });
+
+    it("refuses staging anything when NO paths were declared", async () => {
+      // Found by an audit probe. The check read `declared.size > 0 && ...`, so a
+      // lifecycle built without `declaredPaths` staged whatever it was handed —
+      // the probe staged `secret.env`. An absent declaration means nothing was
+      // declared, not that everything is permitted.
+      const git = new GitLifecycle({
+        worktreePath: worktree,
+        mirrorPath: mirror,
+        scope,
+        repositoryId: "repo-1",
+      });
+      await writeFile(join(worktree, "src", "app.ts"), "export const a = 4;\n");
+
+      await expectCodeAsync(async () => git.stage(["src/app.ts"]), GIT_PATH_OUT_OF_SCOPE);
+      expect(await raw(["diff", "--cached", "--name-only"], worktree)).toBe("");
+    });
+
     it("permits the operations the lifecycle actually needs", () => {
       for (const argv of [
         ["status", "--porcelain=v1", "-z"],

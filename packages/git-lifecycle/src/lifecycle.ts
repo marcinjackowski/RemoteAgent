@@ -8,13 +8,15 @@
  *
  * ## What is refused, and where
  *
- * The ban list is enforced at the only place it can be enforced honestly — the
- * argument vector. {@link assertPermitted} inspects the actual argv of every call
- * and refuses `push`, `reset --hard`, `clean`, a broad `checkout`, `--force` and
- * friends. Putting the check on the public methods instead would leave the private
- * helpers as a bypass, and a future method could forget it; putting it in `git`
- * means a forbidden operation cannot be spawned at all. Criterion 6's negative
- * tests target this function.
+ * Enforcement happens at the only place it can be honest — the argument vector.
+ * {@link assertPermitted} inspects the actual argv of every call, so a forbidden
+ * operation cannot be spawned even by a future method that forgets to check.
+ * Putting the check on the public methods would leave every private helper as a
+ * bypass. Criterion 6's negative tests target this function directly.
+ *
+ * It is an ALLOWLIST, and that reversal was forced by evidence: an audit probe
+ * defeated the original denylist six ways, including `git -C /elsewhere push` and
+ * `git -c core.hooksPath=... commit`. See {@link PERMITTED_SUBCOMMANDS}.
  *
  * ## Criterion 1: resume never creates a second branch
  *
@@ -99,68 +101,104 @@ export const GIT_NOTHING_STAGED = "NOTHING_STAGED";
 export const GIT_COMMAND_FAILED = "GIT_COMMAND_FAILED";
 
 /**
- * Git subcommands and flags the agent may never invoke.
+ * The ONLY subcommands this module may run.
  *
- * Each entry is a real data-loss or scope-escape vector rather than a style
- * preference: `push` is a remote write (RA-017 owns those), `reset --hard` and
- * `clean` destroy uncommitted work, a broad `checkout`/`restore` silently reverts
- * files, `--force` rewrites history, and `submodule`/`filter-branch` reach outside
- * the reviewed surface.
+ * An allowlist, not a denylist — and that reversal is the whole point. An
+ * adversarial audit probe defeated the original denylist six different ways:
+ * `git -C /elsewhere push` (a global option carrying a value, so the subcommand
+ * scanner picked up the wrong token), `git -c alias.p=push p` (an alias defined on
+ * the command line), `git -c core.hooksPath=... commit` (arbitrary code via a hook
+ * path), and `stash drop`, `update-ref -d` and `branch -D`, none of which were on
+ * the list at all. A denylist has to anticipate every destructive verb Git will
+ * ever have; an allowlist only has to name the nine this module actually uses.
  */
-const FORBIDDEN_SUBCOMMANDS: readonly string[] = Object.freeze([
-  "push",
-  "clean",
-  "filter-branch",
-  "filter-repo",
-  "submodule",
-  "remote",
-  "gc",
-  "prune",
-  "reflog",
-]);
-
-const FORBIDDEN_FLAGS: readonly string[] = Object.freeze([
-  "--force",
-  "-f",
-  "--force-with-lease",
-  "--hard",
-  "--force-if-includes",
+const PERMITTED_SUBCOMMANDS: readonly string[] = Object.freeze([
+  "status",
+  "diff",
+  "add",
+  "commit",
+  "rebase",
+  "checkout",
+  "rev-parse",
+  "merge-base",
+  "branch",
 ]);
 
 /**
- * Refuse a forbidden argument vector.
+ * Global options accepted before the subcommand.
  *
- * Enforced on argv rather than on the public API so that no helper — present or
- * future — can bypass it. `-f` is refused outright even though a few subcommands
- * use it harmlessly: an allowlist of safe `-f` uses would be a standing invitation
- * to widen, and nothing this module needs requires it.
+ * Deliberately tiny and deliberately excluding every option that can redirect the
+ * repository (`-C`, `--git-dir`, `--work-tree`) or inject configuration (`-c`,
+ * `--config-env`, `--exec-path`). `--git-dir` used to be allowed here and was how
+ * the branch-existence check addressed the mirror; that call now passes the mirror
+ * as `cwd` instead, so no caller needs a repository-redirecting flag.
+ */
+const PERMITTED_GLOBAL_OPTIONS: readonly string[] = Object.freeze(["--literal-pathspecs"]);
+
+/** Flags that are refused wherever they appear. */
+const FORBIDDEN_FLAGS: readonly string[] = Object.freeze([
+  "--force",
+  "-f",
+  "-D",
+  "--force-with-lease",
+  "--hard",
+  "--keep",
+  "--merge",
+  "--force-if-includes",
+  "--exec-path",
+]);
+
+/**
+ * Refuse anything that is not explicitly permitted.
+ *
+ * Enforced on argv inside the single `execFile` choke point rather than on the
+ * public API, so no helper — present or future — can bypass it.
+ *
+ * Fail-closed in three layers: the subcommand must be on the allowlist, every
+ * token before it must be a permitted global option, and no forbidden flag may
+ * appear anywhere. `-f` and `-D` are refused outright rather than per-subcommand:
+ * an allowlist of "safe" uses would be a standing invitation to widen, and nothing
+ * here needs either.
  */
 export function assertPermitted(args: readonly string[]): void {
-  const positional = args.filter((arg) => !arg.startsWith("-"));
-  // The first non-flag token after any `--git-dir <path>` pair is the subcommand.
-  const subcommandIndex = args.indexOf("--git-dir") === -1 ? 0 : 2;
-  const subcommand = positional[subcommandIndex === 0 ? 0 : 1] ?? positional[0] ?? "";
+  if (args.length === 0) {
+    throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, "empty git invocation");
+  }
 
-  if (FORBIDDEN_SUBCOMMANDS.includes(subcommand)) {
-    throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, `forbidden subcommand: ${subcommand}`);
+  // Walk the leading global options explicitly instead of filtering flags out.
+  // Filtering was the original bug: it discarded `-C` but kept its VALUE, so the
+  // value was mistaken for the subcommand and the real subcommand went unchecked.
+  let index = 0;
+  while (index < args.length && (args[index] ?? "").startsWith("-")) {
+    const option = args[index] ?? "";
+    if (!PERMITTED_GLOBAL_OPTIONS.includes(option)) {
+      throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, `forbidden global option: ${option}`);
+    }
+    index += 1;
+  }
+
+  const subcommand = args[index] ?? "";
+  if (!PERMITTED_SUBCOMMANDS.includes(subcommand)) {
+    throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, `subcommand not permitted: ${subcommand}`);
   }
   for (const flag of args) {
     if (FORBIDDEN_FLAGS.includes(flag)) {
       throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, `forbidden flag: ${flag}`);
     }
   }
-  // `reset --hard` is caught by the flag list; `reset` with a commit-ish that moves
-  // HEAD destructively is caught here. A mixed/soft reset of the index is allowed
-  // because it cannot lose worktree content.
-  if (subcommand === "reset" && args.some((arg) => arg === "--merge" || arg === "--keep")) {
-    throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, "forbidden reset mode");
+
+  // `branch` is permitted only to LIST or create, never to delete or move. `-D` is
+  // already refused above; `-d`, `-m` and `-M` are refused here.
+  if (
+    subcommand === "branch" &&
+    args.some((arg) => arg === "-d" || arg === "--delete" || arg === "-m" || arg === "-M")
+  ) {
+    throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, "branch deletion or rename is forbidden");
   }
-  // A `checkout`/`restore` that names no explicit pathspec rewrites the whole tree.
-  if ((subcommand === "checkout" || subcommand === "restore") && !args.includes("--")) {
-    throw new GitLifecycleError(
-      GIT_OPERATION_FORBIDDEN,
-      "checkout/restore requires an explicit pathspec",
-    );
+  // A `checkout` that names no explicit pathspec rewrites the whole tree. `-b`
+  // creates a branch and is the one exception, since it touches no existing file.
+  if (subcommand === "checkout" && !args.includes("--") && !args.includes("-b")) {
+    throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, "checkout requires an explicit pathspec");
   }
 }
 
@@ -299,10 +337,11 @@ export class GitLifecycle {
   /** Whether the branch already exists in the mirror. */
   async #branchExists(branchName: string): Promise<boolean> {
     try {
-      await git(
-        ["--git-dir", this.#mirror, "rev-parse", "--verify", `refs/heads/${branchName}`],
-        undefined,
-      );
+      // The mirror is addressed as `cwd`, NOT with `--git-dir`. That flag can
+      // redirect any command at another repository, so it is no longer a permitted
+      // global option; passing the path as the working directory achieves the same
+      // lookup without giving the guard an exception to carve out.
+      await git(["rev-parse", "--verify", `refs/heads/${branchName}`], this.#mirror);
       return true;
     } catch {
       return false;
@@ -440,7 +479,12 @@ export class GitLifecycle {
       ) {
         throw new GitLifecycleError(GIT_PATH_OUT_OF_SCOPE, "path is not workspace-relative");
       }
-      if (declared.size > 0 && !declared.has(path)) {
+      // Fail CLOSED on an empty surface. This read `declared.size > 0 && ...`,
+      // which meant a lifecycle constructed without `declaredPaths` would stage
+      // anything asked of it — found by an audit probe that staged `secret.env`.
+      // An absent declaration is not permission to touch everything; it means
+      // nothing was declared, so nothing may be staged.
+      if (!declared.has(path)) {
         throw new GitLifecycleError(GIT_PATH_OUT_OF_SCOPE, "path is outside the declared surface");
       }
       staged.push(path);
