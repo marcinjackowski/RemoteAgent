@@ -10,12 +10,13 @@ import type {
 const priority: Record<ContextFragmentKind, number> = {
   task: 0,
   checkpoint: 1,
-  plan: 2,
-  receipt: 3,
-  repo_state: 4,
-  entity: 5,
-  thread_excerpt: 6,
-  tool: 7,
+  decision: 2,
+  plan: 3,
+  receipt: 4,
+  repo_state: 5,
+  entity: 6,
+  thread_excerpt: 7,
+  tool: 8,
 };
 
 export class ContextBuilderError extends Error {

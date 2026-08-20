@@ -1,7 +1,15 @@
 import type { Provider, TrustLevel } from "@remoteagent/contracts";
 
 export type ContextFragmentKind =
-  "task" | "thread_excerpt" | "checkpoint" | "entity" | "receipt" | "plan" | "repo_state" | "tool";
+  | "task"
+  | "thread_excerpt"
+  | "checkpoint"
+  | "entity"
+  | "receipt"
+  | "plan"
+  | "decision"
+  | "repo_state"
+  | "tool";
 
 export type ContextOrigin = "system" | "provider" | "model";
 
@@ -31,6 +39,10 @@ export interface ContextFragment {
   };
   /** Tool fragments are checked against the authoritative tool allowlist. */
   toolName?: string;
+  /** Present on derived compaction manifests. */
+  sourceReferences?: readonly string[];
+  /** UTF-8 byte metrics for the sources represented by a derived manifest. */
+  sourceByteMetrics?: readonly { reference: string; bytes: number }[];
 }
 
 export interface ContextBuildInput {
