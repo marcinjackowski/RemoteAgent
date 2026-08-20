@@ -130,6 +130,19 @@ export class DecisionResumeStateError extends PersistenceError {}
 /** Persisted recovery state is missing, malformed, or crosses an ownership edge. */
 export class CaseRecoveryStateError extends PersistenceError {}
 
+/** A work-unit id was reused with different immutable semantics. */
+export class WorkUnitConflictError extends PersistenceError {
+  public readonly workUnitId: string;
+
+  public constructor(workUnitId: string) {
+    super(`work unit conflict for ${workUnitId}`);
+    this.workUnitId = workUnitId;
+  }
+}
+
+/** A work unit or its bound run is not eligible for the requested transition. */
+export class WorkUnitStateError extends PersistenceError {}
+
 /** A concurrent credential refresh already advanced the expected revision. */
 export class CredentialRefreshConflictError extends PersistenceError {
   public readonly connectionId: string;

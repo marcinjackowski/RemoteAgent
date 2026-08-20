@@ -41,6 +41,8 @@ export {
   DecisionResumeConflictError,
   DecisionResumeStateError,
   CaseRecoveryStateError,
+  WorkUnitConflictError,
+  WorkUnitStateError,
 } from "./errors.js";
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";
