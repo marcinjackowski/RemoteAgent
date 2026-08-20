@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,5 +98,55 @@ describe("local worktree adapter", () => {
       readFile(join(parent, "sandbox", "case-retry", "workspace-retry", "README.md")),
     ).rejects.toThrow();
     await expect(adapter.create({ ...input, baseSha })).resolves.toMatchObject({ baseSha });
+  });
+
+  it("reports ambiguous ledger failure after worktree creation without FAILED replay", async () => {
+    const { parent, source, baseSha } = await fixtureRepo();
+    const metadata = join(parent, ".workspace-runner-metadata-sandbox");
+    await mkdir(metadata);
+    const ledgerPath = join(metadata, "operations.jsonl");
+    await writeFile(ledgerPath, "x".repeat(8 * 1024 * 1024));
+    const adapter = new LocalWorkspaceAdapter({
+      workspaceRoot: join(parent, "sandbox"),
+      repositories: { repo: { sourcePath: source } },
+    });
+    await expect(
+      adapter.create({
+        identity: { caseId: "case-ledger", workspaceId: "workspace-ledger" },
+        fence: { leaseOwner: "test", fencingToken: 1 },
+        repositoryId: "repo",
+        baseSha,
+        branchName: "case-ledger/workspace-ledger",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_LIFECYCLE" });
+    await expect(
+      readFile(join(parent, "sandbox", "case-ledger", "workspace-ledger", "README.md")),
+    ).resolves.toBeTruthy();
+    expect((await readFile(ledgerPath, "utf8")).includes("FAILED")).toBe(false);
+  });
+
+  it("rejects a ledger symlink into the workspace before Git or ledger writes", async () => {
+    const { parent, source, baseSha } = await fixtureRepo();
+    const workspace = join(parent, "sandbox");
+    const ledgerPath = join(parent, "ledger-link");
+    await symlink(workspace, ledgerPath);
+    const adapter = new LocalWorkspaceAdapter({
+      workspaceRoot: workspace,
+      ledgerRoot: ledgerPath,
+      repositories: { repo: { sourcePath: source } },
+    });
+    await expect(
+      adapter.create({
+        identity: { caseId: "case-link", workspaceId: "workspace-link" },
+        fence: { leaseOwner: "test", fencingToken: 1 },
+        repositoryId: "repo",
+        baseSha,
+        branchName: "case-link/workspace-link",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_LIFECYCLE" });
+    await expect(readFile(join(workspace, "operations.jsonl"))).rejects.toThrow();
+    await expect(
+      readFile(join(workspace, "case-link", "workspace-link", "README.md")),
+    ).rejects.toThrow();
   });
 });

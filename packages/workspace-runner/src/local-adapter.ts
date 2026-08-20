@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, realpath } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { WorkspaceIdentityError, WorkspaceLifecycleError, WorkspaceRunnerError } from "./errors.js";
 import {
   addWorktree,
@@ -9,7 +9,13 @@ import {
   worktreeHead,
   type GitRepository,
 } from "./git.js";
-import { createWorkspacePathPolicy, type VerifiedWorkspacePath } from "./path-policy.js";
+import {
+  createWorkspacePathPolicy,
+  validateWorkspaceRoot,
+  type VerifiedWorkspacePath,
+} from "./path-policy.js";
+import { computeTreeDigest } from "./digest.js";
+import { OperationLedger } from "./operation-log.js";
 import type {
   WorkspaceCreateInput,
   WorkspaceCreateResult,
@@ -26,6 +32,7 @@ export type LocalRepositoryConfig = Readonly<{ sourcePath: string; mirrorPath?: 
 export type LocalWorkspaceAdapterConfig = Readonly<{
   workspaceRoot: string;
   repositories: Readonly<Record<string, LocalRepositoryConfig>>;
+  ledgerRoot?: string;
 }>;
 
 type CreatedWorkspace = Readonly<{
@@ -42,9 +49,19 @@ function validPart(value: string): boolean {
 export class LocalWorkspaceAdapter implements WorkspaceRunner {
   private readonly workspaces = new Map<string, CreatedWorkspace>();
   private readonly rootPolicyPromise;
+  private readonly ledger: OperationLedger;
+  private readonly metadataRoot: string;
 
   public constructor(private readonly config: LocalWorkspaceAdapterConfig) {
     this.rootPolicyPromise = createWorkspacePathPolicy(config.workspaceRoot);
+    this.metadataRoot = resolve(
+      config.ledgerRoot ??
+        join(
+          dirname(config.workspaceRoot),
+          `.workspace-runner-metadata-${basename(config.workspaceRoot)}`,
+        ),
+    );
+    this.ledger = new OperationLedger(this.metadataRoot);
   }
 
   public async create(input: WorkspaceCreateInput): Promise<WorkspaceCreateResult> {
@@ -62,6 +79,46 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
       throw new WorkspaceLifecycleError("WORKSPACE_CONFLICT", "Workspace already exists");
     }
     const policy = await this.rootPolicyPromise;
+    const metadataParent = dirname(this.metadataRoot);
+    const canonicalParent = await realpath(metadataParent).catch(() => {
+      throw new WorkspaceLifecycleError("INVALID_LIFECYCLE", "Ledger parent must already exist");
+    });
+    const canonicalMetadataRoot = join(canonicalParent, basename(this.metadataRoot));
+    const existingMetadata = await lstat(this.metadataRoot).catch(() => undefined);
+    if (existingMetadata?.isSymbolicLink()) {
+      throw new WorkspaceLifecycleError("INVALID_LIFECYCLE", "Ledger root must not be a symlink");
+    }
+    if (existingMetadata) {
+      const existingCanonical = await realpath(this.metadataRoot).catch(() => "");
+      if (existingCanonical !== canonicalMetadataRoot) {
+        throw new WorkspaceLifecycleError(
+          "INVALID_LIFECYCLE",
+          "Ledger root canonicalization mismatch",
+        );
+      }
+    }
+    if (canonicalMetadataRoot === policy.root) {
+      throw new WorkspaceLifecycleError(
+        "INVALID_LIFECYCLE",
+        "Ledger root must be canonical and dedicated",
+      );
+    }
+    const metadataRelative = relative(policy.root, canonicalMetadataRoot);
+    const workspaceRelative = relative(canonicalMetadataRoot, policy.root);
+    if (
+      !metadataRelative ||
+      !workspaceRelative ||
+      (!metadataRelative.startsWith(`..${sep}`) && !isAbsolute(metadataRelative)) ||
+      (!workspaceRelative.startsWith(`..${sep}`) && !isAbsolute(workspaceRelative))
+    ) {
+      throw new WorkspaceLifecycleError(
+        "INVALID_LIFECYCLE",
+        "Ledger root must be outside the command workspace",
+      );
+    }
+    await mkdir(canonicalMetadataRoot, { recursive: true });
+    await validateWorkspaceRoot(canonicalMetadataRoot);
+    const operationId = randomUUID();
     const relativeRoot = join(input.identity.caseId, input.identity.workspaceId);
     const target = await policy.validateCreateTarget(relativeRoot);
     await mkdir(join(policy.root, input.identity.caseId), { recursive: true });
@@ -75,6 +132,22 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
       const head = await worktreeHead(target);
       if (head.toLowerCase() !== exactBaseSha.toLowerCase())
         throw new Error("Worktree was not created at base SHA");
+      try {
+        await this.ledger.append({
+          version: 1,
+          operationId,
+          identity: input.identity,
+          kind: "CREATE_WORKTREE",
+          beforeDigest: null,
+          afterDigest: await computeTreeDigest(target),
+          outcome: "SUCCEEDED",
+        });
+      } catch (error) {
+        throw new WorkspaceLifecycleError(
+          "INVALID_LIFECYCLE",
+          `Ledger outcome is ambiguous: ${error instanceof Error ? error.message : "write failure"}`,
+        );
+      }
     } catch (error) {
       throw new WorkspaceLifecycleError(
         "INVALID_LIFECYCLE",
@@ -87,7 +160,7 @@ export class LocalWorkspaceAdapter implements WorkspaceRunner {
       branchName: input.branchName,
     });
     return {
-      operationId: randomUUID(),
+      operationId,
       identity: input.identity,
       lifecycle: "CREATED",
       baseSha: input.baseSha,
