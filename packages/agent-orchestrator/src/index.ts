@@ -26,3 +26,4 @@ export * from "./supervisor/machine.js";
 export * from "./scheduler/mailbox.js";
 export * from "./scheduler/semaphore.js";
 export * from "./scheduler/fairness.js";
+export * from "./supervisor/writer-lease.js";

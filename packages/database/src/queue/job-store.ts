@@ -107,6 +107,11 @@ export interface JobLease {
   leaseOwner: string;
 }
 
+export type LeaseIdentity = Pick<
+  JobLease,
+  "jobId" | "caseId" | "leaseOwner" | "fencingToken" | "jobType" | "payload"
+>;
+
 export interface ClaimOptions {
   /** Worker identity recorded as the lease owner. */
   owner?: string;
@@ -338,6 +343,31 @@ export class JobStore {
   }
 
   /**
+   * Assert the exact, still-live lease without extending it or opening a
+   * transaction. Callers use this immediately before each workspace mutation.
+   */
+  public async assertCurrentLease(q: Queryable, lease: LeaseIdentity): Promise<void> {
+    const nowMs = this.clock.now();
+    const held = await q.query<{ one: number }>(
+      `SELECT 1 AS one FROM jobs
+       WHERE job_id = $1 AND case_id IS NOT DISTINCT FROM $2
+         AND lease_owner = $3 AND fencing_token = $4
+         AND job_type = $5 AND payload IS NOT DISTINCT FROM $6::jsonb
+         AND status = 'LEASED' AND lease_expires_at > ${this.lt.now(7)}`,
+      [
+        lease.jobId,
+        lease.caseId,
+        lease.leaseOwner,
+        lease.fencingToken,
+        lease.jobType,
+        lease.payload,
+        nowMs,
+      ],
+    );
+    if (held.rowCount !== 1) await this.throwStale(q, lease);
+  }
+
+  /**
    * Mark a held job SUCCEEDED. Conditioned on the current lease; a stale/expired
    * holder fails closed. The status transition AND the append of the attempt
    * row commit atomically in one transaction (audit MEDIUM-07), so attempt
@@ -522,7 +552,7 @@ export class JobStore {
    * Determine why a lease-conditioned write updated zero rows and raise a
    * {@link StaleFencingTokenError} with the job's current token.
    */
-  private async throwStale(q: Queryable, lease: JobLease): Promise<never> {
+  private async throwStale(q: Queryable, lease: LeaseIdentity): Promise<never> {
     const current = await q.query<{ fencing_token: string }>(
       `SELECT fencing_token FROM jobs WHERE job_id = $1`,
       [lease.jobId],
