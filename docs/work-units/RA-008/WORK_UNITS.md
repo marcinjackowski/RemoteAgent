@@ -3,11 +3,11 @@
 ## Metadata
 
 - Task: `RA-008`
-- Plan revision: `27`
+- Plan revision: `28`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
-- Plan status: `ACTIVE`
-- Base commit/tree: `171d3c679dafd95cd0cdb1b52552a8594a5534b8`
+- Plan status: `COMPLETE`; wszystkie units zaakceptowane, trwa finalna bramka taska
+- Base commit/tree: `171d3c66c1a82266e11613b9d0d5dce575172061`
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/agent-orchestrator/test packages/database/test`
 
 ## Global boundaries

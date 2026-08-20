@@ -3,11 +3,11 @@
 ## Metadata
 
 - Task: `RA-010`
-- Plan revision: `01`
+- Plan revision: `02`
 - Plan owner: `Sol / COORDINATOR_AUDITOR`
 - Implementer: `GPT-5.6 Luna / medium / IMPLEMENTER`
-- Plan status: `DRAFT`; task jest `READY`, ale kolejność makro-tasków nadal obowiązuje
-- Base commit/tree: ustala Sol przy aktywacji
+- Plan status: `ACTIVE`
+- Base commit/tree: `d17bd06cce77e693ca300a7d9959b0e5ed070e10`
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/workspace-runner/test`
 
 ## Global boundaries
@@ -20,7 +20,7 @@
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-010-WU-01` | `DRAFT` | model-neutralne kontrakty workspace | — |
+| `RA-010-WU-01` | `READY` | model-neutralne kontrakty workspace | — |
 | `RA-010-WU-02` | `BLOCKED` | bezpieczna walidacja root/path | WU-01 |
 | `RA-010-WU-03` | `BLOCKED` | repository mirror i create worktree | WU-02 |
 | `RA-010-WU-04` | `BLOCKED` | confined command runner i limity | WU-02 |
@@ -35,7 +35,9 @@
 - Result: publiczny `WorkspaceRunner` interface i typed lifecycle results/errors.
 - Allowed paths: `packages/workspace-runner/src/types.ts`, `errors.ts`, `runner.ts`,
   `test/contracts.test.ts`, `src/index.ts`.
-- Context pack: RA-010 task, Case/workspace fields, run-safety and lease contracts.
+- Context pack: `docs/tasks/RA-010.md`,
+  `packages/contracts/src/{case,checkpoint,agent-run,work-unit}.ts` oraz publiczne
+  `JobLease`/fencing semantics w `packages/database/src/queue/job-store.ts`.
 - Acceptance: interface nie zależy od Docker/AgentCore/ECS; każda operacja ma
   case/workspace identity; destructive target nie jest surowym path stringiem.
 - Verification: `pnpm vitest run packages/workspace-runner/test/contracts.test.ts`.
