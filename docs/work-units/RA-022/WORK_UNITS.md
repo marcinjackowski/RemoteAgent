@@ -111,10 +111,125 @@ Sprawdzone w repozytorium, nie założone. Trzy pozycje korygują rewizję `1`.
 |---|---|---|---|
 | `RA-022-WU-01` | **`DONE`** | migracja `029` (`checkpoint_revision`, fail-closed backfill) + kontrakt `approval` | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/approval-schema.integration.test.ts` → `12/12`, exit `0` |
 | `RA-022-WU-02` | **`DONE`** | durable approval repository z atomowym single-use i fencingiem rewizji + migracja `030` (niezmienność grantu) | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/approval.integration.test.ts` → `32/32`, exit `0` |
-| `RA-022-WU-03` | `READY` | czysty deterministyczny evaluator R0–R4 + kill-switch snapshot | `pnpm vitest run packages/policy/test/policy-engine.test.ts` |
-| `RA-022-WU-04` | `READY` | approval ingestion nad istniejącym `custom_id` Discorda | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/ingestion.integration.test.ts` |
-| `RA-022-WU-05` | `READY` | action executor: podwójna policy, receipt, `AMBIGUOUS`, reconciliation | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/executor.integration.test.ts` |
-| `RA-022-WU-06` | `READY` | fake-provider proof: tamper, replay, race, R4 | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test` |
+| `RA-022-WU-03` | **`DONE`** | czysty deterministyczny evaluator R0–R4 + kill-switch snapshot | `pnpm vitest run packages/policy/test/policy-engine.test.ts` → `32/32`, exit `0` |
+| `RA-022-WU-04` | **`DONE`** | approval ingestion nad istniejącym `custom_id` Discorda + `ExternalActionRepository` | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/ingestion.integration.test.ts` → `25/25`, exit `0` |
+| `RA-022-WU-05` | **`DONE`** | action executor: podwójna policy, receipt, `AMBIGUOUS`, reconciliation + migracja `031` | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/executor.integration.test.ts` → `29/29`, exit `0` |
+| `RA-022-WU-06` | **`DONE`** | fake-provider proof: tamper, replay, race, R4 | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test` → `183/183`, exit `0` |
+
+## Stan wykonania — `WU-03`…`WU-06` zamknięte (`2026-08-21`)
+
+Ustalenia z uruchomionych komend. Sekcje `WU-01` i `WU-02` niżej bez zmian.
+
+### Co powstało
+
+- `packages/policy/src/policy-engine.ts` — `ACTION_REGISTRY` (server-owned tier per
+  tool, `Object.freeze`), `evaluatePolicy`, `policyEvaluationsAgree`,
+  `assertR4NeverAutoAllowed`, `toPolicyKillSwitches`. **Czysta funkcja** — żadnej
+  transakcji, żadnego zegara, żadnego side effectu.
+- `packages/policy/src/ingestion-ports.ts` — strukturalne porty (patrz „kolizja
+  eksportów" niżej).
+- `packages/policy/src/approval-ingestion.ts` — `ingestApprovalClick` + bounded TTL.
+- `packages/policy/src/action-executor.ts` — `executeAction`,
+  `reconcileAmbiguousAction`.
+- `packages/database/src/repositories/external-action.ts` —
+  `ExternalActionRepository` + `ReceiptRepository`.
+- `packages/database/migrations/031_receipt_entity_version.{up,down}.sql` —
+  `entity_version` + `entity_version_field` w `receipts` (AC7).
+- Trzy suity: `policy-engine.test.ts` (32), `ingestion.integration.test.ts` (25),
+  `executor.integration.test.ts` (29).
+
+### Decyzje projektowe, których nie wolno cofnąć bez powodu
+
+1. **Tier NIGDY nie pochodzi od modelu ani z annotacji.** `ACTION_REGISTRY` jest
+   zamkniętą allowlistą (nie pattern-matchem: `jira.issue.*` wchłonęłoby przyszłe
+   `jira.issue.delete`). Nieznane narzędzie → `UNKNOWN_ACTION` + raportowane jako R4.
+   Annotacja obniżająca tier to **REFUSAL**, nie „zignoruj" — rozbieżność znaczy, że
+   coś jest nie tak wyżej, a cicha kontynuacja to ukryje (AC5).
+2. **Kill switch sprawdzany PRZED guardem RA-005 i przed tierem.** Powód niżej
+   (PROBE 1 WU-03): guard dopasowuje CONNECTION switch po providerze **i**
+   connection id, więc akcja z innym providerem przechodziła obok stopu wystawionego
+   dla jej własnego connectiona. Engine traktuje **każdy** enabled switch w
+   snapshotcie jako stop; zawężanie zakresu to zadanie `listEffective`, nie tej
+   funkcji.
+3. **`killSwitchEventIds` są SORTOWANE.** Inaczej samo przetasowanie listy dawało
+   FAŁSZYWY mismatch AC3 i blokowało legalną egzekucję.
+4. **Executor otwiera DWIE transakcje, side effect strictly pomiędzy.** Jedna
+   transakcja przez cały call providera przypięłaby połączenie na czas jego latencji —
+   wolny provider = awaria bazy. Test „does not hold a transaction open" tego pilnuje.
+5. **`ports.now(tx)` czyta zegar BAZY.** `PolicyInput.now` jest jedynym zaufanym
+   wejściem czystego evaluatora, a sonda WU-03 (PROBE 2) potwierdziła: backdated `now`
+   zmienia wygasły credential w dozwoloną akcję. Domknięte w executorze, nie w
+   evaluatorze — tam się nie da.
+6. **Adapter, który RZUCIŁ, daje `AMBIGUOUS`, nie `FAILED`.** `FAILED` licencjonuje
+   retry, a rzucony błąd nie mówi nic o tym, czy żądanie opuściło proces.
+
+### Kolizja eksportów type-only — wprowadzona i naprawiona w tej bramce
+
+Sonda type-level (`ts.Program` + `checker.getExportsOfModule()`) wykryła, że
+`ingestion-ports.ts` wprowadził **cztery** nowe kolizje nazw z `packages/database`:
+`ApprovalRow`, `ApprovalGrantOutcome`, `ApprovalConsumption`, `ExternalActionRow`
+(plus `Transaction`). To dokładnie `CTF-002` w najcichszej formie: typy nie mają
+wartości, więc `typecheck`, `build` **i** runtime `Object.keys` są zielone.
+
+Naprawione prefiksem `Policy*` (`PolicyApprovalRow`, `PolicyTransaction`, …), zgodnie
+z zapisaną w rejestrze rekomendacją „jednoznaczne nazwy". **Sonda wartościowa by tego
+nie znalazła** — to argument za `CTF-002-U1` jako guardrailem, nie ręczną sondą.
+
+### Mutation check — 42 mutacje w tych czterech unitach, 6 PRZEŻYŁO
+
+| Unit | Mutacje | Przeżyły → co wymusiły |
+|---|---:|---|
+| `WU-03` | 12 | `agreement` porównuje tylko `decision` → test wariujący **wyłącznie** `riskTier` (poprzedni zmieniał też `toolName`, więc nie izolował pola) |
+| `WU-04` | 13 | `attachApproval` bez fence'a; `reject` bez fence'a → testy uderzające w fence **bezpośrednio**, bo `ingestApprovalClick` sprawdza status wcześniej i nigdy tam nie dociera |
+| `WU-05` | 16 | fence statusu na `EXECUTING` → test na akcji **AUTO_ALLOW**, gdzie nie ma approvalu, więc fence statusu jest jedyną ochroną |
+| `WU-05` | — | kolejność receipt/status w jednej transakcji → **mutacja przeżyła słusznie**: w obrębie transakcji kolejność jest nieobserwowalna, więc skorygowałem KOMENTARZ, który twierdził inaczej (`CTF-010` w moim własnym opisie) |
+
+Wzorzec powtarzalny i wart zapamiętania: **mutacja przeżywa najczęściej tam, gdzie
+warstwa wyżej sprawdza to samo wcześniej.** Wtedy trzeba testu, który wchodzi w fence
+bezpośrednio — inaczej dowodem jest cudzy `if`.
+
+### Sondy adwersarialne — 6 findingów przy zielonych testach
+
+`WU-03` (8 sond, 3 findingi):
+
+| Sonda | Finding | Naprawa |
+|---|---|---|
+| PROBE 1 | CONNECTION switch pominięty przy niezgodnym providerze | każdy enabled switch = stop |
+| PROBE 3 | przetasowanie switchy = fałszywy mismatch AC3 | sortowanie event ids |
+| PROBE 2 | backdated `now` reanimuje wygasły credential | udokumentowane, domknięte w `WU-05` (`ports.now`) |
+
+`WU-04` (8 sond, 1 finding): **PROBE 1 — TTL `1e15` ms dał grant ważny 31 709 LAT.**
+Migracja 008 wymaga tylko `expires_at > granted_at`, co absurdalna data spełnia.
+Naprawa: `MIN_GRANT_TTL_MS`/`MAX_GRANT_TTL_MS` + `Number.isFinite` **przed** zakresem
+(`NaN` przechodzi każde `<`/`>`, więc goły zakres by go PRZYJĄŁ).
+
+`WU-05` (7 sond, 2 findingi):
+
+| Sonda | Finding | Naprawa |
+|---|---|---|
+| PROBE 2/3 | nieudany zapis receiptu zostawiał akcję w `EXECUTING` — a `reconcileAmbiguousAction` przyjmuje tylko `AMBIGUOUS`, więc **nic nigdy tego nie rozwiąże**; operator widząc „executing" ponowi write, który już się udał | `AMBIGUOUS` + nowa transakcja (stara jest aborted) |
+| PROBE 4 | reconciliation przyjmowała receipt dla **dowolnego** obiektu (`TOTALLY-UNRELATED-999`) | `matchedIdempotencyKey` obowiązkowy i porównywany |
+
+Sondy, które NIE dały findingu (sprawdzone, fail-closed): mutacja payloadu przez
+adapter (payload w bazie nietknięty), cross-case reuse `approval_id`
+(`ApprovalIdentityError`), cross-action bind approvalu (FK z migracji 011), re-propose
+identycznego payloadu po `AMBIGUOUS` (`CONFLICT` na `action_digest` — odpowiedź na
+pytanie 7 z „Ustaleń": unique index **blokuje** naiwny retry, i to jest właściwe).
+
+### Uruchomione bramki po `WU-06`
+
+```text
+packages/policy/test (cały pakiet)      183/183, 6 plików, exit 0
+całe repo                               1737/1737, 138 plików, 4 przebiegi, 0 Errors
+turbo run typecheck --force             36 successful, 0 cached
+pnpm run build --force                  26 successful, 0 cached
+migracje 030 i 031: up → down(29) → up → down(0) → up   odwracalne
+eslint (policy, database/repositories)  czysto
+prettier                                czysto
+sonda przecięcia eksportów (wartości)   tylko preexistujące CTF-001/CTF-002
+sonda type-level                        4 nowe kolizje ZNALEZIONE i naprawione
+git diff --check                        exit 0
+```
 
 ## Stan wykonania — `WU-02` zamknięty (`2026-08-21`)
 

@@ -27,8 +27,8 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | ID | Severity | Status | Domknięcie zaplanowane w |
 |---|---|---|---|
 | `CTF-001` | MEDIUM | OTWARTY | `RA-023-WU-00` |
-| `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte (RA-017 usunął swój) | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty |
-| `CTF-005` | MEDIUM | OTWARTY — kształt rozstrzygnięty (`checkpoint_revision`, backfill fail-closed) | RA-022 |
+| `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte; RA-022 dodał dowód, że sonda wartościowa NIE wystarcza | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty i **pilniejszy** |
+| `CTF-005` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-022 | migracje `029`+`030`, fencing w `WU-02` |
 | `CTF-006` | **HIGH** | OTWARTY — właściciel potwierdził domknięcie w RA-024 | RA-024 (hardening); obejście lokalne w RA-012-WU-05 |
 | `CTF-003` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15` |
 | `CTF-004` | LOW | OTWARTY | unit repozytorialny; 6 z 11 pakietów bez pokrycia |
@@ -363,6 +363,38 @@ Konsekwencje, które muszą obowiązywać do RA-024:
 4. RA-024 AC2 („canary secrets/PII nie pojawiają się w logs, traces ani model
    context") nie może zostać zaliczone na obecnym mechanizmie.
 
+### Dowód z RA-022 (`2026-08-21`) — sonda wartościowa przepuściła cztery kolizje
+
+Najmocniejszy dotychczasowy argument za guardrailem `CTF-002-U1`, bo tym razem
+kolizje **powstały w trakcie taska** i przeszły przez wszystkie zwykłe bramki.
+
+`packages/policy/src/ingestion-ports.ts` restated cztery typy, które
+`packages/database` też eksportuje: `ApprovalRow`, `ApprovalGrantOutcome`,
+`ApprovalConsumption`, `ExternalActionRow` (plus `Transaction`). Wynik sond w final
+task gate:
+
+```text
+sonda WARTOŚCIOWA (Object.keys na dist/):   tylko preexistujące CTF-001/CTF-002
+turbo run typecheck --force:                36 successful, 0 errors
+pnpm run build --force:                     26 successful
+sonda TYPE-LEVEL (ts.Program):              ApprovalRow, ApprovalGrantOutcome,
+                                            ApprovalConsumption, ExternalActionRow,
+                                            Transaction  <- database, policy
+```
+
+Czyli: trzy bramki zielone, jedna sonda czerwona. Typ nie ma wartości, więc
+`Object.keys` go nie widzi, a ESM usuwa niejednoznaczną nazwę z połączonego barrela
+**bez błędu kompilacji**. Naprawione prefiksem `Policy*`
+(`PolicyApprovalRow`, `PolicyTransaction`, …), zgodnie z rekomendacją tego wpisu.
+
+Przy okazji ujawniona **nowa preexistująca** kolizja, wcześniej nieodnotowana:
+`RefreshIntentStatus` (`database` ↔ `policy`). Należy do `CTF-001`, bo dotyczy tej
+samej granicy credentiali — domknięcie w `RA-023-WU-00`.
+
+Wniosek operacyjny: dopóki `CTF-002-U1` nie istnieje, **final task gate musi
+uruchamiać sondę type-level, nie tylko wartościową.** Sonda wartościowa daje
+fałszywe poczucie bezpieczeństwa dla typów, a to najczęstszy kształt tej kolizji.
+
 ---
 
 ## `CTF-005` — `approvals` nie wiąże zgody z rewizją checkpointu
@@ -421,19 +453,21 @@ właściciela, bo zmienia schemat zaakceptowany w RA-003/RA-008.
 **Rozstrzygnięte `2026-08-20`** — patrz „Decyzja właściciela" wyżej: wybrano
 rozszerzenie `approvals` z fail-closed backfillem.
 
-### Stan wykonania (`2026-08-21`)
+### Domknięcie (`2026-08-21`) — potwierdzone `AUDIT-01` RA-022 `PASS`
 
-Mechanizm jest zaimplementowany w RA-022: migracja `029` (`checkpoint_revision`,
-`owner_id`, fail-closed backfill) w `WU-01` oraz fencing consumption na rewizji w
-`WU-02`. Wpis pozostaje **OTWARTY** do audytu RA-022 — zgodnie z zasadą, że wpis
-zamyka dopiero audyt taska, nie zakończony unit.
+Zaimplementowane: migracja `029` (`checkpoint_revision`, `owner_id`, fail-closed
+backfill) w `WU-01`, fencing consumption na rewizji w `WU-02`, oraz migracja `030`,
+która zamraża `checkpoint_revision` granta — bez niej jeden `UPDATE` przestawiał
+rewizję i obchodził cały mechanizm.
 
 Przy implementacji ujawniło się, że sam `checkpoint_revision` nie wystarcza:
 `cases.checkpoint_revision` jest licznikiem MUTOWALNYM, więc cofnięcie go
 (recovery, restore, naprawa operatorska) wskrzeszało grant już odrzucony jako
 `STALE_REVISION`. Domknięte w `WU-02` przez porównanie z append-only
 `case_checkpoints` (najwyższa kiedykolwiek zapisana rewizja), nie z licznikiem.
-Ten wariant nie był częścią pierwotnego opisu findingu.
+Ten wariant nie był częścią pierwotnego opisu findingu i jest najważniejszą
+nauką tego wpisu: **wiązanie z mutowalnym licznikiem nie jest wiązaniem.**
+Monotoniczny fakt musi pochodzić z append-only źródła.
 
 ---
 
