@@ -58,6 +58,7 @@ import {
   OwnerRepository,
   WorkspaceRepository,
 } from "@remoteagent/database";
+import type { Transaction } from "@remoteagent/database";
 import {
   GitLabMergeRequestPublisher,
   GitLabProjectAllowlist,
@@ -103,6 +104,42 @@ import {
 
 const available = await ensurePostgres();
 const execFileAsync = promisify(execFile);
+
+/**
+ * The harness `Database`, and the one place `src` and `dist` types are bridged.
+ *
+ * TWO separate problems meet on this line, and both were previously papered over
+ * by a type expression that crashed the compiler instead of reporting them.
+ *
+ * 1. `CTF-013` — `Parameters<typeof db.withTransaction<T>>[0]` put an
+ *    *instantiation expression* inside `Parameters<>`, and that made the root
+ *    `tsc` program die with `RangeError: Maximum call stack size exceeded`. So
+ *    `pnpm run typecheck` could not pass on `main` at all. Measured: rewriting
+ *    only this type removed the crash and changed nothing else.
+ *
+ * 2. `CTF-004` — with the crash gone, the errors it had been hiding appeared. The
+ *    harness lives in `packages/database/test` and imports `../src/client.js`, so
+ *    it returns the **src** `Database`. Every package this suite exercises
+ *    declares `runTransaction` against the **dist** `Transaction`, because that is
+ *    what `@remoteagent/database` resolves to. `Transaction` is branded with a
+ *    `unique symbol`, and the two declarations produce two different symbols, so
+ *    the types are mutually unassignable — a probe confirmed `TS2741` in both
+ *    directions.
+ *
+ * The bridge below is a cast, and it is the honest shape rather than a shortcut:
+ * `transactionBrand` exists ONLY in `client.d.ts`. `dist/client.js` adds no such
+ * field (checked, not assumed — `withTransaction` hands out the pooled client
+ * itself), so at runtime the two `Transaction` types are the same object and the
+ * cast asserts nothing false. What it cannot do is prove the two *packages* were
+ * built from the same source — that is what `assertPackagesAreCurrent` below is
+ * for, and it runs before any of these tests.
+ *
+ * The proper fix is one `Database`/`Transaction` identity for tests, which is the
+ * open half of `CTF-004` and belongs to a unit that can touch every integration
+ * suite. This suite only needs the crash gone and the conversion stated once.
+ */
+type HarnessDatabase = Awaited<ReturnType<typeof createTestDatabase>>["db"];
+type RunInTransaction = <T>(fn: (tx: Transaction) => Promise<T>) => Promise<T>;
 
 /**
  * Refuse to run against a stale build.
@@ -267,15 +304,17 @@ describeIntegration(
   () => {
     // The harness returns the `src` Database; importing the dist type here would
     // be a different structural type (CTF-004, src-vs-dist). Infer it instead.
-    let db: Awaited<ReturnType<typeof createTestDatabase>>["db"];
+    let db: HarnessDatabase;
     let drop: () => Promise<void>;
     let artifactRoot: string;
     const dirs: string[] = [];
 
-    // `Transaction` is inferred from the harness for the same reason `db` is: the
-    // dist-declared type is structurally distinct from the src one (CTF-004).
-    const inTx = <T>(fn: Parameters<typeof db.withTransaction<T>>[0]): Promise<T> =>
-      db.withTransaction(fn);
+    // The src->dist `Transaction` bridge, in exactly one place. See `RunInTransaction`.
+    // `db.withTransaction` is re-typed rather than the arrow function so the cast
+    // sits on the single value that crosses the boundary, and callers of `inTx` get
+    // a fully checked signature.
+    const inTx: RunInTransaction = (fn) =>
+      (db.withTransaction as unknown as RunInTransaction)(fn);
 
     /** A real Git repository with one commit, standing in for a cloned repo. */
     async function makeWorkspace(name: string): Promise<string> {

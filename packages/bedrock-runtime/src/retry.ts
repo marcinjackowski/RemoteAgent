@@ -39,12 +39,18 @@ export async function executeTransportDetailed(
           reject(new RuntimeCancelledError());
           return;
         }
-        let handle: unknown;
+        // The two callbacks reference each other: `onAbort` must cancel the timer,
+        // and the timer must deregister `onAbort`. Held in a box rather than a
+        // reassigned `let` so both bindings are `const` without reordering them —
+        // an injected synchronous `setTimeout` (several tests use one) fires the
+        // callback before the assignment would land, so `onAbort` has to exist
+        // first and the handle has to be allowed to still be absent.
+        const timer: { handle?: unknown } = {};
         const onAbort = () => {
-          if (handle !== undefined) clearTimeoutFn(handle);
+          if (timer.handle !== undefined) clearTimeoutFn(timer.handle);
           reject(new RuntimeCancelledError());
         };
-        handle = setTimeoutFn(() => {
+        timer.handle = setTimeoutFn(() => {
           signal.removeEventListener("abort", onAbort);
           resolve();
         }, delayMs);

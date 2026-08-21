@@ -8,7 +8,6 @@ import {
   createRuntimeConfig,
   type RuntimeResponse,
   type RuntimeStreamEvent,
-  type RuntimeTransport,
 } from "../src/index.js";
 
 const config = createRuntimeConfig({

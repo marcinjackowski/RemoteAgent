@@ -26,6 +26,28 @@ export default tseslint.config(
   },
   ...tseslint.configs.recommended,
   {
+    /**
+     * A leading underscore marks a binding that is deliberately unused.
+     *
+     * `CTF-008` found the gate and the convention disagreeing: the repo writes
+     * `_config` / `_type` / `_unused` in ~20 places, but the default
+     * `after-used` setting only reports a *trailing* unused argument — so
+     * `(_type, listener)` passed while `(request, _config)` failed. That is the
+     * "declared but not enforced" shape ADR-0007 exists to remove, so the
+     * convention is stated here once instead of being half-checked.
+     *
+     * Deliberately narrow: only `args` and `caughtErrors`. An unused *variable*
+     * or import stays an error whatever it is named — those are dead code, not
+     * an interface shape the author is obliged to keep.
+     */
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
+    },
+  },
+  {
     files: ["apps/**/*.ts", "packages/**/*.ts", "infra/**/*.ts"],
     plugins: { boundaries },
     settings: {
