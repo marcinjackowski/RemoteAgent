@@ -138,9 +138,7 @@ describeIntegration(
 
     it("never DELETES a raw event row, only clears its bytes", async () => {
       await purge();
-      const count = await db.query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM raw_events`,
-      );
+      const count = await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM raw_events`);
       expect(count.rows[0]!.n).toBe("3");
     });
 
@@ -296,13 +294,13 @@ describeIntegration(
 
       // Rewriting the digest would let a purged row be re-associated with a different
       // payload, which destroys the reconciliation value of keeping the envelope.
-      expect(await attempt(`UPDATE raw_events SET payload_digest = 'sha256:${"b".repeat(64)}'`)).toBe(
-        "REFUSED:P0101",
-      );
+      expect(
+        await attempt(`UPDATE raw_events SET payload_digest = 'sha256:${"b".repeat(64)}'`),
+      ).toBe("REFUSED:P0101");
       // Extending the deadline would defeat the cutoff.
-      expect(await attempt(`UPDATE raw_events SET retain_until = now() + interval '99 years'`)).toBe(
-        "REFUSED:P0101",
-      );
+      expect(
+        await attempt(`UPDATE raw_events SET retain_until = now() + interval '99 years'`),
+      ).toBe("REFUSED:P0101");
       // Downgrading sensitivity would change the data class after the fact.
       expect(await attempt(`UPDATE raw_events SET sensitivity = 'public'`)).toBe("REFUSED:P0101");
       // Deletion is refused whatever the flag says.

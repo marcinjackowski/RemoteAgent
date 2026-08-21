@@ -6,7 +6,7 @@
 - Plan revision: `2`
 - Rola: jedna rola wykonawcza (ADR-0007). Rewizja `1` była pisana pod ADR-0005 i
   rozdział koordynator/implementer — **to jest historyczne i nie obowiązuje**.
-- Plan status: `IN_PROGRESS` — wszystkie zależności `DONE` (RA-018, RA-019, RA-020,
+- Plan status: `DONE` — wszystkie zależności `DONE` (RA-018, RA-019, RA-020,
   RA-021, RA-022, RA-023 domknięte `2026-08-21`).
 - Base commit: `03b252a` (stan po domknięciu RA-023)
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run test/security packages/observability`
@@ -133,8 +133,30 @@ Weryfikacja: `pnpm vitest run test/security/least-privilege.test.ts`.
 ### `RA-024-WU-05` — traces i audit log
 
 Rezultat: `packages/observability/src/tracing.ts` (correlation IDs, redakcja w
-warstwie exportu) i zapis `PolicyEvaluation.evidence` do `audit_log`.
+warstwie exportu).
 Weryfikacja: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/observability packages/policy`.
+
+**Zakres zawężony w trakcie — `PolicyEvaluation.evidence` → `audit_log` NIE zostało
+wykonane.** Zapisuję to jawnie, bo pierwsza wersja tego planu obiecywała jedno i
+drugie, a niewykonana obietnica w planie jest gorsza niż jej brak.
+
+Powód: wpisanie `evidence` do `audit_log` wymaga nowego wywołania **wewnątrz**
+`executeAction` (`packages/policy`, `DONE` po RA-022), czyli zmiany zaakceptowanej
+ścieżki wykonania efektu zewnętrznego — z transakcją, w której już mieszkają
+consume approvala i fencing na rewizji. To nie jest doczepka do taska o hardeningu;
+to zmiana kontraktu wykonania, którą trzeba zaprojektować razem z tym, **co** ma być
+audytowane przy odmowie, a nie tylko przy sukcesie.
+
+Co jest zamiast: `audit_log` ma **udowodnioną** append-only trwałość i jest
+zapisywalny w trakcie kill switcha (`test/security/kill-switch-drill.test.ts`,
+`test/security/retention.test.ts`), a `PolicyEvaluation.evidence` niesie już wszystkie
+potrzebne pola. Brakuje jednego wywołania i decyzji o jego kształcie.
+
+**Wejściowe ustalenie dla RA-026:** to dotyka AC8 („wszystkie R3/R4 mają policy
+evidence, approval i receipt"). `evidence` jest **produkowane** i porównywane
+(`policyEvaluationsAgree`), ale nie **utrwalane** — więc po restarcie procesu dowód,
+na jakim snapshocie wykonano akcję, nie istnieje w bazie. Razem z `CTF-014` to dwie
+rzeczy, które audytor RA-026 musi ocenić przed `PASS` całego projektu.
 
 ### `RA-024-WU-06` — metryki, alerty, health
 
@@ -173,3 +195,20 @@ nierozstrzygającym), `pnpm run lint`, root `tsc`, `turbo run typecheck --force`
 authorization, leakage, injection, retention, luki telemetrii, pętle kosztowe i
 operacyjna możliwość zatrzymania. Skan kanarkowy obejmuje logi, traces i kontekst
 modelu **osobno**.
+
+## Ustalenia po wykonaniu (`2026-08-21`)
+
+Pełny zapis jest w `docs/handoffs/RA-024/HANDOFF-01.md` (sekcje „Wejściowe ustalenia"
+i „Ślepe uliczki"). Tu tylko to, co zmienia sam plan:
+
+1. **`WU-00` nie był w rewizji `1` i był konieczny.** Dwie bramki repozytorialne były
+   czerwone na `main` (`CTF-008`, `CTF-013`), zreprodukowane na czystym drzewie.
+2. **Diagnoza `CTF-013` z rejestru była błędna** — nie limit stosu, lecz instantiation
+   expression w `Parameters<>`. Oba proponowane rozwiązania były obok przyczyny.
+3. **`CTF-012` naprawiony po drodze**, bo bramka tego taska go przechwyciła po ~15
+   przebiegach bez diagnozy. Nie był w planie; wpisany w commit, zgodnie z zasadą 4.
+4. **Trzy elementy zakresu przeniesione do RA-025** świadomie, z uzasadnieniem w
+   `AUDIT-01` §7: dependency/container/IaC **scanning** (SBOM dostarczony),
+   dashboardy, eksporter OTel.
+5. **Dwa nowe findingi przekrojowe:** `CTF-014` (`defer`, wymaga ADR) i `CTF-015`
+   (`accept`). Plus `.env.local` naprawiony w tasku.

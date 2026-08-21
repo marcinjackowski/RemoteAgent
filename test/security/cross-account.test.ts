@@ -330,12 +330,7 @@ describe("AC3: cross-repository containment", () => {
       { kind: ConnectionScopeKind.REPOSITORY, value: "group/repo-secret" },
     ],
   });
-  const caseA = caseScopedTo(
-    "case-a",
-    "gitlab-a",
-    ConnectionScopeKind.REPOSITORY,
-    "group/repo-a",
-  );
+  const caseA = caseScopedTo("case-a", "gitlab-a", ConnectionScopeKind.REPOSITORY, "group/repo-a");
 
   it("a case scoped to repo-a cannot target repo-secret", () => {
     // The realistic version: ONE connection whose token can reach both repositories.

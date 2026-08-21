@@ -7,12 +7,7 @@ import {
   assertAllAlertClassesImplemented,
   evaluateAlerts,
 } from "../src/alerts.js";
-import {
-  GaugeName,
-  MetricName,
-  MetricRegistry,
-  type MetricSnapshot,
-} from "../src/metrics.js";
+import { GaugeName, MetricName, MetricRegistry, type MetricSnapshot } from "../src/metrics.js";
 import { HealthState, liveness, readiness } from "../src/health.js";
 
 function snapshotWith(build: (registry: MetricRegistry) => void): MetricSnapshot {
@@ -36,9 +31,7 @@ describe("AC4: all four alert classes exist and fire", () => {
     // Threshold 1 on purpose: a job reaches the DLQ only after exhausting every
     // retry, so it is work the system has definitively abandoned, and nothing polls
     // the DLQ. "Routine" is not an available reading.
-    const alerts = evaluateAlerts(
-      snapshotWith((r) => r.setGauge(GaugeName.DLQ_DEPTH, 1)),
-    );
+    const alerts = evaluateAlerts(snapshotWith((r) => r.setGauge(GaugeName.DLQ_DEPTH, 1)));
     expect(alerts.map((a) => a.alertClass)).toEqual([AlertClass.DLQ]);
     expect(alerts[0]!.severity).toBe(AlertSeverity.CRITICAL);
     expect(alerts[0]!.runbook).toContain("Do NOT bulk-requeue");
@@ -124,9 +117,7 @@ describe("AC4: all four alert classes exist and fire", () => {
         r.increment(MetricName.MODEL_INPUT_TOKENS, DEFAULT_ALERT_THRESHOLDS.tokenBudget);
       }),
     );
-    expect(new Set(alerts.map((a) => a.alertClass))).toEqual(
-      new Set(Object.values(AlertClass)),
-    );
+    expect(new Set(alerts.map((a) => a.alertClass))).toEqual(new Set(Object.values(AlertClass)));
   });
 
   it("every alert carries a runbook, so it is actionable and not a notification", () => {
@@ -145,10 +136,13 @@ describe("AC4: all four alert classes exist and fire", () => {
   });
 
   it("honours overridden thresholds", () => {
-    const quiet = evaluateAlerts(snapshotWith((r) => r.setGauge(GaugeName.DLQ_DEPTH, 4)), {
-      ...DEFAULT_ALERT_THRESHOLDS,
-      dlqDepth: 5,
-    });
+    const quiet = evaluateAlerts(
+      snapshotWith((r) => r.setGauge(GaugeName.DLQ_DEPTH, 4)),
+      {
+        ...DEFAULT_ALERT_THRESHOLDS,
+        dlqDepth: 5,
+      },
+    );
     expect(quiet).toEqual([]);
   });
 

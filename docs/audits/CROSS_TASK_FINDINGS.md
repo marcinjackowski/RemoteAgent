@@ -29,16 +29,18 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-001` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-023 | `RA-023-WU-00`; jedna definicja w `contracts` |
 | `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte; RA-022 dodał dowód, że sonda wartościowa NIE wystarcza | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty i **pilniejszy** |
 | `CTF-005` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-022 | migracje `029`+`030`, fencing w `WU-02` |
-| `CTF-006` | **HIGH** | OTWARTY — właściciel potwierdził domknięcie w RA-024 | RA-024 (hardening); obejście lokalne w RA-012-WU-05 |
+| `CTF-006` | HIGH | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | `RA-024-WU-01`; jedna tabela w `observability`, trzy konsumenty |
 | `CTF-003` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15` |
-| `CTF-004` | LOW | OTWARTY | unit repozytorialny; 6 z 11 pakietów bez pokrycia |
+| `CTF-004` | LOW | **CZĘŚCIOWO** — połowa src-vs-dist rozstrzygnięta w RA-024 | `tsconfig.test.json` dla 6 pakietów nadal otwarte |
 | `CTF-007` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15`; miał za sobą realny defekt produkcyjny |
 | `CTF-011` | LOW | **ZAMKNIĘTY dla RA-018** — wzorzec otwarty | bramka mogła przejść na starym buildzie |
-| `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
-| `CTF-012` | LOW | OTWARTY — niezdiagnozowany | flake `recovery.integration`, 2/13; w bramce RA-021 1/16 o nieustalonej tożsamości |
+| `CTF-008` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | `RA-024-WU-00`; `argsIgnorePattern` + dwie poprawki |
+| `CTF-012` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | zdiagnozowany: `ON CONFLICT` pokrywał jeden z dwóch unique constraintów |
 | `CTF-010` | LOW | **ADRESOWANY procesowo** (ADR-0007) | wzorzec: komentarz != zachowanie; 5 defektów HIGH |
 | `CTF-009` | LOW | OTWARTY — mechanizm domknięty w RA-012 | `isForbiddenPath` nie zna plików instrukcji; RA-015/RA-021 |
-| `CTF-013` | **MEDIUM** | OTWARTY — zdiagnozowany, niezależny od RA-021 | `pnpm run typecheck` (root krok) crashuje `RangeError`; przed RA-026 |
+| `CTF-013` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | `RA-024-WU-00`; przyczyna: instantiation expression w `Parameters<>` |
+| `CTF-014` | LOW | OTWARTY — decyzja `defer`, wymaga ADR | push brancha case'a nie przechodzi przez `ACTION_REGISTRY`; wykryty `RA-024-WU-04` |
+| `CTF-015` | LOW | OTWARTY — decyzja `accept` | sześć nowych kolizji type-level poza `packageName`; nieosiągalne, wzmacniają `CTF-002-U1` |
 
 ---
 
@@ -404,6 +406,60 @@ Konsekwencje, które muszą obowiązywać do RA-024:
 4. RA-024 AC2 („canary secrets/PII nie pojawiają się w logs, traces ani model
    context") nie może zostać zaliczone na obecnym mechanizmie.
 
+### Domknięcie (`2026-08-21`) — potwierdzone `AUDIT-01` RA-024 `PASS`
+
+Wykonane w `RA-024-WU-01`. Jedna tabela w
+`packages/observability/src/secret-patterns.ts`; **wszystkie trzy** konsumenty
+delegują do niej:
+
+| Miejsce | Przed | Po |
+|---|---|---|
+| `SecretRedactor` | `INLINE_PATTERNS` (5 wzorców) | `maskSecretShapes` |
+| `unsafeString` (`repository-planner`) | prywatne 6 regexów | `containsSecretShape` |
+| `redactCommandOutput` (`implementation-tools`) | lokalna tabela `Transitional` | `maskSecretShapes` |
+
+**Rekomendacja tego wpisu została wykonana dokładnie**, w tym rozróżnienie polityki:
+wspólny jest **zestaw wzorców**, nie reakcja. `SecretRedactor` **maskuje**,
+`unsafeString` **odrzuca**. `containsSecretShape` jest zaimplementowane jako „czy
+maskowanie zmienia wartość?", więc obie połowy **nie mogą** się rozjechać co do
+definicji sekretu — a to właśnie sposób, w jaki trzy tabele się rozjechały.
+
+Oba obstacles z RA-012-WU-05 zniknęły: `@remoteagent/observability` jest teraz
+zadeklarowaną zależnością obu konsumentów, a wspólna tabela pokrywa **nadzbiór**
+tego, co miały kopie lokalne. Dodane kształty, których nie znała **żadna** z trzech:
+Google OAuth (`1//`, `ya29.`) — trzymane przez dwa Gmaile i dwa Calendary,
+fine-grained GitHub PAT, tokeny Slacka, **nieterminowany** nagłówek PEM (streamowany
+albo obcięty log to normalna droga, którą to przychodzi) i więcej rootów ścieżek.
+
+Sonda z tego wpisu, uruchomiona ponownie jako **test**
+(`packages/observability/test/secret-patterns.test.ts`) — każdy string, przy którym
+ten wpis notował `NIE ZREDAGOWANO`:
+
+```text
+absolute macOS host path        zredagowano
+absolute linux host path        zredagowano
+glpat-                          zredagowano
+AKIA                            zredagowano
+PEM private key                 zredagowano
+JWT                             zredagowano
+Bearer (regresja)               zredagowano
+```
+
+Mutation check, 7 mutacji, każda czerwona i przywrócona do zielonego: usunięcie
+wzorca host-path, provider-token, PEM i JWT; zdjęcie flagi `g` (maskowanie tylko
+pierwszego wystąpienia); `containsSecretShape` → `false`; `maskSecretShapes` →
+identyczność.
+
+AC2 sprawdzone **osobno dla trzech sinków** (`test/security/canary.test.ts`, 111
+testów): logi, traces i kontekst modelu, plus output komendy jako czwarta
+powierzchnia. Jeden przypadek używa `ya29.` — kształtu, którego **nie miała żadna** z
+trzech pierwotnych tabel: sink trzymający własną kopię wyglądałby na zredagowany dla
+starych kształtów i przepuściłby ten.
+
+Osiągalność z tego wpisu domknięta wprost: `compaction.ts` konstruuje
+`SecretRedactor` **bez** `knownSecrets`, więc test asertuje, że konstrukcja
+bezargumentowa maskuje wszystkie kanarki — bezpieczna, nie „mniej niebezpieczna".
+
 ### Dowód z RA-022 (`2026-08-21`) — sonda wartościowa przepuściła cztery kolizje
 
 Najmocniejszy dotychczasowy argument za guardrailem `CTF-002-U1`, bo tym razem
@@ -668,6 +724,41 @@ pełnego cyklu audytowego (jak `CTF-003` i `CTF-007`). Domykać razem z nimi, pr
 finalnymi bramkami `RA-018`/`RA-026`, które opierają dowodowość na zielonym
 `check`.
 
+### Domknięcie (`2026-08-21`) — potwierdzone `AUDIT-01` RA-024 `PASS`
+
+`RA-024-WU-00`. Wpis stawiał alternatywę „usunąć symbole ALBO dodać
+`argsIgnorePattern`" — **wykonane oba**, bo dotyczą różnych rzeczy, a wybranie
+jednego zostawiłoby trzecią wersję tej samej reguły, przed czym ten wpis ostrzegał.
+
+Kluczowe ustalenie, którego wpis nie znał: **konwencja i bramka rozjechały się
+asymetrycznie.** Domyślne `after-used` w ESLint raportuje tylko **końcowy**
+nieużywany argument, więc `(_type, listener)` przechodziło, a `(request, _config)`
+nie. Repozytorium pisze `_config`/`_type`/`_unused` w ~20 miejscach, więc reguła była
+egzekwowana w połowie przypadków, na których wyglądała na działającą.
+
+Wykonane: `argsIgnorePattern: "^_"` **i** `caughtErrorsIgnorePattern: "^_"` w
+`eslint.config.mjs`, celowo **wąsko** — nieużywana zmienna albo import pozostaje
+błędem niezależnie od nazwy, bo to martwy kod, nie kształt interfejsu. Sonda
+potwierdziła, że bramka nie osłabła:
+
+```text
+probeA(used, notUsed)      error  'notUsed' ... Allowed unused args must match /^_/u
+probeB(used, _ok)          (brak)
+probeC() const deadVar     error  'deadVar' is assigned a value but never used
+probeD() catch(realError)  error  'realError' ... must match /^_/u
+```
+
+`prefer-const` w `retry.ts` był realną wzajemną referencją między callbackiem timera i
+`onAbort` — trzymana w boxie, żeby oba wiązania były `const` **bez** zmiany
+kolejności: wstrzyknięty **synchroniczny** `setTimeout` (używa go kilka testów)
+odpala callback zanim przypisanie by się wykonało. Nieużywany import
+`RuntimeTransport` był martwym kodem i został usunięty.
+
+```text
+pnpm run lint    -> exit 0   (było: 3 errors, exit 1)
+```
+
+
 ---
 
 ## `CTF-009` — `isForbiddenPath` nie zna plików instrukcji repozytorium
@@ -909,6 +1000,57 @@ Zakres dotyka RA-018 (`DONE`), więc zmiana wymaga pełnego cyklu audytowego, ja
 `CTF-003`, `CTF-007` i `CTF-008`. Domykać razem z `CTF-008` przed `RA-026`, bo oba
 są tą samą klasą problemu: bramka repozytorialna czerwona na `main`.
 
+### Domknięcie (`2026-08-21`) — potwierdzone `AUDIT-01` RA-024 `PASS`
+
+`RA-024-WU-00`. **Żadna z dwóch opcji tego wpisu nie była właściwa**, i to jest
+najużyteczniejsza część domknięcia: diagnoza „limit stosu, nie błąd typów" była
+błędna.
+
+Prawdziwą przyczyną jest **jedno wyrażenie typu**. Bisekcja pliku
+`test/golden-path/golden-path.integration.test.ts`:
+
+```text
+head -750 … head -960     RangeError = 0
+head -969 (cały plik)     RangeError = 1
+```
+
+Crash wymaga **składniowo kompletnego** pliku, więc nie jest to „jedna linia" ani
+kumulacja rozmiaru. Izolacja przez podmianę pojedynczych typów:
+
+```text
+baseline (bez zmian)                              RangeError
+wariant A: `db` typowane jawnym importem          RangeError
+wariant B: `inTx` bez instantiation expression    CZYSTO
+wariant C: A + B                                  CZYSTO
+```
+
+Winowajcą jest `Parameters<typeof db.withTransaction<T>>[0]` — **instantiation
+expression zagnieżdżone w `Parameters<>`**. Przepisanie **tylko tego typu** usunęło
+crash i nie zmieniło niczego innego w pliku. Podnoszenie `--stack-size` (opcja 1)
+maskowałoby to, a rozbijanie root `tsconfig.json` (opcja 2) usunęłoby suite z bramki —
+oba obok przyczyny.
+
+**Usunięcie crashu ujawniło błędy, które on maskował** — i to jest samodzielne
+ustalenie: `RangeError` przerywał program, więc `tsc` nigdy nie doszedł do raportowania
+`TS2322`. To otwarta połowa `CTF-004`: harness importuje `../src/client.js`, więc
+zwraca **src** `Database`, a każdy ćwiczony pakiet deklaruje `runTransaction` wobec
+**dist** `Transaction`. Oba są brandowane `unique symbol`, więc są wzajemnie
+nieprzypisywalne — `TS2741` w obu kierunkach, zmierzone sondą, nie założone.
+
+Zmostkowane **jednym** castem na jedynej wartości przechodzącej granicę, z zapisanym
+powodem: brand istnieje wyłącznie w `client.d.ts` i **żadne pole runtime go nie
+realizuje** (sprawdzone — `withTransaction` wydaje sam pooled client), więc cast nie
+twierdzi nieprawdy. `assertPackagesAreCurrent` nadal pilnuje świeżości builda.
+
+```text
+node …/tsc.js -p tsconfig.json --noEmit   -> exit 0   (było: RangeError, exit 1)
+pnpm run typecheck --force                -> 36 successful, 0 cached
+```
+
+Ta sama granica wystąpiła ponownie w `test/security/kill-switch-drill.test.ts` i jest
+tam zmostkowana identycznie, ze wskazaniem na ten wpis.
+
+
 ---
 
 ## `CTF-012` — niedeterministyczny fail `recovery.integration` w pełnym przebiegu
@@ -990,3 +1132,177 @@ byłaby dokładnie tym wzorcem, który ten projekt trzykrotnie ukarał (`CTF-010
 Właściciel: task dotykający `workspace-runner` albo osobny unit przed `RA-026`, bo
 `RA-026` AC wymaga stabilnej bramki. Do tego czasu każdy raport pełnego przebiegu
 powinien podawać liczbę przebiegów, nie tylko wynik jednego.
+
+### Domknięcie (`2026-08-21`) — potwierdzone `AUDIT-01` RA-024 `PASS`
+
+**Diagnoza najpierw, jak ten wpis wymagał.** Komunikat, którego nie udało się
+przechwycić w ~15 przebiegach, wypadł w bramce RA-024:
+
+```text
+duplicate key value violates unique constraint "workspaces_case_id_key"
+  at WorkspaceRepository.recordIntent (packages/database/src/repositories/workspace.ts:39)
+  at Object.recordIntent (packages/workspace-runner/src/recovery.ts:54)
+```
+
+Przyczyna jest deterministyczna i **nie** jest wyścigiem o pulę połączeń, jak
+spekulował ten wpis. `workspaces` ma **dwa** unique constrainty — `workspace_id`
+(primary key) i `UNIQUE (case_id)`, czyli inwariant single-writer — a `recordIntent`
+absorbował konflikty przez `ON CONFLICT (workspace_id) DO NOTHING`, pokrywając tylko
+pierwszy. Współbieżny insert, który przegrał wyścig na `workspaces_case_id_key`,
+uciekał jako surowy `23505` zamiast `WorkspaceMappingConflictError`.
+
+Dlatego reprodukował się **wyłącznie** w pełnym przebiegu: potrzebuje dwóch insertów
+faktycznie w locie. Solo 5/5 zielone — zmierzone, nie założone.
+
+Naprawione **nietargetowanym** `ON CONFLICT DO NOTHING`. To właściwy absorber, nie
+szerszy: istniejąca weryfikacja odczytuje wiersz ponownie i odrzuca wszystko, co nie
+zgadza się z tym konkretnym intentem, więc insert **może** być no-opem, ale nigdy nie
+jest niezbadanym sukcesem.
+
+Test regresyjny **wymusza** wyścig ośmioma współbieżnymi insertami zamiast liczyć na
+zaobserwowanie go — flake odtworzony przypadkiem nie jest testem regresyjnym.
+Asercja na **typie** błędu, nie na „rzuciło": poprzednie zachowanie **też** rzucało, i
+dokładnie dlatego wyglądało to na szum przez piętnaście przebiegów (`CTF-010`,
+finding 1).
+
+Mutation check — przywrócenie `ON CONFLICT (workspace_id)`:
+
+```text
+zmutowane   -> 2 failed | 3 passed, exit 1
+przywrócone -> 5 passed, exit 0
+```
+
+Wpływ na bramkę „całe repo zielone", zmierzony:
+
+```text
+przed naprawą: 2086 testów, 1 failed  (ten flake, przechwycony)
+po naprawie:   2164 testów, CZTERY kolejne przebiegi, 0 failed
+```
+
+---
+
+## `CTF-014` — push brancha case'a nie przechodzi przez `ACTION_REGISTRY`
+
+- Severity: **LOW** (rozjechanie kontraktu z komentarzem; brak osiągalnej eskalacji)
+- Wykryty: `2026-08-21`, podczas `RA-024-WU-04` — przez **test**, nie przez przegląd
+- Dotyczy: `packages/policy/src/policy-engine.ts` (RA-022),
+  `packages/connector-gitlab/src/merge-request.ts` (RA-017)
+- Status: **OTWARTY** — decyzja `defer`, domknięcie wymaga ADR
+- Owner: właściciel (decyzja o zmianie zaakceptowanego kontraktu RA-022)
+
+### Dowód
+
+Komentarz w `ACTION_REGISTRY` mówi wprost:
+
+```ts
+// R2 — drafts and case-branch pushes: visible to the owner, reversible, and not
+// yet communicated to anyone outside.
+"gitlab.mr.draft.update": RiskTier.R2,
+"gmail.draft.create": RiskTier.R2,
+```
+
+**Nie ma klucza dla pushu.** `grep` na ścieżce pushu:
+
+```text
+evaluatePolicy|ACTION_REGISTRY|RiskTier w connector-gitlab/src, git-lifecycle/src:
+  (brak trafień)
+```
+
+Wykryte przez `test/security/least-privilege.test.ts`, który sprawdza, że każdy write
+scope wskazuje akcję **obecną** w rejestrze: `write_repository → gitlab.branch.push`
+nie zrezolwował się. To jest wartość tego kierunku sprawdzenia — przegląd „czy każda
+akcja ma scope?" tego nie widzi.
+
+### Wpływ
+
+To wzorzec `CTF-010`: komentarz opisuje gwarancję, której kod nie daje. Push **jest**
+zapisem zewnętrznym i **nie** jest wyceniony przez policy engine, więc nie ma tieru,
+nie ma `PolicyEvaluation.evidence` i nie ma wpisu w ścieżce approval.
+
+**Nie oceniam tego na HIGH**, bo push jest zatrzymany trzema innymi warstwami,
+sprawdzonymi w kodzie:
+
+1. `project.writes_enabled` jest **domyślnie wyłączone** (`GITLAB_WRITES_DISABLED`);
+2. `GitLabProjectAllowlist` jest **zamkniętą** listą projektów;
+3. allowlista argv w `git-lifecycle` dopuszcza **dziewięć** subkomend, więc
+   `push --force` ani `branch -D` **nie da się złożyć** — allowlista, nie denylista.
+
+Ryzykiem jest więc **brak dowodu policy dla realnego zapisu**, nie eskalacja. Dotyczy
+to `RA-026` AC8 („wszystkie R3/R4 mają policy evidence, approval i receipt"): push nie
+jest R3/R4, ale audytor RA-026 powinien wiedzieć, że jest zapisem poza rejestrem.
+
+### Wymagana zmiana
+
+Rozstrzygnąć jako ADR, bo dodanie klucza do `ACTION_REGISTRY` zmienia zaakceptowany
+kontrakt RA-022 i wymaga migracji ścieżki wykonania. Dwie opcje:
+
+1. dopisać `gitlab.branch.push` jako `R2` (zgodnie z tym, co komentarz **już
+   twierdzi**) i przeprowadzić push przez executor — spójne, ale dotyka RA-017;
+2. **usunąć fragment komentarza** o „case-branch pushes" i zapisać jawnie, że push
+   jest zatrzymany przez `writes_enabled` + allowlistę projektów + allowlistę argv,
+   a nie przez policy engine — tańsze i uczciwe, ale zostawia zapis bez policy
+   evidence.
+
+Rekomendacja: **opcja 2 przed RA-026, opcja 1 jako osobny task**, jeżeli właściciel
+chce policy evidence dla pushu. Nie robię tego w RA-024: hardening nie jest miejscem
+na zmianę zaakceptowanego kontraktu.
+
+---
+
+## `CTF-015` — sześć nieodnotowanych kolizji type-level poza `packageName`
+
+- Severity: **LOW** (nieosiągalne; brak wspólnego barrela)
+- Wykryty: `2026-08-21`, sondą type-level w final task gate RA-024
+- Dotyczy: `agent-orchestrator`, `bedrock-runtime`, `workspace-runner`,
+  `implementation-tools`, `mcp-tool-broker`, `connector-jira`
+- Status: **OTWARTY** — decyzja `accept`
+- Owner: `CTF-002-U1` (guardrail), który wyłapie je automatycznie
+
+### Dowód
+
+Sonda type-level (`ts.Program` + `checker.getExportsOfModule`, z rozwijaniem aliasów,
+żeby legalny re-eksport **tej samej** deklaracji nie dawał fałszywego alarmu), 19
+pakietów z `dist/index.d.ts`:
+
+```text
+ModelIdentity      <- agent-orchestrator, bedrock-runtime        (2 deklaracje)
+OperationRecord    <- implementation-tools, workspace-runner     (2 deklaracje)
+RetryPolicy        <- bedrock-runtime, connector-jira            (2 deklaracje)
+RuntimeOptions     <- agent-orchestrator, bedrock-runtime        (2 deklaracje)
+ToolManifest       <- agent-orchestrator, mcp-tool-broker        (2 deklaracje)
+WorkspaceFence     <- agent-orchestrator, workspace-runner       (2 deklaracje)
+packageName        <- 7 pakietów                                 (znane, CTF-002)
+```
+
+`CTF-002` notował wyłącznie `packageName`. **Sześć pozostałych jest nowych** —
+powstały w RA-007..RA-021 i nie zostały wychwycone, bo wcześniejsze bramki używały
+sondy **wartościowej**, a to są typy bez wartości runtime.
+
+### Wpływ
+
+Identyczny jak w `CTF-002`: przy `export *` z dwóch pakietów w jednym barrelu ESM
+**cicho usuwa** niejednoznaczną nazwę, bez błędu kompilacji. Sprawdziłem
+osiągalność — **nie ma** dziś takiego barrela ani konsumenta importującego
+kolidującą parę:
+
+```text
+skan konsumentów agent-orchestrator + (workspace-runner|bedrock-runtime|mcp-tool-broker):
+  (brak trafień)
+```
+
+Więc nieosiągalne, dokładnie jak `packageName`. Istotne jest co innego: **to
+najmocniejszy dotychczasowy argument za `CTF-002-U1`.** Wpis `CTF-002` uzasadniał
+guardrail jednym przykładem i dowodem z RA-022; tu jest **sześć** kolizji, które
+przeszły przez wszystkie zwykłe bramki w pięciu taskach, bo ręczna sonda była
+uruchamiana tylko tam, gdzie plan o niej pamiętał.
+
+### Wymagana zmiana
+
+Decyzja: **`accept`** dla samych nazw (nieosiągalne, a przemianowanie sześciu typów w
+pakietach `DONE` wymagałoby pełnego cyklu audytowego × 5 bez zysku bezpieczeństwa),
+**`fix` dla mechanizmu** — czyli `CTF-002-U1` jako guardrail w `test/guardrails/`,
+używający type-checkera, nie skanu wartości. Sonda z tego wpisu jest gotowym
+implementacyjnym szkicem.
+
+Do czasu jego powstania obowiązuje wniosek z `CTF-002`: **final task gate musi
+uruchamiać sondę type-level, nie tylko wartościową.**

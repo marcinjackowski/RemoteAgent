@@ -313,8 +313,7 @@ describeIntegration(
     // `db.withTransaction` is re-typed rather than the arrow function so the cast
     // sits on the single value that crosses the boundary, and callers of `inTx` get
     // a fully checked signature.
-    const inTx: RunInTransaction = (fn) =>
-      (db.withTransaction as unknown as RunInTransaction)(fn);
+    const inTx: RunInTransaction = (fn) => (db.withTransaction as unknown as RunInTransaction)(fn);
 
     /** A real Git repository with one commit, standing in for a cloned repo. */
     async function makeWorkspace(name: string): Promise<string> {

@@ -96,8 +96,7 @@ export const TRUST_BOUNDARIES: readonly TrustBoundary[] = Object.freeze([
     name: "Jira Cloud",
     provider: "jira",
     direction: "BIDIRECTIONAL",
-    dataFlow:
-      "issue fields, comments and webhook deliveries in; comments and transitions out",
+    dataFlow: "issue fields, comments and webhook deliveries in; comments and transitions out",
     threats: [
       ThreatClass.PROMPT_INJECTION,
       ThreatClass.EXFILTRATION,
@@ -117,8 +116,7 @@ export const TRUST_BOUNDARIES: readonly TrustBoundary[] = Object.freeze([
     name: "GitLab",
     provider: "gitlab",
     direction: "BIDIRECTIONAL",
-    dataFlow:
-      "repository contents, MR and pipeline state in; branches, draft MRs and comments out",
+    dataFlow: "repository contents, MR and pipeline state in; branches, draft MRs and comments out",
     threats: [
       ThreatClass.PROMPT_INJECTION,
       ThreatClass.EXFILTRATION,

@@ -41,7 +41,8 @@ const CANARIES = {
   linuxPath: "/home/runner/work/remoteagent/secret-notes.txt",
   windowsPath: "C:\\Users\\marcinjackowski\\AppData\\creds.json",
   fileUri: "file:///Users/marcinjackowski/private/id_ed25519",
-  pemKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nCANARY7d77c1e9body\n-----END OPENSSH PRIVATE KEY-----",
+  pemKey:
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nCANARY7d77c1e9body\n-----END OPENSSH PRIVATE KEY-----",
   bearer: "Bearer CANARY7d77c1e9token",
   urlUserinfo: "https://marcin:CANARY7d77c1e9@gitlab.example.test/group/repo.git",
   queryToken: "https://api.example.test/v1/x?access_token=CANARY7d77c1e9",

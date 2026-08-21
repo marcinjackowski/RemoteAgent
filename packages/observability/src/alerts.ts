@@ -213,9 +213,7 @@ export function assertAllAlertClassesImplemented(): void {
   const produced = new Set(tripped.map((alert) => alert.alertClass));
   const missing = Object.values(AlertClass).filter((alertClass) => !produced.has(alertClass));
   if (missing.length > 0) {
-    throw new Error(
-      `AC4 violation: no rule can produce alert class(es) ${missing.join(", ")}`,
-    );
+    throw new Error(`AC4 violation: no rule can produce alert class(es) ${missing.join(", ")}`);
   }
 }
 

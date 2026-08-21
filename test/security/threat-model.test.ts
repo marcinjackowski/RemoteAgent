@@ -114,9 +114,7 @@ describe("threat model completeness (AC1)", () => {
   });
 
   it("documents every threat class, so the vocabulary is not aspirational", () => {
-    const undocumented = Object.values(ThreatClass).filter(
-      (threat) => !document.includes(threat),
-    );
+    const undocumented = Object.values(ThreatClass).filter((threat) => !document.includes(threat));
     expect(undocumented).toEqual([]);
   });
 

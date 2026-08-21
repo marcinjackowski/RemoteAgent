@@ -135,7 +135,9 @@ describe("profile rejects unsafe values via the shared table (CTF-006)", () => {
     // The builder must stay usable: relative paths are the normal shape of a
     // profile's own data, and rejecting them would make every profile fail closed.
     expect(
-      thrownCode(() => buildRepositoryProfile(input({ contractVersion: "contracts-src/index.ts" }))),
+      thrownCode(() =>
+        buildRepositoryProfile(input({ contractVersion: "contracts-src/index.ts" })),
+      ),
     ).toBeUndefined();
   });
 });

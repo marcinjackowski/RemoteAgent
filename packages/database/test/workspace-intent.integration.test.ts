@@ -49,9 +49,7 @@ describeIntegration(
     });
 
     beforeEach(async () => {
-      await db.query(
-        "TRUNCATE workspaces, cases, connections, owners RESTART IDENTITY CASCADE",
-      );
+      await db.query("TRUNCATE workspaces, cases, connections, owners RESTART IDENTITY CASCADE");
       await new OwnerRepository().insert(db, { ownerId: "owner-1", displayName: "owner-1" });
       await new ConnectionRepository().insert(db, {
         connectionId: "conn-1",
@@ -95,9 +93,9 @@ describeIntegration(
       // threw, which is exactly why the flake looked like noise rather than a bug
       // (`CTF-010` finding 1).
       await repository.recordIntent(db, intent("ws-first", "case-1"));
-      await expect(repository.recordIntent(db, intent("ws-second", "case-1"))).rejects.toBeInstanceOf(
-        WorkspaceMappingConflictError,
-      );
+      await expect(
+        repository.recordIntent(db, intent("ws-second", "case-1")),
+      ).rejects.toBeInstanceOf(WorkspaceMappingConflictError);
     });
 
     it("rejects both losers when several workspaces race for one case", async () => {

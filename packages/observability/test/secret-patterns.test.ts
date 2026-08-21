@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SecretRedactor } from "../src/redaction.js";
-import {
-  SECRET_PATTERNS,
-  containsSecretShape,
-  maskSecretShapes,
-} from "../src/secret-patterns.js";
+import { SECRET_PATTERNS, containsSecretShape, maskSecretShapes } from "../src/secret-patterns.js";
 
 /**
  * The `CTF-006` probe, promoted from a coordinator's throwaway script to a test.
@@ -70,7 +66,9 @@ describe("shared secret patterns (CTF-006)", () => {
       "marcin/Private",
     );
     expect(
-      maskSecretShapes("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQ\n-----END RSA PRIVATE KEY-----"),
+      maskSecretShapes(
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQ\n-----END RSA PRIVATE KEY-----",
+      ),
     ).not.toContain("MIIEowIBAAKCAQ");
   });
 
