@@ -304,6 +304,16 @@ describeIntegration(
         "vendor/dep/.git/config",
         "keys/server.pem",
         "id_rsa",
+        // RA-024-WU-03: `.env` was an EXACT segment match, so `.env` was protected
+        // and `.env.local` was not — while `.env.local` and `.env.production` are the
+        // conventional names for the file that actually holds the credentials. Found
+        // by the adversarial suite; `repository-planner`'s discovery policy already
+        // matched `.env.*` correctly, so this was the weaker of two copies of one
+        // rule (the `CTF-006` shape).
+        ".env.local",
+        ".env.production",
+        ".env.development.local",
+        "config/.env.staging",
       ] as const;
 
       it("classifies instruction, credential and VCS paths as protected", () => {
@@ -316,6 +326,12 @@ describeIntegration(
           "docs/agents-guide.md",
           "environment.ts",
           "gitignore.md",
+          // The prefix rule must not over-reach: `.env.` is protected, `.environment`
+          // and a doc merely named after it are not. Over-protection is a real cost —
+          // a gate that hides half the repository invites someone to widen it
+          // wholesale.
+          "docs/env-setup.md",
+          "src/envelope.ts",
         ]) {
           expect(isProtectedPath(path), path).toBe(false);
         }

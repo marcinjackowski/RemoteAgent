@@ -105,6 +105,25 @@ const PROTECTED_FILE_NAMES: readonly string[] = Object.freeze([
 const PROTECTED_EXTENSIONS: readonly string[] = Object.freeze([".pem", ".key", ".p12", ".pfx"]);
 
 /**
+ * Segment PREFIXES that are protected together with any suffix.
+ *
+ * `.env` alone was an exact-match segment, so `.env` was protected and
+ * `.env.local` was NOT — found by the RA-024-WU-03 adversarial suite, not by any
+ * existing test. `.env.local`, `.env.production` and `.env.development` are the
+ * conventional names for the file that actually holds the credentials, so the
+ * protected name was the least interesting member of the family.
+ *
+ * `packages/repository-planner/src/discovery-policy.ts` already had this right
+ * (`name === ".env" || name.startsWith(".env.")`), which makes this the same class
+ * of divergence as `CTF-006`: two boundaries with two ideas of the same rule, and
+ * the model-facing one weaker. Kept as a separate list from
+ * {@link PROTECTED_SEGMENTS} because prefix matching is a strictly stronger claim
+ * and must be opted into per entry — a prefix rule over `credentials` would also
+ * swallow `credentials-guide.md`.
+ */
+const PROTECTED_SEGMENT_PREFIXES: readonly string[] = Object.freeze([".env."]);
+
+/**
  * True when toolset policy protects this workspace-relative path.
  *
  * Deliberately syntactic and applied BEFORE any filesystem access: the decision
@@ -121,6 +140,9 @@ export function isProtectedPath(relativePath: string): boolean {
   const leaf = segments[segments.length - 1] ?? "";
   return (
     segments.some((segment) => PROTECTED_SEGMENTS.includes(segment)) ||
+    segments.some((segment) =>
+      PROTECTED_SEGMENT_PREFIXES.some((prefix) => segment.startsWith(prefix)),
+    ) ||
     PROTECTED_FILE_NAMES.includes(leaf) ||
     PROTECTED_EXTENSIONS.some((extension) => leaf.endsWith(extension))
   );

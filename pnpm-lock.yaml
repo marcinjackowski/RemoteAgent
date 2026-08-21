@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@remoteagent/agent-orchestrator':
+        specifier: workspace:*
+        version: link:packages/agent-orchestrator
       '@remoteagent/connector-gitlab':
         specifier: workspace:*
         version: link:packages/connector-gitlab
@@ -17,6 +20,9 @@ importers:
       '@remoteagent/database':
         specifier: workspace:*
         version: link:packages/database
+      '@remoteagent/discord':
+        specifier: workspace:*
+        version: link:packages/discord
       '@remoteagent/git-lifecycle':
         specifier: workspace:*
         version: link:packages/git-lifecycle
