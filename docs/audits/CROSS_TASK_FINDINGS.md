@@ -35,9 +35,10 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-007` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15`; miał za sobą realny defekt produkcyjny |
 | `CTF-011` | LOW | **ZAMKNIĘTY dla RA-018** — wzorzec otwarty | bramka mogła przejść na starym buildzie |
 | `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
-| `CTF-012` | LOW | OTWARTY — niezdiagnozowany | flake `recovery.integration`, ~2/13 pełnych przebiegów |
+| `CTF-012` | LOW | OTWARTY — niezdiagnozowany | flake `recovery.integration`, 2/13; w bramce RA-021 1/16 o nieustalonej tożsamości |
 | `CTF-010` | LOW | **ADRESOWANY procesowo** (ADR-0007) | wzorzec: komentarz != zachowanie; 5 defektów HIGH |
 | `CTF-009` | LOW | OTWARTY — mechanizm domknięty w RA-012 | `isForbiddenPath` nie zna plików instrukcji; RA-015/RA-021 |
+| `CTF-013` | **MEDIUM** | OTWARTY — zdiagnozowany, niezależny od RA-021 | `pnpm run typecheck` (root krok) crashuje `RangeError`; przed RA-026 |
 
 ---
 
@@ -743,6 +744,84 @@ inaczej wynik mutation testingu jest bez wartości.
 
 ---
 
+## `CTF-013` — `pnpm run typecheck` crashuje `RangeError` na kroku root
+
+- Severity: **MEDIUM** (bramka repozytorialna nie może przejść; sam kod jest poprawny)
+- Wykryty: `2026-08-21`, podczas final task gate RA-021, pierwszym uruchomieniem
+  `pnpm run typecheck --force` na tej maszynie
+- Dotyczy: `tsconfig.json` w rootcie + `test/golden-path/golden-path.integration.test.ts`
+  (RA-018, `DONE`)
+- Status: **OTWARTY** — zdiagnozowany, niezależny od RA-021
+
+### Dowód
+
+`package.json` ma `"typecheck": "tsc -p tsconfig.json --noEmit && turbo run typecheck"`.
+**Pierwszy** krok — root, obejmujący `scripts/**` i `test/**` — crashuje:
+
+```text
+RangeError: Maximum call stack size exceeded
+    at hasSyntacticModifier (typescript/lib/_tsc.js:16870:30)
+    at getIsDeferredContext (…:19800:35)
+    at resolveNameHelper (…:19523:58)
+    at trackExistingEntityName (…:53506:31)
+    at tryVisitTypeQuery (…:132702:60)
+```
+
+Zmierzone na **czystym drzewie bazowym** (`git stash -u`, `git status` pusty), więc
+**nie pochodzi z RA-021**:
+
+```text
+base, domyślny stack:      RangeError
+base, --stack-size=4000:   RangeError
+base, --stack-size=6000:   RangeError
+base, --stack-size=8000:   RangeError
+base, --stack-size=10000:  czysto, zero błędów
+```
+
+Izolacja do katalogu przez osobne wywołania `tsc` na plikach root-included:
+
+```text
+test/golden-path:  RangeError=1
+test/guardrails:   RangeError=0
+test/workflow:     RangeError=0
+scripts/workflow:  RangeError=0
+```
+
+`test/golden-path/golden-path.integration.test.ts` (RA-018, commit `8edd109`)
+importuje jednocześnie siedem pakietów `@remoteagent/*`, a ślad stosu
+(`trackExistingEntityName`, `tryVisitTypeQuery`) wskazuje na inferencję typów
+przy głęboko zagnieżdżonych, rekurencyjnych typach Zod z wielu pakietów naraz.
+
+### Wpływ
+
+**`pnpm run typecheck` nie może przejść na `main`** — dokładnie ta klasa różnicy
+między „bramka zadeklarowana" a „bramka uruchomiona", którą opisuje `CTF-008` dla
+`lint`. Konsekwencja jest ta sama i poważniejsza, niż wygląda: `RA-026` AC opiera
+dowodowość na zielonych bramkach repozytorialnych, a obecnie dwie z nich
+(`lint` — `CTF-008`, `typecheck` — ten wpis) są czerwone na `main`.
+
+Sam kod jest poprawny: **`turbo run typecheck --force` przechodzi dla wszystkich
+36 zadań** (`0 cached`), więc każdy pakiet osobno typechecuje się czysto — łącznie
+z `packages/mcp-tool-broker` i jego `tsconfig.test.json`. Awaria dotyczy wyłącznie
+zagregowanego programu root.
+
+### Wymagana zmiana
+
+Diagnoza wskazuje na limit stosu, nie na błąd typów, więc są dwie sensowne opcje i
+obie należą do własnego unitu, nie do doczepki:
+
+1. podnieść stos dla kroku root (`node --stack-size=10000 node_modules/typescript/lib/tsc.js`)
+   — najmniejsza zmiana, ale ukrywa przyczynę i jest wrażliwa na wersję Node;
+2. rozbić root `tsconfig.json` albo wyłączyć `test/golden-path` z programu root
+   (suite i tak jest typechecowana przez vitest i uruchamiana w bramce), ewentualnie
+   uprościć import surface tego pliku.
+
+Zakres dotyka RA-018 (`DONE`), więc zmiana wymaga pełnego cyklu audytowego, jak
+`CTF-003`, `CTF-007` i `CTF-008`. Domykać razem z `CTF-008` przed `RA-026`, bo oba
+są tą samą klasą problemu: bramka repozytorialna czerwona na `main`.
+
+---
+
 ## `CTF-012` — niedeterministyczny fail `recovery.integration` w pełnym przebiegu
 
 - Severity: **LOW**
@@ -787,6 +866,29 @@ pojedynczego zielonego przebiegu — dokładnie ten mechanizm opisuje `CTF-003`.
 
 **Nie blokuje RA-019 ani RA-020:** dotyczy pakietu `workspace-runner`, którego te
 taski nie zmieniają, a ich własne suite są zielone solo i w pełnym przebiegu.
+
+### Obserwacja z bramki RA-021 (`2026-08-21`)
+
+Pełne przebiegi repozytorium w final task gate RA-021 (po dodaniu migracji `028` i
+pakietu `mcp-tool-broker`):
+
+```text
+przebiegi 1-4 (przed fixem sondy):   1601/1601, cztery z rzędu, zero błędów
+przebieg 1 (po fixie sondy):         1603/1604  (1 failed)
+przebiegi 2-12 (po fixie sondy):     1604/1604, JEDENAŚCIE z rzędu
+```
+
+**Nie udało mi się przechwycić tożsamości tego jednego faila** — pojawił się w
+przebiegu, w którym nie zachowywałem pełnego logu, a jedenaście kolejnych przebiegów
+(w tym trzy z zachowanym logiem) wyszło zielono. Zapisuję to jako obserwację, a **nie**
+jako potwierdzenie, że był to `CTF-012`: nie mam na to dowodu, a zgadywanie tożsamości
+flake'a to dokładnie ten wzorzec, który ten rejestr trzykrotnie ukarał (`CTF-010`).
+
+Co z tego wynika dla `CTF-012`: częstotliwość „~15% przebiegów" z pierwotnego pomiaru
+**nie potwierdziła się** w tej bramce (1 na 16 przebiegów łącznie, tożsamość nieznana),
+ale wniosek pozostaje ten sam — pojedynczy zielony przebieg całego repo nie jest
+rozstrzygający, więc każdy raport powinien podawać liczbę przebiegów. Ten podał
+sześnaście.
 
 ### Wymagana zmiana
 

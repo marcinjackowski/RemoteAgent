@@ -47,8 +47,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 18 | [RA-018](RA-018.md) Golden path and concurrency proof | DONE | RA-009, RA-010, RA-011, RA-012, RA-013, RA-014, RA-015, RA-016, RA-017 | M3 |
 | 19 | [RA-019](RA-019.md) Gmail two-account connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
 | 20 | [RA-020](RA-020.md) Calendar two-account connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
-| 21 | [RA-021](RA-021.md) MCP Tool Broker | READY | RA-005, RA-007, RA-009, RA-013, RA-016, RA-017, RA-019, RA-020 | M5 |
-| 22 | [RA-022](RA-022.md) Policy, approvals and action executor | BLOCKED_BY_DEPENDENCIES | RA-003, RA-004, RA-005, RA-006, RA-008, RA-021 | M5 |
+| 21 | [RA-021](RA-021.md) MCP Tool Broker | DONE | RA-005, RA-007, RA-009, RA-013, RA-016, RA-017, RA-019, RA-020 | M5 |
+| 22 | [RA-022](RA-022.md) Policy, approvals and action executor | READY | RA-003, RA-004, RA-005, RA-006, RA-008, RA-021 | M5 |
 | 23 | [RA-023](RA-023.md) AgentCore Gateway and official MCP targets | BLOCKED_BY_DEPENDENCIES | RA-010, RA-016, RA-021, RA-022 | M5 |
 | 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | BLOCKED_BY_DEPENDENCIES | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
 | 25 | [RA-025](RA-025.md) AWS deployment and disaster recovery | BLOCKED_BY_DEPENDENCIES | RA-024 | M6 |
@@ -79,7 +79,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-018 work units](../work-units/RA-018/WORK_UNITS.md)
 - [RA-019 work units](../work-units/RA-019/WORK_UNITS.md)
 - [RA-020 work units](../work-units/RA-020/WORK_UNITS.md)
-- [RA-021 work units](../work-units/RA-021/WORK_UNITS.md) — `DRAFT`
+- [RA-021 work units](../work-units/RA-021/WORK_UNITS.md)
 - [RA-022 work units](../work-units/RA-022/WORK_UNITS.md) — `DRAFT`
 - [RA-023 work units](../work-units/RA-023/WORK_UNITS.md) — `DRAFT`
 - [RA-024 work units](../work-units/RA-024/WORK_UNITS.md) — `DRAFT`
