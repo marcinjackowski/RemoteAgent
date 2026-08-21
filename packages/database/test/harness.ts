@@ -43,6 +43,16 @@ function adminConfig(): PoolConfig {
   return { ...base, database: "postgres" };
 }
 
+/**
+ * True for PostgreSQL `57P01` (`admin_shutdown`).
+ *
+ * Matched by code rather than by message so it is locale-independent, and narrowly
+ * so a genuine teardown failure still propagates. See the note in `drop()`.
+ */
+function isAdminShutdown(error: unknown): boolean {
+  return typeof error === "object" && error !== null && Reflect.get(error, "code") === "57P01";
+}
+
 export interface TestDatabase {
   db: Database;
   name: string;
@@ -86,12 +96,32 @@ export async function createEmptyDatabase(): Promise<TestDatabase> {
     const cleanup = new Database(adminConfig());
     try {
       // Terminate lingering connections, then drop.
-      await cleanup.query(
-        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+      //
+      // `pg_terminate_backend` makes the VICTIM connection fail with `57P01`
+      // ("terminating connection due to administrator command"). If that victim is
+      // an idle pooled client in another vitest worker, `pg` surfaces the error on
+      // the pool rather than on any awaited query, and it lands as an uncaught
+      // exception — `CTF-007`: `Errors 1` alongside 1182 passing tests, reproducible
+      // about once per full-repo run and never in isolation.
+      //
+      // `57P01` is the EXPECTED consequence of the statement above, so it is
+      // tolerated here rather than treated as a fault. It is matched narrowly by
+      // code: any other error still propagates, because a real teardown failure
+      // must not be swallowed by a blanket catch.
+      await cleanup
+        .query(
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
          WHERE datname = $1 AND pid <> pg_backend_pid()`,
-        [name],
-      );
-      await cleanup.query(`DROP DATABASE IF EXISTS ${name}`);
+          [name],
+        )
+        .catch((error: unknown) => {
+          if (isAdminShutdown(error)) return;
+          throw error;
+        });
+      await cleanup.query(`DROP DATABASE IF EXISTS ${name}`).catch((error: unknown) => {
+        if (isAdminShutdown(error)) return;
+        throw error;
+      });
     } finally {
       await cleanup.close();
     }

@@ -116,9 +116,39 @@ export { CheckpointConflictError };
  */
 export class Database implements Queryable {
   private readonly pool: Pool;
+  /** Errors observed on IDLE pooled clients, newest last. Bounded. */
+  private readonly idleErrors: Error[] = [];
 
   public constructor(config?: PoolConfig) {
     this.pool = new pg.Pool(config ?? resolvePoolConfig());
+    // A `pg` Pool emits `error` for a failure on an IDLE client — a server
+    // restart, an admin `pg_terminate_backend`, a dropped network path. With no
+    // listener, Node treats that as an UNCAUGHT exception and takes the process
+    // down, even though no query was in flight and the pool will simply open a
+    // fresh connection on the next checkout.
+    //
+    // This surfaced as `CTF-007`: one uncaught `57P01` per full-repo run,
+    // alongside every test passing. The test-harness fix addresses the specific
+    // teardown race, but the missing listener is the general defect — in
+    // production a routine database restart would kill a worker mid-shift.
+    //
+    // Errors are recorded rather than swallowed, so an operator can see that
+    // connections were dropped instead of it becoming invisible.
+    this.pool.on("error", (error: Error) => {
+      if (this.idleErrors.length >= 32) this.idleErrors.shift();
+      this.idleErrors.push(error);
+    });
+  }
+
+  /**
+   * Errors seen on idle pooled connections since construction.
+   *
+   * Exposed so a caller can assert on them (and so the handler above cannot be
+   * mistaken for silently discarding failures). An in-flight query still rejects
+   * normally; these are only the errors that arrive with nothing awaiting them.
+   */
+  public get observedIdleErrors(): readonly Error[] {
+    return Object.freeze([...this.idleErrors]);
   }
 
   /** Build a {@link Database} from environment configuration plus overrides. */

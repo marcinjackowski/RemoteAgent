@@ -14,7 +14,35 @@ afterEach(async () => {
 });
 
 describe("confined process runner", () => {
-  it("kills the process tree on timeout and reports the timeout", async () => {
+  /**
+   * Two claims, deliberately split into two assertions (`CTF-003`).
+   *
+   * The original test asserted "the tree was killed" by reading a `child.pid` file
+   * the grandchild writes, under a 100 ms timeout. That races: the timeout can fire
+   * before the grandchild has written the file, and the read then fails with
+   * `ENOENT` — a flake measured at 1 fail per 4 full-repo runs while passing 6/6 in
+   * isolation. The race was in the test, not in `runProcess`.
+   *
+   * The fix is to stop conflating two independent facts. "The parent timed out" is
+   * observable from the result alone. "The grandchild was killed too" first requires
+   * the grandchild to exist, so the timeout is given room and the file is polled
+   * with its own, longer budget before anything is asserted about the pid.
+   */
+  it("reports a timeout for a process that outlives its limit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "workspace-process-"));
+    roots.push(root);
+    const result = await runProcess({
+      executable: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000);"],
+      workspaceRoot: root,
+      limits: { timeoutMs: 100, outputBytes: 1024 },
+      network: "ALLOW",
+    });
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it("kills the whole process tree, not just the direct child", async () => {
     const root = await mkdtemp(join(tmpdir(), "workspace-process-"));
     roots.push(root);
     const script = [
@@ -24,16 +52,30 @@ describe("confined process runner", () => {
       "fs.writeFileSync('child.pid', String(child.pid));",
       "setInterval(() => {}, 1000);",
     ].join(" ");
+    // Generous enough that the grandchild reliably starts and records its pid, so
+    // the assertion below is about `killTree` rather than about scheduling luck.
     const result = await runProcess({
       executable: process.execPath,
       args: ["-e", script],
       workspaceRoot: root,
-      limits: { timeoutMs: 100, outputBytes: 1024 },
+      limits: { timeoutMs: 3_000, outputBytes: 1024 },
       network: "ALLOW",
     });
     expect(result.timedOut).toBe(true);
-    expect(result.exitCode).not.toBe(0);
-    const childPid = Number(await readFile(join(root, "child.pid"), "utf8"));
+
+    // Poll rather than read once: the file's existence is a precondition of the
+    // real assertion, so a missing file must not be reported as a kill failure.
+    let recorded = "";
+    for (let attempt = 0; attempt < 50 && recorded === ""; attempt += 1) {
+      recorded = await readFile(join(root, "child.pid"), "utf8").catch(() => "");
+      if (recorded === "") await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(recorded, "grandchild never recorded its pid").not.toBe("");
+
+    const childPid = Number(recorded);
+    expect(Number.isInteger(childPid)).toBe(true);
+    // The load-bearing assertion: the grandchild is gone, so the kill reached the
+    // whole tree and not merely the process we spawned.
     expect(() => process.kill(childPid, 0)).toThrow();
   });
 
