@@ -421,6 +421,20 @@ właściciela, bo zmienia schemat zaakceptowany w RA-003/RA-008.
 **Rozstrzygnięte `2026-08-20`** — patrz „Decyzja właściciela" wyżej: wybrano
 rozszerzenie `approvals` z fail-closed backfillem.
 
+### Stan wykonania (`2026-08-21`)
+
+Mechanizm jest zaimplementowany w RA-022: migracja `029` (`checkpoint_revision`,
+`owner_id`, fail-closed backfill) w `WU-01` oraz fencing consumption na rewizji w
+`WU-02`. Wpis pozostaje **OTWARTY** do audytu RA-022 — zgodnie z zasadą, że wpis
+zamyka dopiero audyt taska, nie zakończony unit.
+
+Przy implementacji ujawniło się, że sam `checkpoint_revision` nie wystarcza:
+`cases.checkpoint_revision` jest licznikiem MUTOWALNYM, więc cofnięcie go
+(recovery, restore, naprawa operatorska) wskrzeszało grant już odrzucony jako
+`STALE_REVISION`. Domknięte w `WU-02` przez porównanie z append-only
+`case_checkpoints` (najwyższa kiedykolwiek zapisana rewizja), nie z licznikiem.
+Ten wariant nie był częścią pierwotnego opisu findingu.
+
 ---
 
 ## `CTF-004` — `typecheck` pokrywa `test/**` tylko w 5 z 11 pakietów

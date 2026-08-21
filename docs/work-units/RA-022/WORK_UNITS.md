@@ -110,13 +110,120 @@ Sprawdzone w repozytorium, nie założone. Trzy pozycje korygują rewizję `1`.
 | Unit | Status | Result | Komenda weryfikacyjna |
 |---|---|---|---|
 | `RA-022-WU-01` | **`DONE`** | migracja `029` (`checkpoint_revision`, fail-closed backfill) + kontrakt `approval` | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/approval-schema.integration.test.ts` → `12/12`, exit `0` |
-| `RA-022-WU-02` | `READY` | durable approval repository z atomowym single-use i fencingiem rewizji | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/approval.integration.test.ts` |
+| `RA-022-WU-02` | **`DONE`** | durable approval repository z atomowym single-use i fencingiem rewizji + migracja `030` (niezmienność grantu) | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/approval.integration.test.ts` → `32/32`, exit `0` |
 | `RA-022-WU-03` | `READY` | czysty deterministyczny evaluator R0–R4 + kill-switch snapshot | `pnpm vitest run packages/policy/test/policy-engine.test.ts` |
 | `RA-022-WU-04` | `READY` | approval ingestion nad istniejącym `custom_id` Discorda | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/ingestion.integration.test.ts` |
 | `RA-022-WU-05` | `READY` | action executor: podwójna policy, receipt, `AMBIGUOUS`, reconciliation | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/executor.integration.test.ts` |
 | `RA-022-WU-06` | `READY` | fake-provider proof: tamper, replay, race, R4 | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test` |
 
-## Stan przy pauzie (`2026-08-21`) — drzewo CZYSTE
+## Stan wykonania — `WU-02` zamknięty (`2026-08-21`)
+
+Ustalenia z uruchomionych komend. `WU-01` niżej pozostaje bez zmian.
+
+### Co powstało
+
+- `packages/database/src/repositories/approval.ts` — `ApprovalRepository` z
+  `grant`, `consume`, `findById`, `listUnconsumedForDigest`. Oba mutujące API
+  żądają brandowanego `Transaction` (nie `Queryable`), więc „przekaż pulę zamiast
+  transakcji" jest błędem kompilacji — wzorzec AUDIT-01 HIGH-02 z RA-003.
+- `packages/database/migrations/030_approvals_immutable_grant.{up,down}.sql` —
+  trigger niezmienności grantu (SQLSTATE `P0103`), zakaz `DELETE`, oraz częściowy
+  unique index `approvals_one_live_grant_per_action_idx` na `consumed = false`.
+- `ImmutableGrantError` w `errors.ts` + wpis `P0103` w `translatePgError`.
+- `packages/policy/test/approval.integration.test.ts` — 32 testy.
+
+### Cztery fence'y consumption, wszystkie w JEDNYM `UPDATE`
+
+`consumed = false`, `owner_id`, `action_digest`, `checkpoint_revision` — plus
+`expires_at > now()` na zegarze BAZY. Jedno stwierdzenie, więc nie ma okna
+check-then-act. Dodatkowo `SELECT ... FOR SHARE` na `cases` przed odczytem
+rewizji: bez tego `CheckpointRepository.append` może wcisnąć się między odczyt i
+`UPDATE`.
+
+### CZTERY DEFEKTY znalezione sondą adwersarialną przy 21 ZIELONYCH testach
+
+To najważniejszy zapis tego unitu. Wszystkie cztery mają jedną przyczynę: fence'y
+czytają trwały stan, a nic tego stanu nie chroniło.
+
+| Sonda | Defekt | Naprawa |
+|---|---|---|
+| PROBE 5 | `UPDATE approvals SET consumed = false` → grant do ponownego użycia | trigger `030`, reguła jednokierunkowa |
+| PROBE 6 | `UPDATE ... SET action_digest = <inny>` → zgoda na payload A autoryzuje B (**AC1 odwrócone**) | trigger `030`, zamrożone terms |
+| PROBE 4 | dwa `approval_id` na ten sam digest = dwa wydania jednej zgody | częściowy unique index |
+| PROBE 7 | cofnięcie `cases.checkpoint_revision` wskrzeszało grant już odrzucony jako `STALE_REVISION` | supersession check na append-only `case_checkpoints` |
+
+PROBE 3 sprawdzony i **nie** jest defektem: grant na cudzy case dostaje
+`owner_id` tego case'a, więc grantujący nie może go skonsumować (`WRONG_OWNER`).
+
+### Mutation check — 16 mutacji, 3 PRZEŻYŁY i wymusiły nowe testy
+
+| Mutacja | Wynik |
+|---|---|
+| fence `consumed = false` usunięty | 2 czerwone |
+| fence rewizji tautologiczny | 1 czerwony |
+| fence digestu tautologiczny | 1 czerwony |
+| `owner_id` → `granted_by` | **PRZEŻYŁA** → nowy test z delegatem |
+| `FOR SHARE` usunięty | **PRZEŻYŁA** → nowy test „append musi CZEKAĆ" |
+| unique index usunięty | **PRZEŻYŁA** → test celujący w index bezpośrednio |
+| reguła un-consume wyłączona | najpierw przeżyła (reguła 3 łapała pierwsza) → asercja na treści reguły |
+| pozostałe 9 (delete guard, translator `P0103`, identity check, supersession, partial index, …) | wszystkie łapane |
+
+`owner_id` → `granted_by` przeżyła z DOKŁADNIE tego samego powodu co w `WU-01`:
+fixture'y miały aktor == owner, więc żadna asercja nie rozróżniała źródeł. To
+`CTF-010` dwa razy w tym samym tasku, w moich własnych testach.
+
+### Flake we WŁASNYM teście, wykryty mutation checkiem
+
+Pierwsza wersja testu wygaśnięcia używała `expires_at = granted_at + interval
+'1 millisecond'`. Czerwieniła się pod dwiema mutacjami NIEZWIĄZANYMI z
+wygaśnięciem — to był sygnał. Przyczyna: `now()` jest instantem STARTU
+TRANSAKCJI, więc 1 ms okno zamykało się tylko, gdy transakcja konsumująca zdążyła
+zacząć się później. Test mierzył scheduling, nie mechanizm. Poprawka: grant z
+`expiresAt` już przeszłym (tamperowanie `UPDATE`-em jest teraz słusznie blokowane
+przez `030`).
+
+Wniosek do utrzymania: **mutacja czerwieniąca test w niezwiązanym obszarze jest
+sygnałem flake'a, nie fałszywym alarmem.**
+
+### Decyzja projektowa: pre-check + index, nie catch unique violation
+
+`grant` sprawdza istniejący live grant PRZED insertem. Pierwsza wersja łapała
+unique violation w `catch` — nie działa, bo nieudane stwierdzenie przerywa całą
+transakcję (`current transaction is aborted`), więc `catch` nie mógł już
+odpytać bazy. Index pozostaje gwarancją pod współbieżnością; pre-check daje czysty
+`LIVE_GRANT_EXISTS` w przypadku sekwencyjnym.
+
+Odrzucony wariant testu: dwie równoległe transakcje. O wyniku decydował raz
+pre-check, raz index, zależnie od timingu commitów — łapał usunięty index tylko
+czasami. Test niedeterministyczny nie jest bramką (`CTF-012`).
+
+### Uruchomione bramki po `WU-02`
+
+```text
+packages/policy/test/approval.integration.test.ts   32/32, exit 0 (7 przebiegów)
+całe repo                                           1651/1651, 135 plików, 7 przebiegów, 0 Errors
+turbo run typecheck --force                         36 successful, 0 cached
+pnpm run build --force                              26 successful, 0 cached
+migracja 030: up → down(29) → up → down(0) → up     odwracalna, triggery i index wracają
+eslint + prettier (zmienione pliki)                 czysto
+sonda przecięcia eksportów                          tylko preexistujące CTF-001/CTF-002
+git diff --check                                    exit 0
+```
+
+**Uwaga do bramki:** pierwszy pełny przebieg był czerwony na
+`test/golden-path` — guardrail `CTF-011` poprawnie odmówił uruchomienia na
+nieaktualnym `dist/` po zmianie `database/src`. Kolejność jest więc obowiązkowa:
+`build --force` PRZED pełnym przebiegiem.
+
+### Ustalenie dla `WU-03`
+
+`ApprovalRepository.consume` **musi** być wołane w tej samej transakcji, w której
+executor czyta kill switch — `KillSwitchRepository.listEffective` przyjmuje
+`Queryable`, więc `Transaction` ją spełnia. Test AC6 w tym unicie dowodzi, że
+rollback transakcji zostawia grant niezużyty, czyli zgoda właściciela przeżywa
+operatorski stop. `WU-05` nie ma prawa czytać kill switcha osobną transakcją.
+
+## Stan przy pauzie po `WU-01` (`2026-08-21`) — drzewo CZYSTE
 
 `WU-01` jest ukończony, zweryfikowany i **zacommitowany**. Właściciel potwierdził
 commit w trakcie taska dla tego kroku, żeby zmiana zaakceptowanego kontraktu
@@ -128,8 +235,8 @@ f5b3b92 docs(workflow): make task closure leave a self-sufficient repository
 0a47b73 docs(audits): pass RA-021 ...     <- bazowy commit RA-022
 ```
 
-Następny krok: **`WU-02`**, nie powtarzanie `WU-01`. Drzewo jest czyste, więc jeśli
-`git status` pokazuje zmiany, są nowe i nie pochodzą z `WU-01`.
+Następny krok po `WU-01` był **`WU-02`** — wykonany, zob. sekcję wyżej. Następny
+krok teraz: **`WU-03`** (deterministyczny evaluator R0–R4 + kill-switch snapshot).
 
 ## Stan wykonania — `WU-01` zamknięty (`2026-08-21`)
 
