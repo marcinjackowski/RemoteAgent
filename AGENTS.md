@@ -147,10 +147,47 @@ notatnikiem: każdy otwarty MEDIUM blokuje końcowe `PASS` projektu.
 
 ## Zakazy wymagające zgody właściciela
 
-- `git commit` — tylko po jawnym potwierdzeniu właściciela.
+- `git commit` — tylko po jawnym potwierdzeniu właściciela. **Wyjątek stały
+  (`2026-08-21`): domknięcie taska.** Właściciel udzielił trwałej zgody na commit
+  przy zamknięciu taska — zob. „Domknięcie taska". Nie rozciąga się to na
+  commity w trakcie taska ani na `push`.
 - `git push`, tworzenie MR/PR, merge — nigdy bez jawnego potwierdzenia.
 - Zmiana albo tranzycja ticketów (Jira, Linear) — nigdy bez potwierdzenia.
 - Wysłanie czegokolwiek na zewnątrz (Slack, mail) — najpierw draft.
+
+## Domknięcie taska — przygotowanie do `/clear`
+
+Właściciel pracuje w cyklu: **jeden task → `/clear` → `continue`**. Historia chatu
+znika po każdym tasku, więc domknięcie taska musi zostawić repozytorium w stanie,
+z którego następna sesja odtworzy WSZYSTKO bez pytania. Ustalone `2026-08-21`.
+
+Zanim ogłosisz task zamkniętym, wykonaj w tej kolejności:
+
+1. **Uruchom pełną bramkę taska** i zapisz w audycie komendę, exit code oraz
+   liczbę przebiegów (nie „testy przechodzą").
+2. **Napisz audyt** `docs/audits/<TASK_ID>/AUDIT-NN.md` z dokładnie jednym
+   werdyktem w linii `- Werdykt: \`PASS\`` — `workflow:validate` odrzuca dwa.
+3. **Napisz handoff** `docs/handoffs/<TASK_ID>/HANDOFF-NN.md`. Dla statusu `DONE`
+   handoff jest wymagany przez `workflow:validate`.
+4. **Zaktualizuj `docs/tasks/TASK_INDEX.md`**: task na `DONE`, a każdy task, którego
+   ostatnia zależność właśnie się domknęła, z `BLOCKED_BY_DEPENDENCIES` na `READY`.
+   `workflow:validate` to wymusza — nie zgaduj, uruchom go.
+5. **Zapisz w planie taska ustalenia, których nie ma w kodzie**: decyzje
+   projektowe i ich powody, mutacje, które przeżyły, ślepe uliczki, oraz wejściowe
+   ustalenia dla następnego taska. To jedyny nośnik pamięci między sesjami.
+6. **Zaktualizuj `docs/audits/CROSS_TASK_FINDINGS.md`** — nowe findingi
+   przekrojowe i korekty istniejących.
+7. **Uruchom `pnpm workflow:validate`** i doprowadź do `OK`.
+8. **Zacommituj** — właściciel udzielił na to trwałej zgody dla domknięcia taska.
+   Podziel na logiczne commity (zwykle: implementacja, potem `docs`), nigdy jeden
+   commit „wszystko". `push`, MR i merge **nadal wymagają osobnej zgody**.
+9. **Zostaw czyste drzewo.** Jeżeli z jakiegoś powodu coś zostaje
+   niezacommitowane, opisz to jawnie w planie taska jako zamierzone, z listą
+   ścieżek — inaczej następna sesja nie wie, czy to praca, czy śmieć.
+
+Jeżeli pauza wypada **w środku** taska, punkty 5, 7 i 9 obowiązują tak samo:
+oznacz ukończone units jako `DONE` z wynikiem bramki, zapisz następny krok i
+opisz brudne drzewo. Nie commituj pracy częściowej bez pytania.
 
 ## Ciągły przebieg i `continue`
 

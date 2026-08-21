@@ -53,8 +53,22 @@ Historia chatu może być pusta. Repozytorium jest źródłem prawdy dla stanu p
 
 ## Zgoda właściciela
 
-`git commit` wymaga jawnego potwierdzenia. `git push`, MR/PR, merge oraz zmiany
-ticketów — nigdy bez potwierdzenia.
+`git commit` wymaga jawnego potwierdzenia — **z jednym trwałym wyjątkiem: commit
+przy domknięciu taska**, na który właściciel zgodził się `2026-08-21`. `git push`,
+MR/PR, merge oraz zmiany ticketów — nigdy bez potwierdzenia.
+
+## Cykl pracy: task → `/clear` → `continue`
+
+Właściciel robi `/clear` po każdym ukończonym tasku, więc historia chatu znika
+regularnie. Domknięcie taska musi zostawić repozytorium samowystarczalnym:
+bramka uruchomiona, audyt i handoff napisane, `TASK_INDEX.md` zaktualizowany
+(łącznie z odblokowaniem następnych tasków), ustalenia i ślepe uliczki zapisane w
+planie taska, `workflow:validate` na `OK`, zacommitowane w logicznych commitach,
+czyste drzewo.
+
+Pełny, obowiązujący protokół jest w `AGENTS.md`, sekcja **„Domknięcie taska —
+przygotowanie do `/clear`"**. Stosuj go co do punktu, także przy pauzie w środku
+taska (wtedy bez commitu pracy częściowej).
 
 ## MCP
 
