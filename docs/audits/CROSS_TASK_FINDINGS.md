@@ -35,6 +35,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-007` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15`; miał za sobą realny defekt produkcyjny |
 | `CTF-011` | LOW | **ZAMKNIĘTY dla RA-018** — wzorzec otwarty | bramka mogła przejść na starym buildzie |
 | `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
+| `CTF-012` | LOW | OTWARTY — niezdiagnozowany | flake `recovery.integration`, ~2/13 pełnych przebiegów |
 | `CTF-010` | LOW | **ADRESOWANY procesowo** (ADR-0007) | wzorzec: komentarz != zachowanie; 5 defektów HIGH |
 | `CTF-009` | LOW | OTWARTY — mechanizm domknięty w RA-012 | `isForbiddenPath` nie zna plików instrukcji; RA-015/RA-021 |
 
@@ -739,3 +740,62 @@ lecz **nazwa i lokalizacja testu** obiecywały weryfikację obecnego kodu, a mec
 jej nie dawał. Wniosek praktyczny, obowiązujący od teraz: **każda mutacja w pakiecie
 konsumowanym przez `test/**` musi być poprzedzona przebudowaniem tego pakietu**,
 inaczej wynik mutation testingu jest bez wartości.
+
+---
+
+## `CTF-012` — niedeterministyczny fail `recovery.integration` w pełnym przebiegu
+
+- Severity: **LOW**
+- Wykryty: `2026-08-21`, podczas bramki RA-019
+- Dotyczy: `packages/workspace-runner/test/recovery.integration.test.ts`, test
+  „keeps DB connection available for restart/kill-point matrix"
+- Status: **OTWARTY** — nie zdiagnozowany, nie naprawiony
+
+### Dowód
+
+Zmierzone w pełnych przebiegach repozytorium, po domknięciu `CTF-003` i `CTF-007`:
+
+```text
+przebieg A: 1418/1419  (1 failed)
+przebieg B: 1419/1419
+przebieg C: 1418/1419  (1 failed)
+przebiegi D–M: 1419/1419  (dziesięć z rzędu)
+solo:       5/5
+```
+
+Czyli: **2 faile na 13 pełnych przebiegów**, zero faili solo, zero faili w dziesięciu
+kolejnych przebiegach po tych dwóch. Nie udało mi się przechwycić komunikatu błędu —
+sześć celowych prób reprodukcji z pełnym reporterem wyszło zielono.
+
+### Dlaczego to zapisuję jako otwarte, a nie jako „naprawione"
+
+To jest **inny** test niż flake z `CTF-003` (tam `process-runner`, timeout race) i
+inny objaw niż `CTF-007` (tam unhandled `57P01` przy `Errors`, tu prawdziwy fail
+asercji bez `Errors`). Oba tamte są domknięte i potwierdzone; ten jest nowy.
+
+Nie mam diagnozy, więc nie mam prawa twierdzić, że jest nieszkodliwy. Nazwa testu
+dotyczy dostępności połączenia DB przy macierzy restart/kill — czyli obszaru, w
+którym `CTF-007` ujawnił realny defekt produkcyjny (brak `pool.on("error")`).
+Możliwe, choć niepotwierdzone, że to pozostałość tej samej klasy: rywalizacja o
+połączenia między workerami vitest przy równoległych suite'ach integracyjnych.
+
+### Wpływ
+
+Bramka „całe repo zielone" jest ponownie niestabilna, na poziomie ~15% przebiegów.
+`RA-018` i `RA-026` opierają na niej dowodowość, więc to obniża wartość każdego
+pojedynczego zielonego przebiegu — dokładnie ten mechanizm opisuje `CTF-003`.
+
+**Nie blokuje RA-019 ani RA-020:** dotyczy pakietu `workspace-runner`, którego te
+taski nie zmieniają, a ich własne suite są zielone solo i w pełnym przebiegu.
+
+### Wymagana zmiana
+
+Najpierw **diagnoza**, nie poprawka. Konkretnie: uruchomić pełny przebieg z
+`--reporter=verbose` i zachowanym outputem w pętli do przechwycenia komunikatu, oraz
+sprawdzić, czy test dzieli pulę połączeń z innym suite'em integracyjnym startującym w
+tym samym momencie. Poprawka „na wyczucie" w teście, którego trybu awarii nie znam,
+byłaby dokładnie tym wzorcem, który ten projekt trzykrotnie ukarał (`CTF-010`).
+
+Właściciel: task dotykający `workspace-runner` albo osobny unit przed `RA-026`, bo
+`RA-026` AC wymaga stabilnej bramki. Do tego czasu każdy raport pełnego przebiegu
+powinien podawać liczbę przebiegów, nie tylko wynik jednego.

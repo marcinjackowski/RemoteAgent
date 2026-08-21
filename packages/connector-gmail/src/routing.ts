@@ -154,7 +154,8 @@ export async function fetchGmailBody(options: GmailFetchOptions): Promise<GmailB
 
   // Redact BEFORE bounding and before anything is carried, so no unredacted byte
   // reaches a caller, a log or a store.
-  const redacted = redactCommandOutput(fetched.body, options.knownSecrets ?? []);
+  const knownSecrets = options.knownSecrets ?? [];
+  const redacted = redactCommandOutput(fetched.body, knownSecrets);
   const originalByteLength = byteLength(redacted);
   const carried = clipToBytes(redacted, policy.max_body_bytes);
 
@@ -167,7 +168,12 @@ export async function fetchGmailBody(options: GmailFetchOptions): Promise<GmailB
         attachment.content !== undefined &&
         attachment.sizeBytes <= policy.max_attachment_bytes;
       return {
-        filename: attachment.filename,
+        // The FILENAME is redacted too. Found by an audit probe: an attachment named
+        // `glpat-....txt` carried the token verbatim into the record even though the
+        // body was clean and the content was never read. A filename is
+        // sender-controlled text like any other, and "we only kept metadata" is not
+        // a reason to treat it as safe.
+        filename: redactCommandOutput(attachment.filename, knownSecrets),
         mime_type: attachment.mimeType,
         size_bytes: attachment.sizeBytes,
         content_digest: permitted ? await sha256(attachment.content ?? "") : null,

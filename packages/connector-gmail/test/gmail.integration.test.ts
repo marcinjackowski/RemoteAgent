@@ -375,6 +375,56 @@ describe("gmail two-account connector", () => {
       expect(outcome.cursor.history_id).toBe("500");
     });
 
+    it("bounds the dedup set so a long-running engine does not leak", async () => {
+      // Found by an audit probe: the per-account set had no eviction, and this engine
+      // is meant to run for weeks. Bounding it is safe because the forward-only
+      // cursor is the primary defence — a key only needs to outlive Gmail's
+      // overlapping windows and a crash-replay, both of which are recent.
+      const cursors = new InMemoryGmailCursorStore();
+      await cursors.write({
+        schema_version: 1,
+        account_alias: GmailAccountAlias.PRIVATE,
+        history_id: "0",
+        updated_at_ms: NOW,
+      });
+      let round = 0;
+      const api: GmailApi = {
+        listHistory: async () => {
+          round += 1;
+          return {
+            entries: [entry({ history_id: String(round), message_id: `m-${String(round)}` })],
+            latestHistoryId: String(round),
+          };
+        },
+        listRecentMessages: async () => ({ entries: [], latestHistoryId: "0" }),
+        registerWatch: async () => ({ expiresAtMs: NOW + 90_000_000, startHistoryId: "0" }),
+      };
+      const engine = new GmailSyncEngine({ api, cursors, now: () => NOW, seenLimit: 5 });
+      const account = registry().resolve(GmailAccountAlias.PRIVATE);
+
+      // Twenty distinct changes through a set bounded at five.
+      for (let index = 0; index < 20; index += 1) {
+        const outcome = await engine.handleNotification({
+          account,
+          notifiedHistoryId: String(index + 100),
+        });
+        // Each is genuinely new, so each must still be emitted — eviction must not
+        // suppress a real change.
+        expect(outcome.changes).toHaveLength(1);
+      }
+
+      // And the most recent keys still deduplicate, which is what the set is for.
+      await cursors.write({
+        schema_version: 1,
+        account_alias: GmailAccountAlias.PRIVATE,
+        history_id: "0",
+        updated_at_ms: NOW,
+      });
+      round -= 1;
+      const replay = await engine.handleNotification({ account, notifiedHistoryId: "500" });
+      expect(replay.changes).toHaveLength(0);
+    });
+
     it("never moves the cursor backwards, even from an API response", async () => {
       const cursors = await seeded();
       // A response whose latest id is BEHIND the stored cursor: a rewind would
@@ -702,6 +752,30 @@ describe("gmail two-account connector", () => {
       expect(record.body.truncated).toBe(true);
       expect(record.body.value.length).toBe(100);
       expect(record.body.original_byte_length).toBe(5_000);
+    });
+
+    it("redacts a secret hidden in an attachment FILENAME", async () => {
+      // Found by an audit probe: the body was clean and the content was never read,
+      // yet the filename carried the token verbatim into the record. A filename is
+      // sender-controlled text, and "we only kept metadata" is not a reason to treat
+      // it as safe.
+      const account = registry().resolve(GmailAccountAlias.PRIVATE);
+      const { api } = contentApi("clean body", [
+        { filename: `${SECRET}.txt`, mimeType: "text/plain", sizeBytes: 5 },
+        { filename: "/Users/victim/secrets.pdf", mimeType: "application/pdf", sizeBytes: 9 },
+      ]);
+
+      const record = await fetchGmailBody({
+        api,
+        account,
+        message: summary(account),
+        purpose: "CASE_CONTEXT",
+        knownSecrets: [SECRET],
+      });
+
+      const serialized = JSON.stringify(record);
+      expect(serialized).not.toContain(SECRET);
+      expect(serialized).not.toContain("/Users/victim");
     });
 
     it("refuses to fetch a message belonging to the other account", async () => {

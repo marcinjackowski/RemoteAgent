@@ -157,6 +157,14 @@ export type GmailSyncEngineOptions = Readonly<{
   now?: () => number;
   /** Bound on a resync listing. */
   resyncLimit?: number;
+  /**
+   * Bound on the per-account dedup set. Defaults to 10_000 keys.
+   *
+   * Bounded on purpose: the engine runs for weeks, and an unbounded set is a slow
+   * memory leak. Safe because the forward-only cursor is the primary defence; keys
+   * only need to outlive Gmail's overlapping windows and a crash-replay.
+   */
+  seenLimit?: number;
 }>;
 
 /** Stable identity of one emitted change, for deduplication. */
@@ -169,6 +177,7 @@ export class GmailSyncEngine {
   readonly #cursors: GmailCursorStore;
   readonly #now: () => number;
   readonly #resyncLimit: number;
+  readonly #seenLimit: number;
   /** Emitted change keys, per account. Never shared between accounts. */
   readonly #seen = new Map<GmailAccountAlias, Set<string>>();
 
@@ -177,6 +186,7 @@ export class GmailSyncEngine {
     this.#cursors = options.cursors;
     this.#now = options.now ?? (() => Date.now());
     this.#resyncLimit = options.resyncLimit ?? 100;
+    this.#seenLimit = options.seenLimit ?? 10_000;
   }
 
   #seenFor(alias: GmailAccountAlias): Set<string> {
@@ -185,6 +195,30 @@ export class GmailSyncEngine {
     const created = new Set<string>();
     this.#seen.set(alias, created);
     return created;
+  }
+
+  /**
+   * Evict the oldest dedup keys once an account's set exceeds its bound.
+   *
+   * The set had no eviction, which an audit probe flagged: this engine is meant to
+   * run for weeks, so an unbounded per-account set is a slow memory leak. Bounding
+   * it is safe because the cursor is the primary defence — a key only needs to
+   * survive long enough to catch Gmail's OVERLAPPING history windows and a
+   * crash-replay at the same cursor, both of which are recent by nature. An ancient
+   * key can be forgotten because the forward-only cursor already prevents replaying
+   * that far back.
+   *
+   * Insertion order is preserved by `Set`, so the oldest keys are simply the first.
+   */
+  #evict(seen: Set<string>): void {
+    if (seen.size <= this.#seenLimit) return;
+    const excess = seen.size - this.#seenLimit;
+    let removed = 0;
+    for (const key of seen) {
+      seen.delete(key);
+      removed += 1;
+      if (removed >= excess) break;
+    }
   }
 
   /** Convert a raw history entry into an account-pinned, untrusted summary. */
@@ -313,6 +347,8 @@ export class GmailSyncEngine {
       seen.add(key);
       changes.push(summary);
     }
+
+    this.#evict(seen);
 
     const stored = await this.#cursors.read(account.alias);
     // Forward-only: a resync or an overlapping window must never move the cursor
