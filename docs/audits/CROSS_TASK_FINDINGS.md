@@ -27,13 +27,13 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | ID | Severity | Status | Domknięcie zaplanowane w |
 |---|---|---|---|
 | `CTF-001` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-023 | `RA-023-WU-00`; jedna definicja w `contracts` |
-| `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte; RA-022 dodał dowód, że sonda wartościowa NIE wystarcza | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty i **pilniejszy** |
+| `CTF-002` | LOW | **CZĘŚCIOWO** — nazwy `accept` (nieosiągalne), mechanizm `defer` jako `CTF-002-U1`; uzgodnione z treścią wpisu w RA-026 | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty i **pilniejszy** |
 | `CTF-005` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-022 | migracje `029`+`030`, fencing w `WU-02` |
 | `CTF-006` | HIGH | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | `RA-024-WU-01`; jedna tabela w `observability`, trzy konsumenty |
 | `CTF-003` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15` |
 | `CTF-004` | LOW | **CZĘŚCIOWO** — połowa src-vs-dist rozstrzygnięta w RA-024 | `tsconfig.test.json` dla 6 pakietów nadal otwarte |
 | `CTF-007` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15`; miał za sobą realny defekt produkcyjny |
-| `CTF-011` | LOW | **ZAMKNIĘTY dla RA-018** — wzorzec otwarty | bramka mogła przejść na starym buildzie |
+| `CTF-011` | LOW | **CZĘŚCIOWO** — mechanizm domknięty dla RA-018, wzorzec OTWARTY (decyzja `defer`) | bramka mogła przejść na starym buildzie |
 | `CTF-008` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | `RA-024-WU-00`; `argsIgnorePattern` + dwie poprawki |
 | `CTF-012` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | zdiagnozowany: `ON CONFLICT` pokrywał jeden z dwóch unique constraintów |
 | `CTF-010` | LOW | **ADRESOWANY procesowo** (ADR-0007) | wzorzec: komentarz != zachowanie; 5 defektów HIGH |
@@ -146,7 +146,7 @@ nieodróżnialny od bazowego w każdej linii logu i każdym branchu po `name`. N
 
 ## `CTF-002` — ESM cicho usuwa niejednoznaczne nazwy z `export *`
 
-- Severity: **MEDIUM** (mechanizm), **LOW** obecnie (nieosiągalne)
+- Severity: **LOW** (uzgodnione `2026-08-22` w RA-026 — patrz „Uzgodnienie severity")
 - Wykryty: `2026-08-20`, podczas planowania dalszych units RA-012
 - Dotyczy: wszystkich pakietów z barrelem `export *`
 - Status: **CZĘŚCIOWO ADRESOWANY** — dla RA-012 przez `RA-012-WU-01B`
@@ -236,6 +236,30 @@ metod.
    dotykającym infrastruktury testowej; do jego wykonania obowiązuje sonda ręczna
    w final task gate (wpisana do planów DRAFT RA-013, RA-014, RA-015, RA-017).
 3. `packageName` i `CTF-001` — osobne, drobne unity w odpowiednich taskach.
+
+### Uzgodnienie severity (`2026-08-22`, RA-026)
+
+Tabela zbiorcza mówiła `MEDIUM`, a **treść tego samego wpisu** — „**MEDIUM**
+(mechanizm), **LOW** obecnie (nieosiągalne)". Dwie wartości dla jednego findingu, i
+`RA-026` AC2 blokuje na `MEDIUM`. Wykryte **testem** (`test/acceptance`), nie
+odczytem.
+
+Uzgodnione na `LOW`, i to nie jest obniżenie dla przejścia bramki — trzy powody,
+każdy sprawdzalny:
+
+1. **Nieosiągalność jest zmierzona, nie założona.** Nie ma wspólnego barrela nad
+   wieloma pakietami, a skan konsumentów importujących kolidującą parę jest pusty
+   (powtórzony w bramce RA-025).
+2. **`CTF-015` dostał `LOW` na identycznej podstawie.** Sześć nowych kolizji
+   type-level, ta sama analiza osiągalności, ocena `LOW` w RA-024. Trzymanie
+   `CTF-002` na `MEDIUM` przy `CTF-015` na `LOW` byłoby niespójnością, nie ostrożnością.
+3. **Mechanizm zostaje otwarty jako `defer`**, nie zniknął. `CTF-002-U1` (guardrail
+   na type-checkerze) jest nadal wymagany i **pilniejszy** niż przy pierwszym zapisie:
+   RA-025 pokazał, że ręczna sonda type-level jest jedyną rzeczą, która kiedykolwiek
+   wyłapała tę klasę, i uruchamia się tylko wtedy, gdy plan o niej pamięta.
+
+Co **nie** zostało zrobione: guardrail. Zapisane jako decyzja `defer` z ownerem w
+`scripts/acceptance/criteria.ts`, nie jako domknięcie.
 
 ---
 
@@ -923,6 +947,18 @@ lecz **nazwa i lokalizacja testu** obiecywały weryfikację obecnego kodu, a mec
 jej nie dawał. Wniosek praktyczny, obowiązujący od teraz: **każda mutacja w pakiecie
 konsumowanym przez `test/**` musi być poprzedzona przebudowaniem tego pakietu**,
 inaczej wynik mutation testingu jest bez wartości.
+
+### Uzgodnienie statusu (`2026-08-22`, RA-026)
+
+Status brzmiał „**ZAMKNIĘTY dla RA-018** — wzorzec otwarty", co parser rejestru
+odczytuje jako **zamknięty**, a treść wpisu mówi wprost, że wzorzec jest otwarty i
+obowiązuje dla każdej nowej suite w `test/**`.
+
+Zmienione na `CZĘŚCIOWO`, żeby jedna wartość nie znaczyła dwóch rzeczy. Powód nie jest
+formalny: RA-024 i RA-025 dodały **pięć** nowych suite w `test/**` i żadna nie
+skopiowała `assertPackagesAreCurrent` — opierały się na dyscyplinie, dokładnie tak jak
+ten wpis ostrzegał. Decyzja `defer`, razem z `CTF-002-U1`, bo oba są „guardrail zamiast
+zapamiętanej dyscypliny" i oba należą do `test/guardrails/`.
 
 ---
 

@@ -52,7 +52,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 23 | [RA-023](RA-023.md) AgentCore Gateway and official MCP targets | DONE | RA-010, RA-016, RA-021, RA-022 | M5 |
 | 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | DONE | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
 | 25 | [RA-025](RA-025.md) AWS deployment and disaster recovery | DONE | RA-024 | M6 |
-| 26 | [RA-026](RA-026.md) Final acceptance and production readiness | READY | RA-025 | M6 |
+| 26 | [RA-026](RA-026.md) Final acceptance and production readiness | DONE | RA-025 | M6 |
 
 ## Milestone gates
 
@@ -84,7 +84,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-023 work units](../work-units/RA-023/WORK_UNITS.md) — `DRAFT`
 - [RA-024 work units](../work-units/RA-024/WORK_UNITS.md)
 - [RA-025 work units](../work-units/RA-025/WORK_UNITS.md)
-- [RA-026 work units](../work-units/RA-026/WORK_UNITS.md) — `DRAFT`
+- [RA-026 work units](../work-units/RA-026/WORK_UNITS.md)
 - [RA-016 work units](../work-units/RA-016/WORK_UNITS.md)
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
