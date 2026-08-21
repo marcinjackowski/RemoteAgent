@@ -456,14 +456,19 @@ describeIntegration(
         expect(await tableExists()).toBe(true);
         expect(await constraintExists()).toBe(true);
 
+        // Migrating down to 26 necessarily reverts EVERY migration above 26, so
+        // this asserts that 027 was among them rather than that it was the only
+        // one. Exact list equality made the test a tripwire on the migration
+        // counter: adding migration 028 (RA-021) broke it while 027's
+        // reversibility — the thing under test — was unaffected.
         const down = await migrateDown(created.db, { to: 26 });
-        expect(down.reverted).toEqual([27]);
+        expect(down.reverted).toContain(27);
         // Both objects 027 created are gone: the revert is complete, not partial.
         expect(await tableExists()).toBe(false);
         expect(await constraintExists()).toBe(false);
 
         const up = await migrateUp(created.db);
-        expect(up.applied).toEqual([27]);
+        expect(up.applied).toContain(27);
         expect(await tableExists()).toBe(true);
         expect(await constraintExists()).toBe(true);
       } finally {

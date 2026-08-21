@@ -1,0 +1,24 @@
+{
+  // Typechecks `src` plus the NON-integration specs.
+  //
+  // The integration specs are excluded, and the reason is `CTF-004` rather than
+  // convenience: they import `packages/database/test/harness.ts`, which pulls
+  // `@remoteagent/database` in through `src`, while the spec's own
+  // `@remoteagent/database` import resolves through `node_modules` to `dist`. The
+  // two `Database` classes are structurally different (a private `pool` field), so
+  // `tsc` reports a genuine type conflict that is a property of the repository's
+  // src-vs-dist setup, not of this package's code.
+  //
+  // `CTF-004` records this explicitly: the six packages missing a
+  // `tsconfig.test.json` are exactly the ones using the DB harness, and closing the
+  // finding requires resolving src-vs-dist in its own unit — "inaczej nowo objęte
+  // pakiety od razu zaświecą się na czerwono". Adding the file with the integration
+  // specs excluded is strictly more coverage than the four existing harness
+  // packages have (their unit specs are typechecked by nothing), without claiming
+  // to have closed the finding. The integration specs are still typechecked at
+  // runtime by vitest's own transform, and their behaviour is covered by the gate.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "rootDir": ".", "types": ["node"] },
+  "include": ["src", "test"],
+  "exclude": ["test/**/*.integration.test.ts"]
+}
