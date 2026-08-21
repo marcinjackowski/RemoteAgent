@@ -29,6 +29,8 @@
     "@remoteagent/database": "workspace:*",
     "@remoteagent/git-lifecycle": "workspace:*",
     "@remoteagent/implementation-tools": "workspace:*",
+    "@remoteagent/observability": "workspace:*",
+    "@remoteagent/policy": "workspace:*",
     "@remoteagent/review-loop": "workspace:*",
     "@remoteagent/test-evidence": "workspace:*",
     "@types/node": "24.13.3",

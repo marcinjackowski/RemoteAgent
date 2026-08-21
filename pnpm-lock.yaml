@@ -23,6 +23,12 @@ importers:
       '@remoteagent/implementation-tools':
         specifier: workspace:*
         version: link:packages/implementation-tools
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:packages/observability
+      '@remoteagent/policy':
+        specifier: workspace:*
+        version: link:packages/policy
       '@remoteagent/review-loop':
         specifier: workspace:*
         version: link:packages/review-loop
