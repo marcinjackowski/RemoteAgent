@@ -428,8 +428,10 @@ describe("Approval", () => {
       schema_version: CURRENT_SCHEMA_VERSION,
       approval_id: "ap-1",
       case_id: "c-1",
+      owner_id: "owner",
       granted_by: "owner",
       action_digest: `sha256:${"a".repeat(64)}`,
+      checkpoint_revision: 3,
       granted_at: "2026-01-01T00:00:00Z",
       expires_at: "2026-01-01T01:00:00Z",
     });
@@ -442,8 +444,10 @@ describe("Approval", () => {
         schema_version: CURRENT_SCHEMA_VERSION,
         approval_id: "ap-1",
         case_id: "c-1",
+        owner_id: "owner",
         granted_by: "owner",
         action_digest: "*",
+        checkpoint_revision: 3,
         granted_at: "2026-01-01T00:00:00Z",
         expires_at: "2026-01-01T01:00:00Z",
       }).success,
@@ -454,11 +458,49 @@ describe("Approval", () => {
     schema_version: CURRENT_SCHEMA_VERSION,
     approval_id: "ap-1",
     case_id: "c-1",
+    owner_id: "owner",
     granted_by: "owner",
     action_digest: `sha256:${"a".repeat(64)}`,
+    checkpoint_revision: 3,
     granted_at: "2026-01-01T00:00:00Z",
     expires_at: "2026-01-01T01:00:00Z",
   };
+
+  // RA-022: an approval pins the CONTEXT as well as the payload. `action_digest`
+  // makes "one parameter changed" invalidating; `checkpoint_revision` makes "the
+  // facts the owner agreed under changed" invalidating. Both are required, and
+  // neither substitutes for the other (`CTF-005`).
+  it("requires a checkpoint revision and an owner scope", () => {
+    for (const field of ["checkpoint_revision", "owner_id"]) {
+      const incomplete: Record<string, unknown> = { ...validGrant };
+      delete incomplete[field];
+      expect(approval.safeParse(incomplete).success, field).toBe(false);
+    }
+  });
+
+  it("rejects a fresh grant carrying the invalidation sentinel", () => {
+    // Migration 029 marks pre-existing unconsumed approvals consumed and stamps
+    // them -1. A NEW grant at a negative revision would look like an approval and
+    // be permanently unconsumable, which means the sentinel leaked into the grant
+    // path. Mirrors the `approvals_revision_valid` CHECK so schema and contract
+    // agree rather than one trusting the other.
+    expect(approval.safeParse({ ...validGrant, checkpoint_revision: -1 }).success).toBe(false);
+    expect(
+      approval.safeParse({
+        ...validGrant,
+        checkpoint_revision: -1,
+        consumed: true,
+        consumed_at: "2026-01-01T00:30:00Z",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts revision 0, which is a real revision for a fresh case", () => {
+    // Zero must NOT be treated as "unset": a case that has just been created is at
+    // revision 0, and an approval granted there is legitimate. This is why the
+    // backfill uses -1 rather than 0 as its sentinel.
+    expect(approval.safeParse({ ...validGrant, checkpoint_revision: 0 }).success).toBe(true);
+  });
 
   it("consumed=true requires consumed_at (coherent consumed variant)", () => {
     expect(approval.safeParse({ ...validGrant, consumed: true }).success).toBe(false);

@@ -277,8 +277,9 @@ describeIntegration(
       await seedCasesAndRun();
       const digest = `sha256:${"3".repeat(64)}`;
       await db.query(
-        `INSERT INTO approvals (approval_id, case_id, granted_by, action_digest, expires_at)
-         VALUES ('apB','caseB','owner',$1, now() + interval '1 hour')`,
+        `INSERT INTO approvals (approval_id, case_id, owner_id, granted_by,
+           action_digest, checkpoint_revision, expires_at)
+         VALUES ('apB','caseB','B','owner',$1, 0, now() + interval '1 hour')`,
         [digest],
       );
       const err = await attempt(() =>
@@ -680,8 +681,9 @@ describeIntegration(
       await seedCasesAndRun();
       const digestA = `sha256:${"a".repeat(64)}`;
       await db.query(
-        `INSERT INTO approvals (approval_id, case_id, granted_by, action_digest, expires_at)
-         VALUES ('apA','caseA','owner',$1, now() + interval '1 hour')`,
+        `INSERT INTO approvals (approval_id, case_id, owner_id, granted_by,
+           action_digest, checkpoint_revision, expires_at)
+         VALUES ('apA','caseA','A','owner',$1, 0, now() + interval '1 hour')`,
         [digestA],
       );
       const err = await attempt(() =>
@@ -700,8 +702,9 @@ describeIntegration(
       await seedCasesAndRun();
       const digestA = `sha256:${"a".repeat(64)}`;
       await db.query(
-        `INSERT INTO approvals (approval_id, case_id, granted_by, action_digest, expires_at)
-         VALUES ('apA','caseA','owner',$1, now() + interval '1 hour')`,
+        `INSERT INTO approvals (approval_id, case_id, owner_id, granted_by,
+           action_digest, checkpoint_revision, expires_at)
+         VALUES ('apA','caseA','A','owner',$1, 0, now() + interval '1 hour')`,
         [digestA],
       );
       const ok = await db.query(

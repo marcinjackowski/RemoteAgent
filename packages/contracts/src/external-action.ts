@@ -62,16 +62,55 @@ const jsonValue: z.ZodType = z.lazy(() =>
 export const approval = versionedContract({
   approval_id: idString,
   case_id: idString,
+  /**
+   * Authoritative owner scope of the grant.
+   *
+   * Distinct from `granted_by` on purpose: that field records WHO clicked, which
+   * is an audit fact, while this one is what a consumption attempt is fenced on.
+   * They are equal in the normal case and must not be conflated — an actor id is
+   * not a scope, and fencing on the actor would make the guarantee depend on the
+   * grant path rather than on the case's ownership (RA-022, `CTF-005`).
+   */
+  owner_id: idString,
   /** The owner who granted it; approvals are owner-scoped. */
   granted_by: idString,
   /** Exact action digest this approval authorizes — no wildcard. */
   action_digest: actionDigest,
+  /**
+   * The case checkpoint revision this grant was made against.
+   *
+   * `action_digest` pins the PAYLOAD; this pins the CONTEXT. Without it an approval
+   * granted while the case was at revision N stayed formally valid after the case
+   * moved to N+1, so an executor could perform an action the owner agreed to under
+   * facts that had since changed. That is the TOCTOU in this task's audit focus and
+   * the substance of `CTF-005`.
+   *
+   * A negative value is reserved for rows the RA-022 backfill invalidated (see
+   * migration 029): it can never equal a live `cases.checkpoint_revision`, which is
+   * non-negative, so a stale grant fails a revision comparison even if the
+   * single-use fence were bypassed.
+   */
+  checkpoint_revision: z.int(),
   granted_at: isoTimestamp,
   expires_at: isoTimestamp,
   /** True once the single-use grant has been consumed. */
   consumed: z.boolean().default(false),
   consumed_at: isoTimestamp.optional(),
 }).superRefine((value, ctx) => {
+  // A grant at a negative revision is only representable as an already-invalidated
+  // row. Minting a FRESH grant carrying the sentinel would produce something that
+  // looks like an approval and can never be consumed, which is a confusing state to
+  // debug; more importantly it would mean the sentinel had leaked into the grant
+  // path. Mirrors the `approvals_revision_valid` CHECK in migration 029, so the
+  // contract and the schema agree rather than one relying on the other.
+  if (value.checkpoint_revision < 0 && !value.consumed) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["checkpoint_revision"],
+      message: "an unconsumed approval must carry a non-negative checkpoint_revision",
+    });
+  }
+
   // A single-use grant must model only coherent consumed/unconsumed variants so
   // recovery can safely decide whether the grant may still be used:
   //   consumed === true   ⟺  consumed_at is present
