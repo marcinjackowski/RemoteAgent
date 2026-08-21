@@ -344,6 +344,35 @@ describe("calendar two-account connector", () => {
       }
     });
 
+    it("refuses an AMBIGUOUS channel id rather than picking the first match", () => {
+      // Found by an audit probe. With two registered channels sharing a channel id,
+      // the old `find` returned whichever was listed first — so a work-account
+      // notification could resolve to the PRIVATE collection and route a work event
+      // to the private Discord channel. Google's ids are unique in practice, so more
+      // than one match means our records are corrupt or someone is replaying; neither
+      // is a case to guess through.
+      const reg = registry();
+      const priv = reg.resolve(CalendarAccountAlias.PRIVATE, "primary");
+      const work = reg.resolve(CalendarAccountAlias.SONDERMIND, "primary");
+      const colliding = [channel(priv), channel(work)];
+
+      try {
+        verifyCalendarNotification({
+          notification: {
+            channelId: "chan-1",
+            resourceId: "res-1",
+            channelToken: TOKEN,
+            resourceState: "exists",
+          },
+          channels: colliding,
+          registry: reg,
+        });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect((error as { code?: string }).code).toBe(CALENDAR_CHANNEL_UNAUTHENTICATED);
+      }
+    });
+
     it("refuses a stale channel for a de-allowlisted calendar", () => {
       // The channel record is valid, but the calendar is no longer allowlisted. The
       // collection is re-resolved through the registry, so the channel stops working.
@@ -412,6 +441,77 @@ describe("calendar two-account connector", () => {
       // The sync token comes from the LAST page; only it carries one.
       expect(outcome.state.sync_token).toBe("token-end");
       expect(calls.filter((call) => call.method === "listIncremental")).toHaveLength(3);
+    });
+  });
+
+  describe("truncated pagination", () => {
+    it("keeps the OLD token and reports truncation instead of resetting", async () => {
+      // Found by an audit probe: a pagination cut short by `maxPages` left the token
+      // `null`, so the next run did a needless full sync. Keeping the old token is
+      // correct — it still marks the last fully-consumed position, so the next
+      // incremental sync resumes and reads the pages this run never reached. Adopting
+      // a NEW token mid-truncation would be the real bug: it would skip them.
+      const reg = registry();
+      const store = new InMemoryCalendarSyncStore();
+      await store.write({
+        schema_version: 1,
+        account_alias: CalendarAccountAlias.PRIVATE,
+        calendar_id: "primary",
+        sync_token: "resume-here",
+        updated_at_ms: NOW,
+      });
+      let calls = 0;
+      const api: CalendarApi = {
+        listIncremental: async () => {
+          calls += 1;
+          // Never terminates: always another page, and a token that must be ignored.
+          return {
+            events: [apiEvent({ event_id: `e${String(calls)}`, etag: `t${String(calls)}` })],
+            nextPageToken: "more",
+            nextSyncToken: "premature-token",
+          };
+        },
+        listFull: async () => ({ events: [], nextSyncToken: "full" }),
+        createChannel: async () => ({
+          channelId: "c",
+          resourceId: "r",
+          token: TOKEN,
+          expiresAtMs: NOW + 90_000_000,
+        }),
+        stopChannel: async () => undefined,
+      };
+      const engine = new CalendarSyncEngine({ api, store, now: () => NOW, maxPages: 3 });
+
+      const outcome = await engine.sync(reg.resolve(CalendarAccountAlias.PRIVATE, "primary"));
+
+      // Bounded, so a pathological pagination cannot spin forever.
+      expect(outcome.pages).toBe(3);
+      expect(calls).toBe(3);
+      // Truncation is REPORTED, not silent: otherwise it looks like "that was
+      // everything".
+      expect(outcome.truncated).toBe(true);
+      // And the resume point is preserved rather than nulled or advanced.
+      expect(outcome.state.sync_token).toBe("resume-here");
+    });
+
+    it("adopts the new token when the sequence genuinely completes", async () => {
+      const reg = registry();
+      const store = new InMemoryCalendarSyncStore();
+      await store.write({
+        schema_version: 1,
+        account_alias: CalendarAccountAlias.PRIVATE,
+        calendar_id: "primary",
+        sync_token: "old",
+        updated_at_ms: NOW,
+      });
+      const { api } = fakeApi({
+        pages: [{ events: [apiEvent()], nextSyncToken: "properly-finished" }],
+      });
+      const engine = new CalendarSyncEngine({ api, store, now: () => NOW, maxPages: 3 });
+
+      const outcome = await engine.sync(reg.resolve(CalendarAccountAlias.PRIVATE, "primary"));
+      expect(outcome.truncated).toBe(false);
+      expect(outcome.state.sync_token).toBe("properly-finished");
     });
   });
 

@@ -174,9 +174,22 @@ export function verifyCalendarNotification(input: {
   const resourceId = notification.resourceId ?? "";
   const token = notification.channelToken ?? "";
 
-  const match = channels.find(
+  const matches = channels.filter(
     (candidate) => candidate.channel_id === channelId && candidate.resource_id === resourceId,
   );
+  // AMBIGUITY IS A REFUSAL, not a first-match-wins. Found by an audit probe: with two
+  // registered channels sharing a channel id, `find` returned whichever was listed
+  // first, so a work-account notification could resolve to the private collection and
+  // route a work event to the private Discord channel. Google's channel ids are
+  // unique in practice, so more than one match means our own records are corrupt or
+  // an attacker is replaying — neither is a case to guess through.
+  if (matches.length > 1) {
+    throw new CalendarConnectorError(
+      CALENDAR_CHANNEL_UNAUTHENTICATED,
+      "calendar notification matched more than one channel",
+    );
+  }
+  const match = matches[0];
   if (match === undefined || token.length === 0 || !secretMatches(token, match.token)) {
     // Deliberately uniform: a caller cannot learn WHICH of the three failed, so a
     // probe cannot enumerate valid channel ids.
@@ -201,6 +214,11 @@ export type CalendarSyncOutcome = Readonly<{
   reset_from: string | null;
   /** Pages fetched, so pagination is observable rather than assumed. */
   pages: number;
+  /**
+   * True when `maxPages` cut the sequence short, so the caller knows more remains.
+   * Silently truncating would look identical to "that was everything".
+   */
+  truncated: boolean;
 }>;
 
 export type CalendarSyncEngineOptions = Readonly<{
@@ -323,9 +341,24 @@ export class CalendarSyncEngine {
     let pageToken: string | undefined;
     let nextSyncToken: string | null = null;
     let pages = 0;
+    /**
+     * True when `maxPages` cut the sequence short.
+     *
+     * This is NOT the same as "the sequence ended": Google issues `nextSyncToken`
+     * only on the final page, so a truncated sync has no new token AND has unread
+     * pages behind it. An audit probe showed the consequence — the token went `null`
+     * and the next run did a needless full sync. Keeping the OLD token is the right
+     * answer: it still points at the last fully-consumed position, so the next
+     * incremental sync resumes and reads the pages this run did not reach. Adopting a
+     * new token here would be the actual bug, because it would skip them.
+     */
+    let truncated = false;
 
     do {
-      if (pages >= this.#maxPages) break;
+      if (pages >= this.#maxPages) {
+        truncated = true;
+        break;
+      }
       const page: CalendarPage =
         syncToken === null
           ? await this.#api.listFull({
@@ -360,10 +393,14 @@ export class CalendarSyncEngine {
       schema_version: 1,
       account_alias: collection.account_alias,
       calendar_id: collection.calendar_id,
-      // Keep the previous token when a page sequence ended without issuing a new one,
-      // rather than nulling it — nulling would force a needless full sync next time.
+      // Keep the PREVIOUS token when this run issued no new one — whether the
+      // sequence ended without a token or `maxPages` truncated it. The old token
+      // still marks the last fully-consumed position, so the next incremental sync
+      // resumes there and reads whatever this run did not reach. Nulling it would
+      // force a needless full sync; adopting a new token mid-truncation would skip
+      // the unread pages outright.
       sync_token:
-        nextSyncToken ??
+        (truncated ? null : nextSyncToken) ??
         (await this.#store.read(collection.account_alias, collection.calendar_id))?.sync_token ??
         null,
       updated_at_ms: this.#now(),
@@ -378,6 +415,7 @@ export class CalendarSyncEngine {
       full_sync: fullSync,
       reset_from: resetFrom,
       pages,
+      truncated,
     });
   }
 
