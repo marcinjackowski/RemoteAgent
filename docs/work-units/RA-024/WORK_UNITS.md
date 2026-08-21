@@ -4,12 +4,35 @@
 
 - Task: `RA-024`
 - Plan revision: `1`
-- Plan owner: `COORDINATOR_AUDITOR`
-- Implementer: `Claude Opus 5 / high / IMPLEMENTER` (zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md))
-- Plan status: `DRAFT` — task jest `BLOCKED_BY_DEPENDENCIES` (RA-018, RA-019,
-  RA-020, RA-021, RA-022, RA-023 niedokończone).
-  Plan nie zmienia statusu taska ani nie omija zależności.
+- Rola: jedna rola wykonawcza (ADR-0007). Nagłówek rewizji `1` wskazywał ADR-0005
+  i rozdział koordynator/implementer — **to jest historyczne i nie obowiązuje**.
+- Plan status: `DRAFT`, ale task jest **`READY`** — wszystkie zależności `DONE`
+  (RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 domknięte `2026-08-21`).
+  Plan wymaga rewizji przy starcie: powstał `2026-08-20`, przed RA-021/022/023.
 - Base commit/tree: do zapisania przy starcie
+
+## Co zmieniło się od napisania tego planu (`2026-08-21`)
+
+Przeczytaj to przed rewizją planu — trzy ustalenia są nieaktualne:
+
+1. **`CTF-001` jest ZAMKNIĘTY** (RA-023-WU-00). Klasy `CredentialRefresh*Error` i
+   `RefreshIntentStatus` mają jedną definicję w `packages/contracts`. Jeżeli
+   którykolwiek unit zakłada duplikat — jest nieaktualny.
+2. **`CTF-006` nadal OTWARTY i nadal należy tutaj.** Doszło **trzecie** miejsce z
+   własnym zestawem wzorców: `redactCommandOutput` w
+   `packages/implementation-tools/src/command.ts` (RA-012-WU-05). Zakres domknięcia
+   obejmuje zwinięcie wszystkich trzech, nie dwóch.
+3. **Powstała powierzchnia, której ten plan nie zna:** `packages/policy` ma teraz
+   policy engine, approval ingestion, action executor i containment zewnętrznego
+   boundary (RA-022, RA-023). `PolicyEvaluation.evidence` niesie już wszystko,
+   czego potrzebuje audit log (tool, case, connection, id-ki eventów kill switcha),
+   ale **nic tego nie zapisuje do `audit_log`** — to zakres RA-024.
+4. **AgentCore NIE jest wdrażany** ([ADR-0008](../../decisions/ADR-0008-agentcore-gateway-verdicts.md)),
+   więc nie ma nowej powierzchni AWS do hardeningu. Jeżeli plan zakładał inaczej —
+   ten fragment jest bezprzedmiotowy.
+5. **`PolicyInput.now` musi pochodzić z zegara BAZY.** Sonda RA-022-WU-03
+   dowiodła, że backdated `now` zamienia wygasły credential w dozwoloną akcję.
+   Każdy nowy caller `evaluatePolicy` musi użyć `ports.now(tx)`.
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run test/security`
 
 ## Global boundaries
