@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@remoteagent/contracts": "workspace:*",
+    "@remoteagent/observability": "workspace:*",
     "@remoteagent/workspace-runner": "workspace:*"
   }
 }

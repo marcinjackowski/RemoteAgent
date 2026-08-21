@@ -101,6 +101,7 @@ import {
   idString,
 } from "@remoteagent/contracts";
 import type { Transaction } from "@remoteagent/database";
+import { maskSecretShapes } from "@remoteagent/observability";
 import {
   ProcessRunnerError,
   WorkspacePathPolicyError,
@@ -208,59 +209,25 @@ function byteLength(value: string): number {
 }
 
 /**
- * Patterns for material that must never reach a log line or the model context.
- *
- * **Why this table exists at all.** `@remoteagent/observability`'s
- * `SecretRedactor` is the repository's redaction primitive and would be the
- * right base layer, but it is not a declared dependency of this package and
- * `package.json` is outside this unit's allowed paths, so it is not resolvable
- * from here (a bare import fails at runtime; a relative import fails `rootDir`).
- * Independently of that, a coordinator probe against its built output showed it
- * does **not** cover the classes that dominate command output: absolute host
- * paths, `glpat-`/`gh*_` forwarding tokens, AWS access-key ids, PEM blocks and
- * JWTs. Command output is mostly stack traces, `cwd` echoes and compiler
- * diagnostics, i.e. host paths, so a layer covering only `Bearer`/`Basic`/URL
- * credentials would leave the dominant class untouched. The shapes below are
- * deliberately aligned with `repository-planner`'s `unsafeString` guard so the
- * two boundaries agree on what "unsafe" means.
- *
- * **Transitional.** This local table is a deliberate, self-contained stopgap, not
- * an accidental duplication: unifying every boundary onto one shared redactor
- * that covers these classes is tracked as RA-024 (`CTF-006`). Until that lands,
- * this module must not lean on `@remoteagent/observability`, whose `SecretRedactor`
- * still passes host paths and provider tokens through.
- *
- * Each entry keeps capture group 1 (the boundary character that preceded the
- * match, or the credential's own scheme prefix) and replaces the rest.
- */
-const REDACTION_PATTERNS: readonly RegExp[] = Object.freeze([
-  // PEM private key blocks, header through footer, including the body.
-  /()-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu,
-  // `file://` URIs, which smuggle a host path past a leading-slash matcher.
-  /()\bfile:\/\/\S+/giu,
-  // POSIX host paths, and Windows drive paths, wherever they appear in a line.
-  /(^|[\s"'`=(\[<{,;:])((?:\/(?:Users|home|root|private|var|tmp|etc|opt|srv|mnt|media|Volumes|usr\/local)\b|[A-Za-z]:[\\/])[^\s"'`)\]>}]*)/gmu,
-  // Provider tokens with a self-identifying prefix.
-  /()\b(?:glpat-|glrt-|gh[pousr]_|xox[abposr]-|sk-|AKIA|ASIA)[A-Za-z0-9_\-]{8,}/gu,
-  // Compact JWTs (header.payload.signature).
-  /()\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/gu,
-  // HTTP credential schemes.
-  /(\bBearer\s+)[A-Za-z0-9._~+/=-]+/giu,
-  /(\bBasic\s+)[A-Za-z0-9+/=]+/giu,
-  // Credentials embedded in a URL's userinfo.
-  /(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu,
-  // `key=value` / `key: value` credential assignments.
-  /(\b(?:password|passphrase|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|credential|private[_-]?key)\s*[:=]\s*)[^\s,;]+/giu,
-  // Credentials in a query string.
-  /([?&](?:access_token|refresh_token|api_key|key|token|password)=)[^&#\s]+/giu,
-]);
-
-/**
  * Redact one text once, for every consumer.
  *
- * `known` is substituted first, longest-first, so a value the server already
- * knows to be sensitive (the workspace root, the artifact root) is removed even
- * when it does not match any shape above. Only after that do the patterns run.
+ * **This used to carry its own pattern table.** RA-012-WU-05 added one marked
+ * `Transitional`, because at the time `@remoteagent/observability`'s
+ * `SecretRedactor` genuinely did not cover the classes that dominate command
+ * output — absolute host paths, `glpat-`/`gh*_` tokens, AWS key ids, PEM blocks,
+ * JWTs — and `package.json` was outside that unit's allowed paths, so the shared
+ * package was not even resolvable from here.
+ *
+ * RA-024-WU-01 removed both obstacles: `@remoteagent/observability` is now a
+ * declared dependency, and `SECRET_PATTERNS` there is the single table, extended to
+ * cover every shape this local copy had plus several it lacked. So the table is
+ * gone and this function delegates. `CTF-006` counted THREE divergent copies; this
+ * was the third, and leaving it would have meant unifying two of three — which the
+ * finding calls out by name as the way this closure fails.
+ *
+ * `known` is still substituted FIRST, longest-first, because it carries values the
+ * shapes cannot know: this run's workspace root and artifact root. Only then do the
+ * shared patterns run.
  */
 export function redactCommandOutput(value: string, known: readonly string[] = []): string {
   let redacted = value;
@@ -269,13 +236,7 @@ export function redactCommandOutput(value: string, known: readonly string[] = []
     .sort((a, b) => b.length - a.length)) {
     redacted = redacted.split(literal).join(COMMAND_REDACTION_PLACEHOLDER);
   }
-  for (const pattern of REDACTION_PATTERNS) {
-    redacted = redacted.replace(
-      pattern,
-      (_match, prefix: string) => `${prefix}${COMMAND_REDACTION_PLACEHOLDER}`,
-    );
-  }
-  return redacted;
+  return maskSecretShapes(redacted, COMMAND_REDACTION_PLACEHOLDER);
 }
 
 const relativeCwd = z

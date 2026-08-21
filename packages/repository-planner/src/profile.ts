@@ -12,7 +12,9 @@ import {
   type RepositoryFact,
   type RepositoryProfile,
 } from "@remoteagent/contracts";
+import { containsSecretShape } from "@remoteagent/observability";
 import type { WorkspaceIdentity, WorkspaceSnapshotResult } from "@remoteagent/workspace-runner";
+
 import { canonicalJson, canonicalSha256 } from "./digest.js";
 
 export type BuildRepositoryProfileInput = Readonly<{
@@ -63,17 +65,29 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/**
+ * Whether a value looks like a credential or a host path, and must therefore not
+ * enter a server-owned repository profile.
+ *
+ * This used to be a private table of six regexes here. It now delegates to the
+ * SHARED table in `@remoteagent/observability`, which is the `CTF-006` closure: the
+ * same shapes were spelled out in three places, and the copy that guarded MODEL
+ * CONTEXT was the weakest of the three.
+ *
+ * What did NOT move is the reaction. `SecretRedactor` masks and continues, because a
+ * log line minus its token is still useful. This caller REJECTS: a profile is
+ * server-derived data that should never have contained a host path, so a match means
+ * the profile is wrong, and masking it would launder a value already proven
+ * untrustworthy into something that looks clean. Sharing the reaction would have
+ * broken one of the two callers; sharing the shapes is the part that was duplicated.
+ *
+ * The shared table is a superset of the six patterns it replaces (Google OAuth
+ * tokens, Slack tokens, fine-grained GitHub PATs, unterminated PEM headers and more
+ * path roots), so this predicate only ever got stricter — verified by test, since a
+ * profile builder becoming more permissive would be a silent regression.
+ */
 function unsafeString(value: string): boolean {
-  return (
-    /(?:^|[\s"'=])(?:\/Users\/|\/home\/|\/tmp\/|\/private\/|[A-Za-z]:[\\/]|file:\/\/)/iu.test(
-      value,
-    ) ||
-    /-----BEGIN [^-]*PRIVATE KEY-----/u.test(value) ||
-    /(?:password|secret|token|api[_-]?key|access[_-]?token)\s*[:=]\s*[^\s]/iu.test(value) ||
-    /\bBearer\s+[A-Za-z0-9._~-]{8,}/u.test(value) ||
-    /\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/u.test(value) ||
-    /\b(?:glpat-|gh[pousr]_|AKIA)[A-Za-z0-9_-]{8,}/u.test(value)
-  );
+  return containsSecretShape(value);
 }
 
 function assertSafeValues(value: unknown): void {

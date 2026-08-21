@@ -2,3 +2,4 @@
 export const packageName = "observability" as const;
 
 export * from "./redaction.js";
+export * from "./secret-patterns.js";

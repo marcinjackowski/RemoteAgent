@@ -1,5 +1,7 @@
 /** Recursive, non-mutating redaction for logs, errors and serialized context. */
-const REDACTED = "[REDACTED]";
+import { SECRET_PLACEHOLDER, maskSecretShapes } from "./secret-patterns.js";
+
+const REDACTED = SECRET_PLACEHOLDER;
 
 const SENSITIVE_KEY =
   /(?:authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|bearer[_-]?token|client[_-]?secret|api[_-]?key|password|passphrase|credential|secret(?:[_-]?value)?|private[_-]?key)/i;
@@ -16,14 +18,6 @@ const BARE_TOKEN_KEY = /(^|[_-])token$/i;
 function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY.test(key) || BARE_TOKEN_KEY.test(key);
 }
-
-const INLINE_PATTERNS: readonly RegExp[] = [
-  /\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi,
-  /\b(Basic\s+)[A-Za-z0-9+/=]+/gi,
-  /([?&](?:access_token|refresh_token|api_key|key|token)=)[^&#\s]+/gi,
-  /\b((?:access_token|refresh_token|client_secret|api_key|password)\s*[:=]\s*)[^\s,;]+/gi,
-  /(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi,
-];
 
 export interface RedactionOptions {
   knownSecrets?: readonly string[];
@@ -44,15 +38,23 @@ export class SecretRedactor {
     this.#maxDepth = options.maxDepth ?? 32;
   }
 
+  /**
+   * Mask one string: registered literals first, longest-first, then every shape in
+   * the shared {@link SECRET_PATTERNS} table.
+   *
+   * Literals go first so a value the server already knows to be sensitive (a
+   * workspace root, an artifact root, a live token) is removed even when it matches
+   * no shape at all. Only then do the patterns run, which is what closes `CTF-006`:
+   * a redactor constructed with NO `knownSecrets` — as
+   * `agent-orchestrator/src/context/compaction.ts` does when building model
+   * context — now still masks host paths, `glpat-`, `AKIA`, private keys and JWTs.
+   */
   public redactString(value: string): string {
     let redacted = value;
     for (const secret of this.#knownSecrets) {
       redacted = redacted.split(secret).join(this.#replacement);
     }
-    for (const pattern of INLINE_PATTERNS) {
-      redacted = redacted.replace(pattern, `$1${this.#replacement}`);
-    }
-    return redacted;
+    return maskSecretShapes(redacted, this.#replacement);
   }
 
   public redact(value: unknown): unknown {
