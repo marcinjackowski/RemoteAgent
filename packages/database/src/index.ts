@@ -48,6 +48,8 @@ export {
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";
 export type { Migration, MigrateResult, MigrationStatus } from "./migrate.js";
+export * from "./deployment.js";
+export * from "./restore.js";
 
 export * from "./repositories/index.js";
 export * from "./queue/index.js";

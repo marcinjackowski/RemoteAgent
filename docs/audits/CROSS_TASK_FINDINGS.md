@@ -41,6 +41,8 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-013` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-024 | `RA-024-WU-00`; przyczyna: instantiation expression w `Parameters<>` |
 | `CTF-014` | LOW | OTWARTY — decyzja `defer`, wymaga ADR | push brancha case'a nie przechodzi przez `ACTION_REGISTRY`; wykryty `RA-024-WU-04` |
 | `CTF-015` | LOW | OTWARTY — decyzja `accept` | sześć nowych kolizji type-level poza `packageName`; nieosiągalne, wzmacniają `CTF-002-U1` |
+| `CTF-016` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `hookTimeout` został na 10s, gdy `testTimeout` podniesiono do 120s |
+| `CTF-017` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `process-runner`: kernel reapuje wnuka asynchronicznie po SIGKILL |
 
 ---
 
@@ -1306,3 +1308,88 @@ implementacyjnym szkicem.
 
 Do czasu jego powstania obowiązuje wniosek z `CTF-002`: **final task gate musi
 uruchamiać sondę type-level, nie tylko wartościową.**
+
+---
+
+## `CTF-016` — `hookTimeout` nie został podniesiony razem z `testTimeout`
+
+- Severity: **LOW** (bramka niestabilna; kod produkcyjny poprawny)
+- Wykryty: `2026-08-22`, w final task gate RA-025, w dwóch z trzech przebiegów
+- Dotyczy: `vitest.config.ts` (repozytorialne)
+- Status: **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025
+
+### Dowód
+
+`vitest.config.ts` podnosił `testTimeout` do `120_000` z komentarzem o guardrailach
+spawnujących `tsc`/`eslint`, ale **`hookTimeout` został na domyślnych 10s.**
+
+Suity integracyjne tworzą i **usuwają** throwaway bazę PostgreSQL w
+`beforeAll`/`afterAll`. W pełnym przebiegu (158 plików, wiele z własną bazą)
+`DROP DATABASE` czeka za połączeniami innych workerów i przekracza 10s.
+
+```text
+przebieg 1: 2263/2264 — process-runner (osobny finding, CTF-017)
+przebieg 2: 2264/2264
+przebieg 3: 2263/2264 — DWIE suity: `Hook timed out in 10000ms`
+              connector-jira/reconciliation.integration  (afterAll → drop())
+              test/golden-path                            (afterEach → drop())
+solo:       zielone
+```
+
+### Wpływ
+
+Objaw to `Hook timed out in 10000ms` na **losowej** suicie, co czyta się jak zawis
+produktu, nie jak kontencja. To najgorszy kształt flake'a: wskazuje winnego, który
+nim nie jest. `CTF-003`, `CTF-007` i `CTF-012` to ta sama klasa — flake w harnessie,
+który obniża wartość dowodową każdego zielonego przebiegu.
+
+### Domknięcie (`2026-08-22`)
+
+`hookTimeout: 120_000`, zrównany z `testTimeout`. Uzasadnienie zapisane w configu:
+setup i teardown robią **tę samą** pracę co testy — realne operacje na
+kontendowanym serwerze bazy — więc rozjechane limity nie miały podstawy.
+
+```text
+po zmianie: CZTERY kolejne pełne przebiegi, 2264/2264, exit 0
+```
+
+---
+
+## `CTF-017` — `process-runner` czytał żywotność wnuka raz, bez pollingu
+
+- Severity: **LOW** (bramka niestabilna; kill działa poprawnie)
+- Wykryty: `2026-08-22`, w final task gate RA-025
+- Dotyczy: `packages/workspace-runner/test/process-runner.test.ts` (RA-010)
+- Status: **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025
+
+### Dowód
+
+```text
+pełny przebieg: expected [Function] to throw an error
+                  at expect(() => process.kill(childPid, 0)).toThrow()
+solo x5:        zielone
+```
+
+Test asertował „wnuk nie żyje" **jednym** odczytem. `runProcess` wraca, gdy tylko
+SIGKILL poszedł do grupy procesów; kernel reapuje wnuka **asynchronicznie**, więc
+`process.kill(pid, 0)` może jeszcze przez kilka milisekund się udać. Na obciążonej
+maszynie to okno wystarcza.
+
+### Uwaga: to NIE jest `CTF-003`
+
+`CTF-003` (zamknięty w `cfc3a15`) dotyczył **tego samego pliku** i tej samej klasy
+problemu — jednorazowego odczytu tam, gdzie potrzebny jest polling — ale innej
+asercji: tam brakowało pollingu na **powstanie** `child.pid`, tu na **zniknięcie**
+procesu. Fix `CTF-003` dodał pierwszą pętlę i zostawił drugą asercję bez niej, dwie
+linie niżej.
+
+To jest najużyteczniejsza nauka tego wpisu: naprawa pollingu w jednym miejscu pliku
+**nie** jest naprawą wzorca w tym pliku. Warto przy zamykaniu flake'a sprawdzić
+pozostałe asercje w tym samym teście.
+
+### Domknięcie (`2026-08-22`)
+
+Polling z ograniczonym budżetem (100 × 20 ms), z tym samym uzasadnieniem co pętla
+`CTF-003`: warunek wstępny, który jest jedynie **wolny**, nie może być raportowany
+jako awaria mechanizmu. Asercja nadal pada, jeśli wnuk **przeżyje** — daje jedynie
+kernelowi ograniczoną chwilę na dokończenie.

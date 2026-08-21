@@ -76,7 +76,27 @@ describe("confined process runner", () => {
     expect(Number.isInteger(childPid)).toBe(true);
     // The load-bearing assertion: the grandchild is gone, so the kill reached the
     // whole tree and not merely the process we spawned.
-    expect(() => process.kill(childPid, 0)).toThrow();
+    //
+    // POLLED, not read once. `runProcess` returns as soon as it has SIGKILLed the
+    // process group; the kernel then reaps the grandchild asynchronously, so
+    // `process.kill(pid, 0)` can still succeed for a few milliseconds afterwards.
+    // Under a full-repo run that window is wide enough to fail — observed once in a
+    // three-run RA-025 gate, and green 5/5 solo, which is the signature of a race
+    // against a machine that is busy rather than a defect in the kill.
+    //
+    // Same fix shape as the pid-file poll above: a precondition that is merely SLOW
+    // must not be reported as the mechanism failing. The assertion still fails if the
+    // grandchild survives — it just allows the kernel a bounded moment to finish.
+    let alive = true;
+    for (let attempt = 0; attempt < 100 && alive; attempt += 1) {
+      try {
+        process.kill(childPid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive, `grandchild ${String(childPid)} survived the process-tree kill`).toBe(false);
   });
 
   it("fails closed before spawn when CPU or memory enforcement is requested", async () => {

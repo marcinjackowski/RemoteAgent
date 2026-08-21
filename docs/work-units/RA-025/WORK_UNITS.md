@@ -6,7 +6,7 @@
 - Plan revision: `2`
 - Rola: jedna rola wykonawcza (ADR-0007). Rewizja `1` była pisana pod ADR-0005 i
   rozdział koordynator/implementer — **to jest historyczne i nie obowiązuje**.
-- Plan status: `IN_PROGRESS` — zależność `RA-024` domknięta `2026-08-21` (`AUDIT-01` `PASS`).
+- Plan status: `DONE` — zależność `RA-024` domknięta `2026-08-21` (`AUDIT-01` `PASS`).
 - Base commit: `d461958` (stan po domknięciu RA-024)
 - Full-task verification: `pnpm vitest run infra` + `pnpm --filter @remoteagent/infra-cdk synth`
 
@@ -100,3 +100,21 @@ Synth (dwukrotny, porównanie bajt-w-bajt), testy `infra`, policy checks, całe 
 regresji (kilka przebiegów), `pnpm run lint`, root `tsc`, `typecheck --force`,
 `build --force`, `pnpm workflow:validate`, `git diff --check`. Brak Dockera odnotowany
 jawnie tam, gdzie ma znaczenie. **Żadnego deploymentu.**
+
+## Ustalenia po wykonaniu (`2026-08-22`)
+
+Pełny zapis w `docs/handoffs/RA-025/HANDOFF-01.md`. Tu tylko to, co zmienia plan:
+
+1. **Sonda „synth bez credentiali" była pierwszą rzeczą uruchomioną** i
+   zdeterminowała projekt: żadnego `DockerImageAsset`, obrazy przez tag. Bez tego
+   AC1/AC2 byłyby nieweryfikowalne na tej maszynie.
+2. **Cztery cykle cross-stack**, dwie „oczywiste" naprawy przesunęły cykl. W CDK
+   `grant*` jest dwustronny.
+3. **`exactOptionalPropertyTypes` wyłączony dla `infra/cdk`** — niekompatybilność
+   `aws-cdk-lib`, nie nasz błąd. Uzasadnienie w tsconfigu.
+4. **Dwa nowe findingi, oba zamknięte tutaj:** `CTF-016` (`hookTimeout`),
+   `CTF-017` (`process-runner`). Plus defekt `DeletionPolicy` sekretu bazy, znaleziony
+   własnymi policy checkami.
+5. **Trzy elementy zakresu niewykonane, z uzasadnieniami** (`AUDIT-01` §7):
+   container scanning (Docker), region failure simulation (poziom runbooka), realny
+   deploy (zgoda właściciela).
