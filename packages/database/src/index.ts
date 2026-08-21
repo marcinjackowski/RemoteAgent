@@ -31,6 +31,7 @@ export {
   CredentialRefreshConflictError,
   CredentialRefreshIdentityError,
   ProtectedTableError,
+  ImmutableGrantError,
   CheckpointConflictError,
   NotFoundError,
   MigrationError,

@@ -186,6 +186,21 @@ export class CredentialRefreshIdentityError extends PersistenceError {
 export class ProtectedTableError extends PersistenceError {}
 
 /**
+ * An `approvals` row was mutated in a way the grant's immutability guards forbid
+ * (SQLSTATE `P0103`, migration 030): changing an authorizing term (case, owner,
+ * granting actor, action digest, checkpoint revision, grant instant, expiry),
+ * un-consuming a consumed single-use grant, rewriting a recorded `consumed_at`, or
+ * deleting an approval outright.
+ *
+ * This exists because `ApprovalRepository.consume` fences on durable columns, so
+ * whatever can rewrite those columns can defeat the fence without touching it. The
+ * RA-022-WU-02 adversarial probe demonstrated both: one UPDATE made a consumed grant
+ * reusable, another retargeted a grant's digest so consent for one payload
+ * authorized a different one.
+ */
+export class ImmutableGrantError extends PersistenceError {}
+
+/**
  * An optimistic-concurrency (compare-and-set) update lost the race: the current
  * revision no longer matched the expected one. The loser must reload and retry
  * from the new revision rather than overwrite the winner.

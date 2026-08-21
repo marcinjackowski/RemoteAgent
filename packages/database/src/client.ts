@@ -15,6 +15,7 @@ import { resolvePoolConfig } from "./config.js";
 import {
   AppendOnlyViolationError,
   CheckpointConflictError,
+  ImmutableGrantError,
   IntegrityViolationError,
   PersistenceError,
   ProtectedTableError,
@@ -62,6 +63,12 @@ const PG_APPEND_ONLY = "P0100";
 const PG_SCOPE_VIOLATION = "P0101";
 /** Custom SQLSTATE raised by the case_connections tamper guard. */
 const PG_PROTECTED_TABLE = "P0102";
+/**
+ * Custom SQLSTATE raised by the `approvals` immutability guards (migration 030):
+ * the authorizing terms of a granted approval cannot change, a consumed grant
+ * cannot be un-consumed, and an approval cannot be deleted.
+ */
+const PG_IMMUTABLE_GRANT = "P0103";
 
 interface PgError {
   code?: string;
@@ -101,6 +108,8 @@ export function translatePgError(error: unknown): PersistenceError | undefined {
       return new ScopeViolationError(message);
     case PG_PROTECTED_TABLE:
       return new ProtectedTableError(message);
+    case PG_IMMUTABLE_GRANT:
+      return new ImmutableGrantError(message);
     default:
       return undefined;
   }
