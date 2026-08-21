@@ -609,6 +609,100 @@ describeIntegration(
       expect(deriveVerdict(result.runs, new Set(["unit"])).verdict).toBe(EvidenceVerdict.PASSED);
     });
 
+    it("AC2: two cases sharing ONE filesystem root do not both report success", async () => {
+      // Found by an audit probe. The ledger scopes rows by (case_id, workspace_id),
+      // so it correctly stops one case replaying another's operation — but nothing
+      // in the ledger knows two DIFFERENT cases were pointed at the same directory.
+      // Deployment is what keeps roots disjoint (RA-010 mints one workspace per
+      // case), so this test pins the consequence rather than asserting the
+      // configuration cannot happen: even under that misconfiguration, concurrent
+      // writes must not BOTH claim SUCCEEDED, because only one set of bytes survives.
+      const shared = await makeWorkspace("shared-root");
+      const toolsets = await Promise.all(
+        CASES.map(async (entry) =>
+          createImplementationToolset({
+            root: shared,
+            identity: { case_id: entry.caseId, workspace_id: entry.workspaceId },
+            ledger: new OperationLedgerRepository(),
+            runTransaction: inTx,
+            catalogue: {},
+            artifactRoot,
+          }),
+        ),
+      );
+
+      const results = await Promise.all(
+        toolsets.map(async (toolset, index) =>
+          toolset.write({
+            operation_id: `shared-root-${String(index)}`,
+            relative_path: "src/app.ts",
+            content: `FROM-${String(index)}\n`,
+          }),
+        ),
+      );
+
+      const bytes = await readFile(join(shared, "src", "app.ts"), "utf8");
+      const succeeded = results.filter((result) => result.outcome === "SUCCEEDED");
+
+      // Exactly one writer may claim success, and the surviving bytes must be that
+      // writer's. A second SUCCEEDED would be a false receipt: it would vouch for
+      // content that is no longer on disk.
+      expect(succeeded).toHaveLength(1);
+      const winner = results.findIndex((result) => result.outcome === "SUCCEEDED");
+      expect(bytes.trim()).toBe(`FROM-${String(winner)}`);
+      // The loser is AMBIGUOUS — its post-state could not be verified — never a
+      // silent success and never a clean FAILED.
+      for (const [index, result] of results.entries()) {
+        if (index === winner) continue;
+        expect(result.outcome).toBe("AMBIGUOUS");
+      }
+    });
+
+    it("AC2: one case cannot address another case's operation id", async () => {
+      // Also from the probe, and the reassuring half: the ledger's scope fence is a
+      // loud refusal rather than a quiet `null` that a caller might read as "unused,
+      // safe to execute" — which would re-run the other case's side effect.
+      const root = await makeWorkspace("scope-fence");
+      const ledger = new OperationLedgerRepository();
+      const [a, b] = CASES;
+      const identityA = { case_id: a.caseId, workspace_id: a.workspaceId };
+      const identityB = { case_id: b.caseId, workspace_id: b.workspaceId };
+
+      const toolsetA = await createImplementationToolset({
+        root,
+        identity: identityA,
+        ledger,
+        runTransaction: inTx,
+        catalogue: {},
+        artifactRoot,
+      });
+      const written = await toolsetA.write({
+        operation_id: "fenced-op",
+        relative_path: "src/app.ts",
+        content: "owned by A\n",
+      });
+      expect(written.outcome).toBe("SUCCEEDED");
+
+      const toolsetB = await createImplementationToolset({
+        root,
+        identity: identityB,
+        ledger,
+        runTransaction: inTx,
+        catalogue: {},
+        artifactRoot,
+      });
+      await expect(
+        toolsetB.write({
+          operation_id: "fenced-op",
+          relative_path: "src/app.ts",
+          content: "hijacked by B\n",
+        }),
+      ).rejects.toThrow();
+
+      // A's bytes are intact: the refusal happened before any write.
+      expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("owned by A\n");
+    });
+
     it("AC4: a crash before a receipt yields AMBIGUOUS, never a replayed write", async () => {
       const root = await makeWorkspace("crash");
       const identity = { case_id: CASES[0].caseId, workspace_id: CASES[0].workspaceId };
