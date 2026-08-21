@@ -8,6 +8,27 @@ importers:
 
   .:
     devDependencies:
+      '@remoteagent/connector-gitlab':
+        specifier: workspace:*
+        version: link:packages/connector-gitlab
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:packages/database
+      '@remoteagent/git-lifecycle':
+        specifier: workspace:*
+        version: link:packages/git-lifecycle
+      '@remoteagent/implementation-tools':
+        specifier: workspace:*
+        version: link:packages/implementation-tools
+      '@remoteagent/review-loop':
+        specifier: workspace:*
+        version: link:packages/review-loop
+      '@remoteagent/test-evidence':
+        specifier: workspace:*
+        version: link:packages/test-evidence
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3
