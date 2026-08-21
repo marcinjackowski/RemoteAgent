@@ -30,9 +30,10 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte (RA-017 usunął swój) | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty |
 | `CTF-005` | MEDIUM | OTWARTY — kształt rozstrzygnięty (`checkpoint_revision`, backfill fail-closed) | RA-022 |
 | `CTF-006` | **HIGH** | OTWARTY — właściciel potwierdził domknięcie w RA-024 | RA-024 (hardening); obejście lokalne w RA-012-WU-05 |
-| `CTF-003` | LOW | **ZAPLANOWANY** | `RA-010-WU-11` (`READY`); przed RA-018/RA-026 |
+| `CTF-003` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15` |
 | `CTF-004` | LOW | OTWARTY | unit repozytorialny; 6 z 11 pakietów bez pokrycia |
-| `CTF-007` | LOW | OTWARTY | razem z `CTF-003`, przed RA-018/RA-026 |
+| `CTF-007` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-018 | naprawiony w `cfc3a15`; miał za sobą realny defekt produkcyjny |
+| `CTF-011` | LOW | **ZAMKNIĘTY dla RA-018** — wzorzec otwarty | bramka mogła przejść na starym buildzie |
 | `CTF-008` | LOW | OTWARTY | `pnpm run lint` czerwony na `main`; przed RA-018/RA-026 |
 | `CTF-010` | LOW | **ADRESOWANY procesowo** (ADR-0007) | wzorzec: komentarz != zachowanie; 5 defektów HIGH |
 | `CTF-009` | LOW | OTWARTY — mechanizm domknięty w RA-012 | `isForbiddenPath` nie zna plików instrukcji; RA-015/RA-021 |
@@ -683,3 +684,58 @@ Praktyczne konsekwencje, obowiązujące od teraz:
    użyłem, dało finding, którego nie dały testy unitu. To najtańsza znana tu bramka.
 4. **Fail closed przy pustej konfiguracji.** Dwa defekty (`declaredPaths` w RA-014,
    `declared.size > 0`) wynikały z traktowania braku deklaracji jako zgody.
+
+---
+
+## `CTF-011` — test integracyjny może przejść na starym buildzie
+
+- Severity: **LOW** jako wpis rejestru; był **HIGH** jako defekt bramki RA-018
+- Wykryty: `2026-08-21`, podczas audytu RA-018, mutation testingiem samego testu
+- Dotyczy: każdego testu w `test/**`, który importuje pakiet przez `node_modules`
+- Status: **ZAMKNIĘTY dla RA-018**; wzorzec pozostaje otwarty dla przyszłych suite
+
+### Dowód
+
+Testy w pakiecie importują `../src/index.js`. Testy w `test/**` rozwiązują się przez
+`node_modules` do `dist/` — co jest **właściwe**, bo ćwiczą artefakty, które
+załadowałby deployment.
+
+Konsekwencja zmierzona wprost:
+
+```text
+zepsucie packages/implementation-tools/src/patch.ts   -> 8/8 zielonych
+ta sama mutacja po `pnpm run build --force`            -> test wywalony
+```
+
+### Wpływ
+
+Dwa fałszywe wnioski, oba groźne:
+
+1. **fałszywe `PASS` bramki** — zmiana w `src` bez builda przechodzi golden path, bo
+   suite testuje poprzedni artefakt;
+2. **fałszywy wniosek z mutation testingu** — „mutacja nie wywala testów, więc testy
+   nie są load-bearing", gdy w rzeczywistości mutacja nigdy nie dotarła do
+   uruchamianego kodu. To odwraca sens narzędzia, którym ten projekt weryfikuje
+   wszystkie pozostałe bramki.
+
+### Wymagana zmiana
+
+Zrobione dla RA-018: `assertPackagesAreCurrent` w
+`test/golden-path/golden-path.integration.test.ts` porównuje najnowszy mtime `src/` z
+najstarszym `dist/` dla każdego ćwiczonego pakietu i odmawia uruchomienia, podając
+pakiet oraz komendę naprawczą. Fail-closed: pakiet nieczytelny albo niezbudowany też
+blokuje.
+
+Dla przyszłych suite w `test/**` obowiązuje ta sama zasada. Naturalnym wzmocnieniem
+byłoby przeniesienie tego guardraila do `test/guardrails/`, tak by obejmował każdą
+nową suite automatycznie zamiast wymagać skopiowania funkcji — kandydat do
+zakolejkowania razem z `CTF-002-U1`, który ma ten sam charakter (guardrail zamiast
+ręcznej dyscypliny).
+
+### Uwaga metodologiczna
+
+Ten finding jest wariantem `CTF-010` przeniesionym na poziom bramki: nie komentarz,
+lecz **nazwa i lokalizacja testu** obiecywały weryfikację obecnego kodu, a mechanizm
+jej nie dawał. Wniosek praktyczny, obowiązujący od teraz: **każda mutacja w pakiecie
+konsumowanym przez `test/**` musi być poprzedzona przebudowaniem tego pakietu**,
+inaczej wynik mutation testingu jest bez wartości.
