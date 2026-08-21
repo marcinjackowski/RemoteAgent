@@ -9,3 +9,5 @@ export * from "./policy-engine.js";
 export * from "./ingestion-ports.js";
 export * from "./approval-ingestion.js";
 export * from "./action-executor.js";
+export * from "./external-boundary.js";
+export * from "./runtime-session.js";
