@@ -36,8 +36,33 @@ export class WorkspaceRepository {
       branchName: string;
     },
   ): Promise<WorkspaceRow> {
+    // `ON CONFLICT DO NOTHING` with NO conflict target, deliberately.
+    //
+    // This table has TWO unique constraints: `workspace_id` (primary key) and
+    // `case_id` (at most one active workspace per case, the single-writer
+    // invariant). The original `ON CONFLICT (workspace_id)` covered only the first,
+    // so a concurrent insert that lost the race on `workspaces_case_id_key` raised an
+    // unhandled `23505` instead of being absorbed — it escaped as a raw driver error
+    // rather than as `WorkspaceMappingConflictError`.
+    //
+    // That is the diagnosis of `CTF-012`, the flake this registry recorded as
+    // "undiagnosed, could not capture the message" across ~15 runs. Captured at last
+    // during the RA-024 gate:
+    //
+    //     duplicate key value violates unique constraint "workspaces_case_id_key"
+    //       at WorkspaceRepository.recordIntent (workspace.ts:39)
+    //
+    // It reproduced only in a full-repo run because it needs two inserts genuinely
+    // in flight, which is why 5/5 solo runs were green.
+    //
+    // An untargeted `DO NOTHING` is the correct absorber rather than a wider one: the
+    // verification below re-reads the row and rejects anything that does not match
+    // this exact intent, so a DIFFERENT workspace claiming the same case still fails
+    // — `find` returns null for the requested id and the mapping check throws. The
+    // insert is allowed to be a no-op; it is never allowed to be an unexamined
+    // success.
     await q.query(
-      "INSERT INTO workspaces (workspace_id, case_id, repo, base_sha, branch_name, tree_digest) VALUES ($1,$2,$3,$4,$5,NULL) ON CONFLICT (workspace_id) DO NOTHING",
+      "INSERT INTO workspaces (workspace_id, case_id, repo, base_sha, branch_name, tree_digest) VALUES ($1,$2,$3,$4,$5,NULL) ON CONFLICT DO NOTHING",
       [input.workspaceId, input.caseId, input.repo, input.baseSha, input.branchName],
     );
     const current = await this.find(q, input.workspaceId);
