@@ -9,10 +9,16 @@ import type { Provider } from "@remoteagent/contracts";
 
 import type { Queryable } from "../client.js";
 import { translatePgError } from "../client.js";
-import { CredentialRefreshIdentityError } from "../errors.js";
+import { CredentialRefreshIdentityError } from "@remoteagent/contracts";
+import type { RefreshIntentStatus } from "@remoteagent/contracts";
 
-export type RefreshIntentStatus =
-  "PENDING" | "ACQUIRING" | "VAULT_WRITTEN" | "PUBLISHED" | "ABORTED" | "AMBIGUOUS";
+/**
+ * Re-exported from `@remoteagent/contracts`, which is the single definition
+ * (RA-023-WU-00). This package and `packages/policy` each declared an identical copy;
+ * the duplication was type-only, so it was invisible to `typecheck`, `build` and any
+ * runtime export scan, and was found only by a `ts.Program` probe.
+ */
+export type { RefreshIntentStatus };
 
 export interface RefreshIntentRow {
   operation_id: string;
@@ -255,15 +261,15 @@ export class CredentialRefreshIntentRepository {
  */
 function assertRowIdentity(row: RefreshIntentRow, input: BeginRefreshIntent): void {
   if (row.connection_id !== input.connectionId) {
-    throw new CredentialRefreshIdentityError(input.operationId, "connection");
+    throw new CredentialRefreshIdentityError("connection", input.operationId);
   }
   if (row.owner_id !== input.ownerId) {
-    throw new CredentialRefreshIdentityError(input.operationId, "owner");
+    throw new CredentialRefreshIdentityError("owner", input.operationId);
   }
   if (row.provider !== input.provider) {
-    throw new CredentialRefreshIdentityError(input.operationId, "provider");
+    throw new CredentialRefreshIdentityError("provider", input.operationId);
   }
   if (BigInt(row.expected_revision) !== input.expectedRevision) {
-    throw new CredentialRefreshIdentityError(input.operationId, "expected revision");
+    throw new CredentialRefreshIdentityError("expected revision", input.operationId);
   }
 }

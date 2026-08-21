@@ -143,38 +143,25 @@ export class WorkUnitConflictError extends PersistenceError {
 /** A work unit or its bound run is not eligible for the requested transition. */
 export class WorkUnitStateError extends PersistenceError {}
 
-/** A concurrent credential refresh already advanced the expected revision. */
-export class CredentialRefreshConflictError extends PersistenceError {
-  public readonly connectionId: string;
-  public readonly expectedRevision: bigint;
-
-  public constructor(connectionId: string, expectedRevision: bigint) {
-    super(
-      `Credential refresh for connection ${connectionId} lost revision ${expectedRevision.toString()}`,
-    );
-    this.connectionId = connectionId;
-    this.expectedRevision = expectedRevision;
-  }
-}
-
 /**
- * A credential-refresh `operation_id` was reused for a DIFFERENT immutable
- * identity (connection, owner, provider or expected revision). The intent is
- * bound to its identity at creation, so a colliding or replayed idempotency key
- * is rejected fail-closed BEFORE any vault probe or metadata publish, preventing
- * a credential reference from being crossed between connections/owners/aliases
- * (RA-005, AUDIT-02 HIGH-04).
+ * Credential-refresh failures are defined ONCE, in `@remoteagent/contracts`, and
+ * re-exported here so existing importers keep working (RA-023-WU-00, `CTF-001`).
+ *
+ * This package previously declared its own `CredentialRefreshConflictError` and
+ * `CredentialRefreshIdentityError` extending {@link PersistenceError}, while
+ * `packages/policy` declared classes with the SAME names extending `Error`.
+ * `instanceof` between the two returned `false`, so a `catch` written against one
+ * import silently did not catch the error thrown by the other — the failure did not
+ * surface as a type error or a test failure, it surfaced as an unhandled rejection.
+ *
+ * The re-export is deliberate rather than a deletion: `packages/database/src/index.ts`
+ * has exported these names since RA-003 and a consumer importing them from here is not
+ * wrong. What was wrong was there being two classes.
  */
-export class CredentialRefreshIdentityError extends PersistenceError {
-  public readonly operationId: string;
-  public readonly field: string;
-
-  public constructor(operationId: string, field: string) {
-    super(`refresh operation ${operationId} is bound to a different ${field}`);
-    this.operationId = operationId;
-    this.field = field;
-  }
-}
+export {
+  CredentialRefreshConflictError,
+  CredentialRefreshIdentityError,
+} from "@remoteagent/contracts";
 
 /**
  * A protected, sync-maintained table (currently `case_connections`) rejected a

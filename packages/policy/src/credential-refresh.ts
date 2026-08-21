@@ -1,7 +1,12 @@
 /** Race-safe, crash-safe publication of immutable credential versions. */
 import { randomUUID } from "node:crypto";
 
-import { ConnectionHealth } from "@remoteagent/contracts";
+import {
+  ConnectionHealth,
+  CredentialRefreshConflictError,
+  CredentialRefreshIdentityError,
+} from "@remoteagent/contracts";
+import type { RefreshIntentStatus } from "@remoteagent/contracts";
 import type { Provider } from "@remoteagent/contracts";
 
 import type { CredentialVault } from "./credential-vault.js";
@@ -10,27 +15,23 @@ import {
   CredentialWriteAmbiguousError,
 } from "./credential-vault.js";
 
-export class CredentialRefreshConflictError extends Error {
-  public constructor() {
-    super("credential refresh lost an optimistic-concurrency race");
-    this.name = new.target.name;
-  }
-}
-
 /**
- * A refresh request reused an `operationId` that already belongs to a DIFFERENT
- * immutable identity (connection, owner, provider or expected revision). The
- * intent's identity is fixed at creation; a colliding or replayed idempotency key
- * must fail closed BEFORE any vault probe or metadata publish, so a credential
- * reference can never be crossed between connections/owners/aliases
- * (AUDIT-02 HIGH-04).
+ * `CredentialRefreshConflictError` and `CredentialRefreshIdentityError` are defined
+ * ONCE in `@remoteagent/contracts` and re-exported here (RA-023-WU-00, `CTF-001`).
+ *
+ * This package used to declare its own copies extending `Error`, while
+ * `packages/database` declared same-named classes extending `PersistenceError`.
+ * `instanceof` across the two returned `false`, so a `catch` written against one
+ * import would silently not catch the error thrown by the other — invisible to
+ * `typecheck` and to every test, visible only as an unhandled rejection in production.
+ *
+ * The re-export keeps this module's public surface unchanged for existing importers;
+ * what changed is that there is now one class per meaning.
  */
-export class CredentialRefreshIdentityError extends Error {
-  public constructor(field: string) {
-    super(`refresh operation id is bound to a different ${field}`);
-    this.name = new.target.name;
-  }
-}
+export {
+  CredentialRefreshConflictError,
+  CredentialRefreshIdentityError,
+} from "@remoteagent/contracts";
 
 /**
  * A fenced mutation observed that this executor no longer holds the lease for its
@@ -126,8 +127,14 @@ export interface CredentialMetadataPublisher {
   }): Promise<CredentialPublishReconciliation>;
 }
 
-export type RefreshIntentStatus =
-  "PENDING" | "ACQUIRING" | "VAULT_WRITTEN" | "PUBLISHED" | "ABORTED" | "AMBIGUOUS";
+/**
+ * Re-exported from `@remoteagent/contracts` (RA-023-WU-00). The identical copy that
+ * used to live here collided with `packages/database`'s. That collision was type-only,
+ * which makes it the quietest form: a type has no runtime value, so `typecheck`,
+ * `build` and an `Object.keys` export scan are all blind to it, and ESM drops the
+ * ambiguous name from a combined barrel with no error at all.
+ */
+export type { RefreshIntentStatus };
 
 /** The durable record of one credential-refresh operation. */
 export interface RefreshIntent {

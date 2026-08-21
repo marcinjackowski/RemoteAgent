@@ -11,6 +11,7 @@
 
 // Infrastructure primitives.
 export * from "./canonical.js";
+export * from "./credential-refresh-errors.js";
 export * from "./state-machine.js";
 export * from "./common.js";
 export * from "./trust.js";
