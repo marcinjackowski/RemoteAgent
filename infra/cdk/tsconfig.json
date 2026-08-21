@@ -3,7 +3,27 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"]
+    "types": ["node"],
+
+    // `exactOptionalPropertyTypes` is OFF for this package only, and the cause is
+    // external: `aws-cdk-lib` declares its `I*` interfaces with REQUIRED properties
+    // whose implementations are `T | undefined` — `IVpc.vpnGatewayId`,
+    // `IBucket.isWebsite`, `ISecret.secretFullArn`,
+    // `ICluster.defaultCloudMapNamespace`, and more. Under this flag, passing CDK's own
+    // `Vpc` where its own `IVpc` is expected is a type error. Nothing about that is
+    // fixable from here.
+    //
+    // Measured, not assumed: with the flag on, `tsc` reports one error per stack-to-stack
+    // wiring in `app.ts`. Every workaround (casts, redeclared interfaces, `Omit` adapters)
+    // puts an `as unknown as` at each boundary — which is worse, because a cast per
+    // wiring point hides exactly the real mismatches this flag exists to catch.
+    //
+    // Deliberately narrow. One scoped opt-out here keeps the flag in force for all 19
+    // application packages, and every OTHER strict check still applies to this package:
+    // `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `noUnusedLocals`,
+    // `noImplicitReturns`, `verbatimModuleSyntax`. Revisit if aws-cdk-lib ever declares
+    // its interfaces with optional modifiers.
+    "exactOptionalPropertyTypes": false
   },
   "include": ["src"]
 }
