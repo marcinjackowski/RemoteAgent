@@ -26,7 +26,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 
 | ID | Severity | Status | Domknięcie zaplanowane w |
 |---|---|---|---|
-| `CTF-001` | MEDIUM | OTWARTY | `RA-023-WU-00` |
+| `CTF-001` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-023 | `RA-023-WU-00`; jedna definicja w `contracts` |
 | `CTF-002` | MEDIUM | **CZĘŚCIOWO** — `packageName` 5/6 otwarte; RA-022 dodał dowód, że sonda wartościowa NIE wystarcza | `RA-012-WU-01B` wykonany; guardrail `CTF-002-U1` otwarty i **pilniejszy** |
 | `CTF-005` | MEDIUM | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-022 | migracje `029`+`030`, fencing w `WU-02` |
 | `CTF-006` | **HIGH** | OTWARTY — właściciel potwierdził domknięcie w RA-024 | RA-024 (hardening); obejście lokalne w RA-012-WU-05 |
@@ -48,7 +48,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 - Wykryty: `2026-08-20`, podczas planowania RA-013/RA-017 (audyt przekrojowy
   eksportów, nie zgłoszony przez żadnego implementera)
 - Dotyczy: `packages/database`, `packages/policy` (RA-003, RA-005)
-- Status: **OTWARTY**
+- Status: **ZAMKNIĘTY** `2026-08-21` — potwierdzony `AUDIT-01` RA-023
 
 ### Dowód
 
@@ -96,6 +96,47 @@ tej granicy — nie należy tego robić „po drodze" w niepowiązanym tasku.
 on warstwę credentiali (`packages/policy`) z resztą systemu, więc oba światy się
 tam spotkają. Ujęte jako `RA-023-WU-00` — pierwszy unit tego taska, przed
 jakąkolwiek pracą nad Gateway.
+
+### Domknięcie (`2026-08-21`) — potwierdzone `AUDIT-01` RA-023 `PASS`
+
+**Żadna z dwóch rekomendacji tego wpisu nie była wykonalna w zapisanej formie**, i to
+jest najużyteczniejsza część domknięcia:
+
+1. „`packages/policy` importuje z `@remoteagent/database`" — **niemożliwe**.
+   `packages/database` devDependuje na `@remoteagent/policy` dla własnych testów, więc
+   krawędź w tę stronę czyni graf turbo cyklicznym i `build` odmawia startu. Zmierzone w
+   RA-022-WU-01, nie założone.
+2. „odrębne, jednoznaczne nazwy (`CredentialPublishConflictError`), **jeśli semantyka
+   jest faktycznie inna**" — semantyka jest **identyczna**. Oba conflict errors znaczą
+   „przegrany wyścig optimistic-concurrency", oba identity errors „to samo
+   `operationId` przy innej niezmiennej tożsamości". Dwie nazwy na jedno znaczenie
+   utrwaliłyby duplikat i utrudniły jego zobaczenie.
+
+Wykonane: **jedna definicja w `packages/contracts/src/credential-refresh-errors.ts`**,
+pakiecie, od którego oba już zależą — więc nie powstaje żadna nowa krawędź w grafie.
+`contracts` niesie już sześć przekrojowych klas błędów, więc jest naturalnym hostem.
+
+`PersistenceError` **nie** został odtworzony jako baza: refresh conflict jest wynikiem
+domenowym, nie awarią persystencji, a nic w repozytorium nie łapie tych klas przez
+`PersistenceError` (sprawdzone `grep`em, nie założone).
+
+Dowód domknięcia — sonda z tego wpisu, uruchomiona ponownie:
+
+```text
+same class across contracts/database/policy?   true
+policy-thrown instanceof database's import?    true
+sonda wartościowa:   CredentialRefresh* NIEOBECNE
+sonda type-level:    CredentialRefresh* NIEOBECNE
+```
+
+**Domknięte razem z tym: `RefreshIntentStatus`** (database ↔ policy), kolizja type-only
+wykryta w bramce RA-022 i odnotowana wtedy jako nowa. Był to ten sam defekt na tej samej
+granicy, więc został naprawiony w tym samym miejscu.
+
+Finding sondy adwersarialnej przy domykaniu: `this.name` przypisany z **literału**
+powodował, że subklasa raportowała nazwę rodzica — czyli przyszły węższy błąd byłby
+nieodróżnialny od bazowego w każdej linii logu i każdym branchu po `name`. Naprawione na
+`new.target.name`, co zachowuje też poprzednie zachowanie klas `policy`.
 
 ---
 

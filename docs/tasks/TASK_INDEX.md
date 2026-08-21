@@ -49,8 +49,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 20 | [RA-020](RA-020.md) Calendar two-account connector | DONE | RA-002, RA-003, RA-004, RA-005, RA-006, RA-018 | M4 |
 | 21 | [RA-021](RA-021.md) MCP Tool Broker | DONE | RA-005, RA-007, RA-009, RA-013, RA-016, RA-017, RA-019, RA-020 | M5 |
 | 22 | [RA-022](RA-022.md) Policy, approvals and action executor | DONE | RA-003, RA-004, RA-005, RA-006, RA-008, RA-021 | M5 |
-| 23 | [RA-023](RA-023.md) AgentCore Gateway and official MCP targets | READY | RA-010, RA-016, RA-021, RA-022 | M5 |
-| 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | BLOCKED_BY_DEPENDENCIES | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
+| 23 | [RA-023](RA-023.md) AgentCore Gateway and official MCP targets | DONE | RA-010, RA-016, RA-021, RA-022 | M5 |
+| 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | READY | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
 | 25 | [RA-025](RA-025.md) AWS deployment and disaster recovery | BLOCKED_BY_DEPENDENCIES | RA-024 | M6 |
 | 26 | [RA-026](RA-026.md) Final acceptance and production readiness | BLOCKED_BY_DEPENDENCIES | RA-025 | M6 |
 

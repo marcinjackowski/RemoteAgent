@@ -3,15 +3,23 @@
 ## Metadata
 
 - Task: `RA-023`
-- Plan revision: `1`
-- Plan owner: `COORDINATOR_AUDITOR`
-- Implementer: `Claude Opus 5 / high / IMPLEMENTER` (zob. [ADR-0005](../../decisions/ADR-0005-opus5-coordinator-and-implementer.md))
-- Plan status: `DRAFT` — task jest `BLOCKED_BY_DEPENDENCIES`. Zależności `DONE`:
-  RA-010, RA-016. Niedokończone: RA-021, RA-022.
-  Plan nie zmienia statusu taska ani nie omija zależności.
-- Base commit/tree: do zapisania przy starcie
-- Full-task verification: do ustalenia przy starcie (pakiet zależy od decyzji
-  adopt/defer/reject)
+- Plan revision: `2`
+- Rola: jedna rola wykonawcza (ADR-0007). Rewizja `1` była pisana pod ADR-0005;
+  ta rewizja usuwa rozdział koordynator/implementer i zapisuje wynik badania AC1.
+- Plan status: `DONE` — wszystkie zależności `DONE` (RA-010, RA-016, RA-021, RA-022).
+- Base commit: `2c05ca3` (stan po domknięciu RA-022)
+- Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test`
+
+## ROZSTRZYGNIĘCIE ZAKRESU — [ADR-0008](../../decisions/ADR-0008-agentcore-gateway-verdicts.md)
+
+Badanie AC1 (`docs/research/RA-023-CAPABILITY-MATRIX.md`, weryfikacja
+`2026-08-21`) podważyło przesłankę zakresu, a właściciel rozstrzygnął
+`2026-08-21`: **`DEFER` dla wszystkich providerów, `REJECT` dla Gateway'a jako
+warstwy IaC.** Weryfikacja wyłącznie przeciwko fake'om — żadnych wywołań AWS.
+
+Konsekwencja dla units: `WU-01`, `WU-02` i `WU-03` **odstąpione** (budowały
+boundary i drugi silnik credentiali dla targetów, których nie adoptujemy).
+Wykonane: `WU-00`, `WU-04`, `WU-05` (zawężony).
 
 ## Global boundaries
 
@@ -63,20 +71,113 @@
 
 ## Unit index (DRAFT)
 
-| Unit | Status | Result | Depends on |
+| Unit | Status | Result | Komenda weryfikacyjna |
 |---|---|---|---|
-| `RA-023-WU-00` | `DRAFT` | domknięcie `CTF-001` (jedna definicja klas `CredentialRefresh*Error`) | RA-022 DONE |
-| `RA-023-WU-01` | `DRAFT` | target contracts/config/capability registry | WU-00 |
-| `RA-023-WU-02` | `DRAFT` | health/conformance discovery + deterministyczny fallback | WU-01 |
-| `RA-023-WU-03` | `DRAFT` | opaque OAuth/credential session **nad istniejącym** refresh lifecycle | WU-01 |
-| `RA-023-WU-04` | `DRAFT` | one-shot Runtime/session handoff (Postgres jako authority) | WU-03 |
-| `RA-023-WU-05` | `DRAFT` | final fake Gateway conformance proof | WU-02, WU-04 |
+| `RA-023-WU-00` | **`DONE`** | `CTF-001` domknięty — jedna definicja `CredentialRefresh*Error` + `RefreshIntentStatus` w `contracts` | `pnpm vitest run packages/policy/test/credential-error-identity.test.ts` → `10/10`, exit `0` |
+| `RA-023-WU-01` | **`ODSTĄPIONY`** | target registry dla targetów, których nie adoptujemy (ADR-0008) | — |
+| `RA-023-WU-02` | **`ODSTĄPIONY`** | fallbackiem są istniejące, zaudytowane adaptery RA-016/017/019/020 | — |
+| `RA-023-WU-03` | **`ODSTĄPIONY`** | drugi silnik tokenów byłby findingiem BLOCKER (punkt 1 „Ustaleń z kodu") | — |
+| `RA-023-WU-04` | **`DONE`** | sesja runtime jako transport, Postgres jako authority (AC6) | `RA_REQUIRE_POSTGRES=1 pnpm vitest run packages/policy/test/runtime-session.integration.test.ts` → `12/12`, exit `0` |
+| `RA-023-WU-05` | **`DONE`** (zawężony) | containment: zewnętrzny boundary może ZAWĘŻAĆ, nigdy POSZERZAĆ (AC3) | `pnpm vitest run packages/policy/test/external-boundary.test.ts` → `34/34`, exit `0` |
 
 Osobno, jako praca badawcza koordynatora (nie work unit implementera):
 **capability/status matrix i ADR z werdyktami `ADOPT/DEFER/REJECT`** dla Atlassian
 Rovo MCP, Google Gmail/Calendar MCP, GitLab MCP i opcjonalnego Slack MCP — oparte
 na świeżo zweryfikowanej oficjalnej dokumentacji, z cytatami i datą weryfikacji.
 Implementer nie wykonuje research; koordynator nie deleguje decyzji architektonicznej.
+
+## Stan wykonania (`2026-08-21`)
+
+Ustalenia z uruchomionych komend i sond. To jedyny nośnik pamięci między sesjami.
+
+### `WU-00` — `CTF-001` domknięty
+
+Jedna definicja w `packages/contracts/src/credential-refresh-errors.ts`; `database` i
+`policy` re-eksportują. **Rekomendacja rejestru (policy importuje z database) jest
+niewykonalna** — `database` devDependuje na `policy`, więc krawędź w tę stronę czyni
+graf turbo cyklicznym (zmierzone w RA-022-WU-01). Wariant „różne nazwy" też odrzucony:
+semantyka jest identyczna, więc dwie nazwy na jedno znaczenie utrwaliłyby duplikat.
+
+`PersistenceError` **nie** został odtworzony jako baza: refresh conflict to wynik
+domenowy, nie awaria persystencji, a nic w repo nie łapie tych klas przez
+`PersistenceError` (sprawdzone).
+
+Sonda (7 sond) potwierdziła zachowanie: **komunikaty obu pakietów są bajtowo
+identyczne** z poprzednimi, więc żaden runbook ani regex alertu się nie psuje.
+Finding: `this.name` z literału powodował, że **subklasa raportowała nazwę rodzica** —
+naprawione na `new.target.name`.
+
+Osobno: `turbo run typecheck --force` wyłapał fixture testowy podający trzy pola,
+których `assertSameIntentIdentity` nie przyjmuje (`TS2353`), a transform vitesta to
+przepuszczał. To `CTF-004` i tu bramka zarobiła na siebie.
+
+### `WU-04` — sesja to transport, Postgres to authority (AC6)
+
+`packages/policy/src/runtime-session.ts`: `reconcileSession` porównuje deklarację sesji
+z trwałym stanem i zwraca **zawsze stan DURABLE**, nawet na ścieżce sukcesu — żeby
+caller nie mógł przypadkiem rozpropagować przekonania sesji.
+
+Rozróżnienie, które trzeba utrzymać: **`STALE_REVISION` (za sesją) i
+`UNCOMMITTED_AHEAD` (przed) to różne awarie.** Pierwsza znaczy „przeładuj i kontynuuj",
+druga „praca została utracona, ktoś powinien spojrzeć". Jeden kod `MISMATCH` ukryłby
+drugą — a to ta groźna.
+
+Dokumentacja AWS **potwierdza** to założenie wprost: sesja domyślnie efemeryczna,
+ubijana po 15 minutach bezczynności, i „AgentCore does not enforce session-to-user
+mappings". Postgres jako authority jest udokumentowaną postawą dostawcy, nie obejściem.
+
+### `WU-05` — containment: zawężać wolno, poszerzać nie (AC3)
+
+`packages/policy/src/external-boundary.ts`. Pięć rzeczy, których zewnętrzny boundary
+nie może: obniżyć tieru, wprowadzić connectiona poza scope case'a, **zadeklarować
+ownera w ogóle**, zadeklarować decyzji policy, wprowadzić narzędzia poza registry.
+
+Owner i decyzja policy są odrzucane **na obecność, nie na wartość**. Zaakceptowanie
+zgodnego ownera implikowałoby, że zewnętrzna deklaracja może być autorytatywna, gdy
+akurat się zgadza — a w dniu, w którym się nie zgodzi, porównanie jest jedyną obroną.
+
+Fake jest **wrogi**, nie kooperatywny: kooperatywny dowodzi tylko happy patha, a ryzyko
+to boundary przypisujący sobie władzę.
+
+### Sondy adwersarialne — 3 findingi przy zielonych testach
+
+| Sonda | Finding | Naprawa |
+|---|---|---|
+| `WU-05` PROBE 9 | case scoped na `jira` dostawał `gmail.draft.create`, `calendar.event.*`, `gitlab.*` — bo provider był sprawdzany **tylko gdy boundary go zadeklarował**, więc oferta bez deklaracji pomijała kontrolę | provider **derywowany z nazwy narzędzia** (fakt server-owned), nie z deklaracji |
+| `WU-05` PROBE 3 | manifest 20 000 ofert → 20 000 dopuszczonych, bez limitu | `MAX_BOUNDARY_OFFERS = 64` (jak `MAX_MANIFEST_TOOLS` w RA-021), odrzucany **całościowo**, nie ucinany |
+| `WU-05` PROBE 2 | trzy identyczne oferty → trzy capability | dedup, `DUPLICATE_OFFER` |
+
+**Najważniejsza nauka:** w PROBE 9 **pominięcie BYŁO obejściem** — najbezpieczniej
+wyglądający manifest (nic nie deklarujący) był tym, który przechodził. To `CTF-010`
+finding 4 o poziom wyżej: nie „brak deklaracji = zgoda", ale „brak deklaracji = brak
+kontroli".
+
+Limit odrzuca manifest **całościowo**, bo ucięcie do pierwszych 64 oddałoby wybór
+„które 64" temu, kto kontroluje kolejność — czyli boundary'emu.
+
+Sondy bez findingu (sprawdzone, fail-closed): nazwy z prototypu
+(`constructor`, `__proto__`), owner strukturalnie nieosiągalny z deklaracji sesji,
+fencing token nie-liczbowy, rewizja ujemna/`MAX_SAFE_INTEGER`.
+
+### Mutation check — 30 mutacji, wszystkie łapane
+
+`WU-00` 3, `WU-05` 15, `WU-04` 8, plus 4 na drugich asercjach
+(`assertNoWidening`, `assertSessionCarriesNoAuthority`, `assertEveryToolHasProvider`).
+Żadna nie przeżyła — w odróżnieniu od RA-022, gdzie przeżyło dziewięć. Powód jest
+prawdopodobnie ten, że wzorzec „mutacja przeżywa tam, gdzie warstwa wyżej sprawdza to
+samo wcześniej" był już znany i testy pisałem od razu celując w fence bezpośrednio.
+
+### Uruchomione bramki
+
+```text
+packages/policy/test                      239/239, 9 plików, exit 0
+całe repo                                 1793/1793, 141 plików, 2 przebiegi
+turbo run typecheck --force               36 successful, 0 cached
+pnpm run build --force                    26 successful, 0 cached
+eslint + prettier                         czysto
+sonda wartościowa i type-level            brak nowych kolizji; `CredentialRefresh*` znikły
+git diff --check                          exit 0
+```
 
 ## Wymagania do rozdzielenia na units
 
