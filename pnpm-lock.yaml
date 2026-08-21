@@ -116,7 +116,17 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
-  packages/connector-gmail: {}
+  packages/connector-gmail:
+    dependencies:
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@remoteagent/implementation-tools':
+        specifier: workspace:*
+        version: link:../implementation-tools
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/connector-jira:
     dependencies:
