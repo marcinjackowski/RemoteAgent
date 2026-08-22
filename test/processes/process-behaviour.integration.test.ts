@@ -1,5 +1,15 @@
 import { canonicalDigest } from "@remoteagent/contracts";
-import { CaseRepository, ConnectionRepository, OwnerRepository } from "@remoteagent/database";
+import {
+  CaseRepository,
+  ConnectionRepository,
+  JobStore,
+  OwnerRepository,
+  SystemClock,
+  WorkUnitRepository,
+} from "@remoteagent/database";
+import { FakeTransport, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
+import type { Database as ProductionDatabase } from "@remoteagent/database";
+import { StructuredLogger } from "@remoteagent/observability";
 import { afterEach, expect, it } from "vitest";
 
 import {
@@ -7,9 +17,13 @@ import {
   executorConfigFromEnv,
 } from "../../apps/action-executor/src/executor.js";
 import { probe, probeOptionsFromEnv } from "../../apps/agent-worker/src/health.js";
-import { workerConfigFromEnv } from "../../apps/agent-worker/src/worker.js";
+import { bootstrapWorker, workerConfigFromEnv } from "../../apps/agent-worker/src/worker.js";
+import { createWorkerHandlers } from "../../apps/agent-worker/src/handlers.js";
+import { WorkerPersistence } from "../../apps/agent-worker/src/persistence.js";
+import { createRoles } from "../../apps/agent-worker/src/roles.js";
 import { bootstrapIngress, ingressConfigFromEnv } from "../../apps/ingress-api/src/ingress.js";
 import { bootstrapScheduler, schedulerConfigFromEnv } from "../../apps/scheduler/src/scheduler.js";
+import { makeCheckpoint } from "../../packages/database/test/fixtures.js";
 import { createTestDatabase } from "../../packages/database/test/harness.js";
 import {
   describeIntegration,
@@ -549,6 +563,175 @@ describeIntegration(
       expect(config.healthPort).not.toBe(config.webhookPort);
       // 8080 is what `infra/cdk` maps to the target group, so webhooks must own it.
       expect(config.webhookPort).toBe(8080);
+    });
+  },
+  available,
+);
+
+describeIntegration(
+  "the worker process carries a case from the queue to a persisted completion",
+  () => {
+    /**
+     * AC7 of RA-028, and the criterion RA-027 could only satisfy PARTIALLY.
+     *
+     * Every other test in this repository wires packages together in memory. This one
+     * enqueues a row, starts the REAL `worker.js` process over a REAL database, and waits for
+     * the scheduler's own polling loop to claim the job, run the handler and persist the
+     * result. Nothing here calls a handler directly.
+     *
+     * Before RA-028 the same setup dead-lettered the job with `UnknownJobTypeError`, because
+     * the process shipped with an empty handler map.
+     */
+    it("claims a case.resume job from its own loop and persists the completion", async () => {
+      const { db, drop } = await createTestDatabase();
+      const caseId = "case-live";
+      const unitId = "unit-live";
+      // A REAL clock, deliberately. `bootstrapWorker` builds its own `JobStore` with
+      // `productionRuntime()` — system clock, `leaseTime: 'db'`. Enqueueing here with a FIXED
+      // clock puts the queue's notion of time hours away from the process's, and whether the
+      // job is claimed then depends on how the two disagree; the suite passed alone and failed
+      // under load. Only the ids stay deterministic, because the scripted completion's `run_id`
+      // must match the id the runtime mints.
+      const counters = new Map<string, number>();
+      const runtime = {
+        clock: new SystemClock(),
+        ids: {
+          next: (prefix?: string) => {
+            const key = prefix ?? "id";
+            const next = (counters.get(key) ?? 0) + 1;
+            counters.set(key, next);
+            return `${key}-${String(next)}`;
+          },
+        },
+      };
+
+      await new OwnerRepository().insert(db, { ownerId: "owner-live", displayName: "owner" });
+      await new ConnectionRepository().insert(db, {
+        connectionId: "connection-live",
+        ownerId: "owner-live",
+        provider: "jira",
+        displayName: "connection",
+      });
+      await new CaseRepository().insert(db, {
+        caseId,
+        ownerId: "owner-live",
+        status: "NEW",
+        integrationScope: { providers: ["jira"], connection_ids: ["connection-live"] },
+        discordThreadId: "thread-live",
+      });
+      await new WorkUnitRepository().insert(db, {
+        workUnitId: unitId,
+        caseId,
+        role: "REVIEWER",
+        objective: "review the live case",
+        authoritativeScope: {
+          connection_ids: [],
+          repo_allowlist: [],
+          can_write_workspace: false,
+        },
+      });
+      await db.query(
+        "INSERT INTO case_checkpoints (case_id, owner_id, revision, checkpoint) VALUES ($1, 'owner-live', 0, $2::jsonb)",
+        [caseId, JSON.stringify(makeCheckpoint(caseId, 0))],
+      );
+
+      // ONE documented cast at the boundary, the open half of `CTF-004`. `createTestDatabase`
+      // returns a `Database` typed from `packages/database/src`, while `apps/agent-worker`
+      // imports the `dist` declaration; the two are structurally identical but each declares a
+      // private `pool`, so the compiler treats them as unrelated. The same bridge exists in
+      // `test/golden-path`.
+      const productionDb = db as unknown as ProductionDatabase;
+
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, { caseId, jobType: "case.resume", payload: {} });
+
+      const persistence = new WorkerPersistence(productionDb, runtime);
+      const transport = new FakeTransport([
+        {
+          model: { provider: "bedrock", model_id: "test-model" },
+          content: [
+            {
+              type: "json",
+              value: {
+                schema_version: 1,
+                run_id: "run-1",
+                case_id: caseId,
+                status: "COMPLETED",
+                summary: "reviewed",
+                completed_steps: [],
+                evidence: [],
+                checkpoint_patch: {},
+                next_actions: [],
+              },
+            },
+          ],
+        },
+      ]);
+
+      // `port: 0` so the health server never collides with another suite's worker.
+      const process = bootstrapWorker({
+        config: { port: 0, intervalMs: 10, owner: "worker-live", drainMs: 5_000 },
+        db: productionDb,
+        handlers: createWorkerHandlers({
+          persistence,
+          roles: createRoles(["REVIEWER"], {
+            transport,
+            config: createRuntimeConfig({
+              model: { provider: "bedrock", model_id: "test-model" },
+              timeoutMs: 30_000,
+              toolLimits: { maxIterations: 4, maxCalls: 8 },
+            }),
+          }),
+          logger: new StructuredLogger({ sink: { log: () => undefined } }),
+          db: productionDb,
+          jobs: new JobStore(runtime),
+        }),
+        sink: async () => undefined,
+        logger: new StructuredLogger({ sink: { log: () => undefined } }),
+      });
+      await process.start();
+
+      // Poll for the durable result rather than sleeping a fixed interval: the assertion is
+      // that the process GETS there, and a fixed sleep either flakes or wastes time.
+      //
+      // WAIT ON THE JOB STATUS, NOT THE COMPLETION ROW. Polling `run_completions` returns as
+      // soon as the handler has persisted, but `Scheduler` marks the job `SUCCEEDED` only
+      // AFTER the handler returns — so the completion is visible while the job is still
+      // `LEASED` for a moment. This test failed exactly that way once in nine full-repo runs:
+      // a race in the TEST, not in the product. The job status settles last, so waiting on it
+      // means every earlier effect is already durable.
+      const deadline = Date.now() + 20_000;
+      let jobStatus = "";
+      while (Date.now() < deadline) {
+        const row = await db.query<{ status: string }>(
+          "SELECT status FROM jobs WHERE case_id = $1",
+          [caseId],
+        );
+        jobStatus = row.rows[0]?.status ?? "";
+        if (jobStatus === "SUCCEEDED" || jobStatus === "DEAD_LETTER") break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      expect((await db.query("SELECT 1 FROM run_completions")).rows).toHaveLength(1);
+      // The full effect, not just the completion row: the case advanced and the outbox
+      // carries the event that tells the rest of the system.
+      const revision = await db.query<{ checkpoint_revision: number }>(
+        "SELECT checkpoint_revision FROM cases WHERE case_id = $1",
+        [caseId],
+      );
+      expect(revision.rows[0]?.checkpoint_revision).toBe(1);
+      const outbox = await db.query<{ event_type: string }>(
+        "SELECT event_type FROM outbox WHERE aggregate_id = $1",
+        [caseId],
+      );
+      expect(outbox.rows.map((row) => row.event_type)).toContain("agent.completion.recorded");
+      // The model was reached exactly once by the live process.
+      expect(transport.requests).toHaveLength(1);
+      // And the job itself succeeded rather than being retried or dead-lettered — which is
+      // what the whole task turns on: before RA-028 this same job reached the DLQ.
+      expect(jobStatus).toBe("SUCCEEDED");
+
+      await teardown(process, drop);
     });
   },
   available,

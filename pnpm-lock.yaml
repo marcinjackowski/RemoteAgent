@@ -11,6 +11,9 @@ importers:
       '@remoteagent/agent-orchestrator':
         specifier: workspace:*
         version: link:packages/agent-orchestrator
+      '@remoteagent/bedrock-runtime':
+        specifier: workspace:*
+        version: link:packages/bedrock-runtime
       '@remoteagent/connector-gitlab':
         specifier: workspace:*
         version: link:packages/connector-gitlab
@@ -89,6 +92,18 @@ importers:
 
   apps/agent-worker:
     dependencies:
+      '@remoteagent/agent-orchestrator':
+        specifier: workspace:*
+        version: link:../../packages/agent-orchestrator
+      '@remoteagent/bedrock-runtime':
+        specifier: workspace:*
+        version: link:../../packages/bedrock-runtime
+      '@remoteagent/connector-jira':
+        specifier: workspace:*
+        version: link:../../packages/connector-jira
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@remoteagent/database':
         specifier: workspace:*
         version: link:../../packages/database

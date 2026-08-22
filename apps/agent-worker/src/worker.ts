@@ -36,6 +36,24 @@ import {
   StructuredLogger,
   type ProcessDefinition,
 } from "@remoteagent/observability";
+import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
+
+import { createWorkerHandlers } from "./handlers.js";
+import { WorkerPersistence } from "./persistence.js";
+import { createRoles, roleConfigFromEnv } from "./roles.js";
+
+/**
+ * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
+ * route to it; it runs only under a durable writer lease, enforced by `WriterLeaseGuard`.
+ */
+const WORKER_ROLES = [
+  "SUPERVISOR",
+  "PLANNER",
+  "IMPLEMENTER",
+  "REVIEWER",
+  "VERIFICATION",
+  "SPECIALIST",
+] as const;
 
 /** Env var names, documented so a deployment knows exactly what to set. */
 export const WORKER_ENV = {
@@ -184,13 +202,14 @@ export function bootstrapWorker(input: {
 /**
  * The deployment entry point.
  *
- * Handlers are deliberately EMPTY here, and that is not an oversight: the orchestrator's
- * job handlers require a Bedrock runtime, a workspace root and a tool catalogue, none of
- * which this task wires (RA-027 composes; it does not add domain logic). An empty map means
- * every claimed job fails closed to the DLQ with `UnknownJobTypeError` — visible, alarmed,
- * and honest. A handler that pretended to work would be worse.
+ * RA-028 CLOSED THE SEAM THAT WAS `handlers: {}` HERE. RA-027 left the map empty on
+ * purpose — every claimed job failed closed to the DLQ — because the handlers need a model
+ * transport and a persistence adapter, and composing those was a separate task. Both now
+ * exist, so the real handlers are built here.
  *
- * Recorded as a limitation in `RA-027`'s handoff rather than hidden behind a no-op.
+ * The transport is `AwsBedrockTransport` on this path and `FakeTransport` in tests, both
+ * injected into the SAME `createRoles`/`createWorkerHandlers` code. That is what makes a
+ * handler test evidence about this process rather than about a parallel implementation.
  */
 export async function main(): Promise<void> {
   const config = workerConfigFromEnv();
@@ -198,18 +217,32 @@ export async function main(): Promise<void> {
     sink: { log: (record) => console.log(JSON.stringify(record)) },
   });
   const db = Database.fromEnv();
-  const runtime = bootstrapWorker({
+  const runtime = productionRuntime();
+  const handlers = createWorkerHandlers({
+    persistence: new WorkerPersistence(db, runtime),
+    roles: createRoles(WORKER_ROLES, {
+      transport: new AwsBedrockTransport(),
+      config: roleConfigFromEnv(),
+    }),
+    logger,
+    db,
+    jobs: new JobStore(runtime),
+  });
+  const workerRuntime = bootstrapWorker({
     config,
     db,
-    handlers: {},
+    handlers,
     // Outbox messages this process does not own are a routing bug, not something to absorb.
     sink: async (message: ClaimableDispatch): Promise<void> => {
       throw new Error(`worker received an outbox message it cannot deliver: ${message.aggregate}`);
     },
     logger,
   });
-  await runtime.start();
-  logger.info("worker ready", { registered_job_types: Object.values(JobType).length });
+  await workerRuntime.start();
+  logger.info("worker ready", {
+    registered_job_types: Object.keys(handlers).length,
+    known_job_types: Object.values(JobType).length,
+  });
 }
 
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {

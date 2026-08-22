@@ -16,6 +16,10 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@remoteagent/agent-orchestrator": "workspace:*",
+    "@remoteagent/bedrock-runtime": "workspace:*",
+    "@remoteagent/connector-jira": "workspace:*",
+    "@remoteagent/contracts": "workspace:*",
     "@remoteagent/database": "workspace:*",
     "@remoteagent/observability": "workspace:*"
   }

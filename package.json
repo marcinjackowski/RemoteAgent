@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@remoteagent/agent-orchestrator": "workspace:*",
+    "@remoteagent/bedrock-runtime": "workspace:*",
     "@remoteagent/connector-gitlab": "workspace:*",
     "@remoteagent/contracts": "workspace:*",
     "@remoteagent/database": "workspace:*",
