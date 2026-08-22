@@ -53,7 +53,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | DONE | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
 | 25 | [RA-025](RA-025.md) AWS deployment and disaster recovery | DONE | RA-024 | M6 |
 | 26 | [RA-026](RA-026.md) Final acceptance and production readiness | DONE | RA-025 | M6 |
-| 27 | [RA-027](RA-027.md) Composition roots: uruchamialne procesy | IN_PROGRESS | RA-026 | M7 |
+| 27 | [RA-027](RA-027.md) Composition roots: uruchamialne procesy | DONE | RA-026 | M7 |
 
 ## Milestone gates
 

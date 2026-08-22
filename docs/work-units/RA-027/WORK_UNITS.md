@@ -5,7 +5,7 @@
 - Task: `RA-027`
 - Plan revision: `1`
 - Rola: jedna rola wykonawcza (ADR-0007)
-- Plan status: `IN_PROGRESS`
+- Plan status: `DONE`
 - Base commit: `1c50f40` (stan po domknięciu RA-026)
 - Full-task verification: `RA_REQUIRE_POSTGRES=1 pnpm vitest run test/processes` + całe repo
 
@@ -43,16 +43,16 @@ wyjątkiem i ma realny composition root.
 
 | Unit | Status | Result | Depends on |
 |---|---|---|---|
-| `RA-027-WU-01` | `READY` | wspólny bootstrap: sygnały, graceful shutdown, structured logger | — |
-| `RA-027-WU-02` | `DRAFT` | `health.js` — serwer HTTP `/livez` + `/readyz` (AC2) | WU-01 |
-| `RA-027-WU-03` | `DRAFT` | `worker.js` — Scheduler + handler `job_type` → orchestrator | WU-02 |
-| `RA-027-WU-04` | `DRAFT` | `executor.js` — pętla po `external_actions` | WU-02 |
-| `RA-027-WU-05` | `DRAFT` | `ingress.js` — serwer webhooków (podpis → raw_events → enqueue) | WU-02 |
-| `RA-027-WU-06` | `DRAFT` | `discord.js` — `main()` nad `runFromEnv()` | WU-01 |
-| `RA-027-WU-07` | `DRAFT` | `scheduler.js` — ticki renewal/reconciliation | WU-02 |
-| `RA-027-WU-08` | `DRAFT` | test zgodności nazw `dist/*.js` z `infra/cdk` (AC3) | WU-03..WU-07 |
-| `RA-027-WU-09` | `DRAFT` | `Dockerfile` + `docker-compose` dla lokalnego startu | WU-08 |
-| `RA-027-WU-10` | `DRAFT` | golden path przez uruchomione procesy (AC6) | WU-08 |
+| `RA-027-WU-01` | `DONE` | wspólny bootstrap: sygnały, graceful shutdown, structured logger | — |
+| `RA-027-WU-02` | `DONE` | `health.js` — serwer HTTP `/livez` + `/readyz` (AC2) | WU-01 |
+| `RA-027-WU-03` | `DONE` | `worker.js` — Scheduler + handler `job_type` → orchestrator | WU-02 |
+| `RA-027-WU-04` | `DONE` | `executor.js` — pętla po `external_actions` | WU-02 |
+| `RA-027-WU-05` | `DONE` | `ingress.js` — serwer webhooków (podpis → raw_events → enqueue) | WU-02 |
+| `RA-027-WU-06` | `DONE` | `discord.js` — `main()` nad `runFromEnv()` | WU-01 |
+| `RA-027-WU-07` | `DONE` | `scheduler.js` — ticki renewal/reconciliation | WU-02 |
+| `RA-027-WU-08` | `DONE` | test zgodności nazw `dist/*.js` z `infra/cdk` (AC3) | WU-03..WU-07 |
+| `RA-027-WU-09` | `DONE` | `Dockerfile` + `docker-compose` dla lokalnego startu | WU-08 |
+| `RA-027-WU-10` | `DONE` | golden path przez uruchomione procesy (AC6) | WU-08 |
 
 ## Mapowanie kryteriów akceptacji
 
@@ -85,3 +85,23 @@ Start/stop każdego procesu z asercją na czystym zamknięciu, test nazw wobec
 `infra/cdk`, test `/livez` vs `/readyz` przy padniętej bazie, kanarek sekretów, golden
 path przez procesy, całe repo (kilka przebiegów), wszystkie bramki jakościowe,
 `pnpm workflow:validate`, `git diff --check`. Brak Dockera odnotowany jawnie.
+
+## Ustalenia po wykonaniu (`2026-08-22`)
+
+Pełny zapis w `docs/handoffs/RA-027/HANDOFF-01.md`. Tu tylko to, co zmienia plan:
+
+1. **Trzy sondy przed planowaniem oszczędziły większość roboty:** `Scheduler` ma już
+   `tick`/`start`/`stop`, `discord-bot` ma już `runFromEnv()`, `Database.fromEnv()`
+   istnieje. Bez nich rozpisałbym budowę maszynerii, która już jest.
+2. **Ryzyko `WU-03` zmaterializowało się inaczej, niż przewidywałem.** Plan ostrzegał, że
+   mapowanie `job_type` może wymagać decyzji właściciela. Nie wymagało — `grep` pokazał
+   trzy typy, które produkcja **już** enqueue'uje, więc była konwencja do odwzorowania,
+   nie do wymyślenia.
+3. **DWANAŚCIE z 31 mutacji przeżyło pierwszy przebieg**, wszystkie z jednego powodu:
+   testy dowodziły, że procesy startują i się zatrzymują, i nic o tym, co robią.
+   Domknięte osobnym plikiem `process-behaviour.integration.test.ts`.
+4. **Dwa realne defekty wykryte testami:** body health nie było redagowane;
+   `request.destroy()` na zbyt dużym body sprawiał, że provider nigdy nie widział 413.
+5. **AC6 częściowe.** Procesy udowodnione przeciwko realnej bazie; golden path Jira→MR
+   **nie** przechodzi przez uruchomione procesy, bo domyślne handlery są puste. Zapisane
+   w `AUDIT-01` §6 jako świadome zawężenie.

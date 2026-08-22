@@ -161,6 +161,44 @@ describe("AC1: the process starts and shuts down in the documented order", () =>
     expect(outcome.drained).toBe(false);
   });
 
+  it("reports UNCLEAN when close() throws, rather than claiming success", async () => {
+    // `clean` is what an operator reads to know whether a restart left anything behind. A
+    // shutdown that swallowed a failing `close()` would report success while, for instance,
+    // leaving a database pool open — and a mutation removing `clean = false` stayed green
+    // until this case existed.
+    const state = recorder();
+    const failingClose: ProcessDefinition = {
+      ...state.definition,
+      close: async () => {
+        throw new Error("close exploded");
+      },
+    };
+    const runtime = new ProcessRuntime(failingClose, { port: 0, signals: [] });
+    runtimes.push(runtime);
+    await runtime.start();
+    const outcome = await runtime.shutdown("SIGTERM");
+    expect(outcome.clean).toBe(false);
+    // Drained is still true: the drain succeeded, only the close failed. Conflating the two
+    // would hide which half went wrong.
+    expect(outcome.drained).toBe(true);
+  });
+
+  it("reports UNCLEAN when stopAcceptingWork throws", async () => {
+    // The other `clean = false` path. A process that could not stop claiming is in a worse
+    // state than one that could not close, and both must be visible.
+    const state = recorder();
+    const failingStop: ProcessDefinition = {
+      ...state.definition,
+      stopAcceptingWork: () => {
+        throw new Error("stop exploded");
+      },
+    };
+    const runtime = new ProcessRuntime(failingStop, { port: 0, signals: [] });
+    runtimes.push(runtime);
+    await runtime.start();
+    expect((await runtime.shutdown("SIGTERM")).clean).toBe(false);
+  });
+
   it("shuts down what it bound when start FAILS, so the port does not leak", async () => {
     // Otherwise the next task instance cannot bind, and the symptom (EADDRINUSE) points at
     // the wrong process.

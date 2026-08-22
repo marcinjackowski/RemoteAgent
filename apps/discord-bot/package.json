@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@remoteagent/database": "workspace:*",
-    "@remoteagent/discord": "workspace:*"
+    "@remoteagent/discord": "workspace:*",
+    "@remoteagent/observability": "workspace:*"
   }
 }

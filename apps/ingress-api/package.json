@@ -14,5 +14,10 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@remoteagent/connector-jira": "workspace:*",
+    "@remoteagent/database": "workspace:*",
+    "@remoteagent/observability": "workspace:*"
   }
 }

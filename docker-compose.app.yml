@@ -1,0 +1,120 @@
+# The five application processes, for a local end-to-end run (RA-027-WU-09).
+#
+# SEPARATE FILE FROM `docker-compose.yml`, deliberately. That one starts only PostgreSQL and
+# is what every test run depends on; it must keep working with no image built. This file adds
+# the processes and is used with both:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up
+#
+# NOT RUN IN THIS TASK. Docker's client and engine are version-mismatched on the development
+# machine (`AGENTS.md`), so this file is written and reviewed but never started. Stated rather
+# than implied: a compose file that has never run is a hypothesis. What IS verified without
+# Docker is that every process starts, serves health and stops cleanly against the real local
+# PostgreSQL — `test/processes/lifecycle.integration.test.ts`, 7 tests.
+#
+# THE PROCESS SPLIT MIRRORS `infra/cdk` EXACTLY, because a local topology that differs from
+# the deployed one produces confidence in the wrong shape. Same commands, same health probes,
+# same single-instance constraints on the executor and the Discord gateway.
+name: remoteagent-app
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  # `RA_PGPORT` is 5432 here, not 5433: inside the compose network the processes reach
+  # PostgreSQL on its own port. 5433 is the HOST mapping, for tools running outside.
+  environment: &common-env
+    RA_PGHOST: postgres
+    RA_PGPORT: "5432"
+    RA_PGUSER: remoteagent
+    RA_PGPASSWORD: remoteagent-local-dev
+    RA_PGDATABASE: remoteagent
+    RA_HEALTH_PORT: "8080"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  worker:
+    <<: *common
+    command: ["node", "dist/worker.js"]
+    # LIVENESS, never readiness. Compose restarts an unhealthy container, so a readiness
+    # probe here would restart-loop the worker during a database outage — the RA-024 finding,
+    # and the reason this line matches the ECS health check rather than the ALB one.
+    healthcheck:
+      test: ["CMD", "node", "dist/health.js", "--liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  executor:
+    <<: *common
+    command: ["node", "dist/executor.js"]
+    # ONE instance, always. Not scaling — correctness: the executor performs external writes,
+    # and a single writer keeps "which process sent this?" answerable during an incident.
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "node", "dist/health.js", "--liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  scheduler:
+    <<: *common
+    command: ["node", "dist/scheduler.js"]
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "node", "dist/health.js", "--liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ingress:
+    <<: *common
+    command: ["node", "dist/ingress.js"]
+    environment:
+      <<: *common-env
+      # Health on 8081, webhooks on 8080 — they MUST differ, or the load balancer's
+      # equivalent would route webhooks at the health endpoint. Same split as `infra/cdk`.
+      RA_HEALTH_PORT: "8081"
+      RA_WEBHOOK_PORT: "8080"
+    ports:
+      # Exposed so a local `curl` can deliver a webhook. The only process with a published
+      # port, mirroring the deployment where it is the only one behind the load balancer.
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "dist/health.js", "--liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  discord:
+    <<: *common
+    command: ["node", "dist/discord.js"]
+    # ONE instance. A second gateway session receives every interaction twice, so the owner's
+    # single click would become two approvals.
+    deploy:
+      replicas: 1
+    environment:
+      <<: *common-env
+      # `runFromEnv` throws on any missing value rather than defaulting — a bot with no token
+      # would otherwise start, report healthy and silently receive nothing. Supplied out of
+      # band; deliberately absent here, because a placeholder token in a committed file is
+      # how a real one eventually gets committed next to it.
+      RA_DISCORD_TOKEN: ${RA_DISCORD_TOKEN:?set RA_DISCORD_TOKEN to run the discord process}
+      RA_DISCORD_GUILD_ID: ${RA_DISCORD_GUILD_ID:?set RA_DISCORD_GUILD_ID}
+      RA_DISCORD_OWNER_ID: ${RA_DISCORD_OWNER_ID:?set RA_DISCORD_OWNER_ID}
+      RA_DISCORD_BOT_USER_ID: ${RA_DISCORD_BOT_USER_ID:?set RA_DISCORD_BOT_USER_ID}
+    healthcheck:
+      test: ["CMD", "node", "dist/health.js", "--liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

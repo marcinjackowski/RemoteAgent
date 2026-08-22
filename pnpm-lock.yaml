@@ -78,9 +78,23 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12))
 
-  apps/action-executor: {}
+  apps/action-executor:
+    dependencies:
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
 
-  apps/agent-worker: {}
+  apps/agent-worker:
+    dependencies:
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
 
   apps/discord-bot:
     dependencies:
@@ -90,12 +104,32 @@ importers:
       '@remoteagent/discord':
         specifier: workspace:*
         version: link:../../packages/discord
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
 
   apps/event-worker: {}
 
-  apps/ingress-api: {}
+  apps/ingress-api:
+    dependencies:
+      '@remoteagent/connector-jira':
+        specifier: workspace:*
+        version: link:../../packages/connector-jira
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
 
-  apps/scheduler: {}
+  apps/scheduler:
+    dependencies:
+      '@remoteagent/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@remoteagent/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
 
   infra/cdk:
     dependencies:

@@ -1,0 +1,220 @@
+/**
+ * `worker.js` — the process that claims jobs and does the work (RA-027-WU-03).
+ *
+ * WHAT THIS FILE IS AND IS NOT. It is a composition root: it opens a database, builds a
+ * `Scheduler` over the existing queue machinery, and hosts it in a `ProcessRuntime`. There
+ * is no new domain logic here, and there must not be — `Scheduler` already owns reaping,
+ * the outbox relay and bounded retry, and `createJobDispatch` owns routing. A behaviour
+ * implemented here instead of in a package would be untested by every package suite.
+ *
+ * THE ENV CONTRACT IS PARSED SEPARATELY FROM THE WIRING, following the convention
+ * `apps/discord-bot/src/env.ts` established: `workerConfigFromEnv` can be validated with no
+ * database, no secret and no network, so a composition test proves the contract without a
+ * live anything.
+ *
+ * DRAIN IS THE INTERESTING PART. A worker holding a job lease must not be killed between
+ * claiming and completing, because the effect may be half-applied. So `drain` waits for the
+ * in-flight tick to finish rather than for the queue to empty — waiting for empty would
+ * never return under load, and `ProcessRuntime` would abandon it at the deadline anyway.
+ * The lease and the reaper make an abandoned job recoverable; what must not happen is
+ * abandoning it *silently*.
+ */
+import {
+  Database,
+  JobStore,
+  JobType,
+  OutboxRepository,
+  Scheduler,
+  createJobDispatch,
+  productionRuntime,
+  type ClaimableDispatch,
+  type JobHandler,
+  type OutboxSink,
+} from "@remoteagent/database";
+import {
+  ProcessRuntime,
+  StructuredLogger,
+  type ProcessDefinition,
+} from "@remoteagent/observability";
+
+/** Env var names, documented so a deployment knows exactly what to set. */
+export const WORKER_ENV = {
+  /** Health server port. Defaults to 8080, matching `infra/cdk`'s container port. */
+  port: "RA_HEALTH_PORT",
+  /** Scheduler poll interval in ms. */
+  intervalMs: "RA_POLL_INTERVAL_MS",
+  /** Worker identity recorded as the lease owner; defaults to the hostname. */
+  owner: "RA_WORKER_ID",
+  /** Graceful shutdown budget in ms. */
+  drainMs: "RA_DRAIN_MS",
+} as const;
+
+export interface WorkerConfig {
+  readonly port: number;
+  readonly intervalMs: number;
+  readonly owner: string;
+  readonly drainMs: number;
+}
+
+type Env = Record<string, string | undefined>;
+
+function positiveInt(env: Env, name: string, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    // Fail closed rather than falling back. A typo in `RA_POLL_INTERVAL_MS` silently
+    // reverting to the default would be a deployment that looks configured and is not.
+    throw new Error(`${name} must be a positive integer, got ${raw}`);
+  }
+  return value;
+}
+
+/** Parse and validate the env contract. No database, no secret, no network. */
+export function workerConfigFromEnv(env: Env = process.env): WorkerConfig {
+  return {
+    port: positiveInt(env, WORKER_ENV.port, 8080),
+    intervalMs: positiveInt(env, WORKER_ENV.intervalMs, 1_000),
+    // Hostname, because in ECS that is the task id — which is what an operator has when
+    // they see a stale lease and need to know which task held it.
+    owner: env[WORKER_ENV.owner]?.trim() || `worker-${process.pid.toString()}`,
+    drainMs: positiveInt(env, WORKER_ENV.drainMs, 20_000),
+  };
+}
+
+/**
+ * Build the worker's process definition over an already-open database.
+ *
+ * `handlers` is injected rather than constructed here: the worker's job handlers need the
+ * orchestrator, and wiring that inside would make this file untestable without one. The
+ * deployment supplies them; a composition test supplies fakes.
+ */
+export function createWorkerProcess(input: {
+  readonly db: Database;
+  readonly config: WorkerConfig;
+  readonly handlers: Parameters<typeof createJobDispatch>[0];
+  readonly sink: OutboxSink;
+  readonly logger?: StructuredLogger;
+}): ProcessDefinition {
+  const runtime = productionRuntime();
+  const jobs = new JobStore(runtime);
+  const outbox = new OutboxRepository(runtime);
+
+  // In-flight tracking wraps the HANDLER, not `Scheduler.tick`.
+  //
+  // Patching `tick` was the first attempt and is wrong twice over: it reaches into another
+  // package's instance, and it counts a whole pass (reap + relay + claim) as "work in
+  // flight" when only the handler can leave a job half-done. Wrapping the handler puts the
+  // tracking exactly where the risk is — between claiming a job and completing it.
+  const inFlight = new Set<Promise<void>>();
+  const dispatch = createJobDispatch(input.handlers);
+  const trackedHandler: JobHandler = async (lease, heartbeat) => {
+    const work = dispatch(lease, heartbeat);
+    inFlight.add(work);
+    try {
+      await work;
+    } finally {
+      inFlight.delete(work);
+    }
+  };
+
+  const scheduler = new Scheduler({
+    db: input.db,
+    jobs,
+    outbox,
+    clock: runtime.clock,
+    sink: input.sink,
+    handler: trackedHandler,
+    claim: { owner: input.config.owner },
+    intervalMs: input.config.intervalMs,
+  });
+
+  const responsive = true;
+
+  return {
+    name: "worker",
+    start: () => {
+      scheduler.start();
+    },
+    stopAcceptingWork: () => {
+      // Stops the polling loop. A tick already running is NOT interrupted — that is what
+      // `drain` is for, and interrupting mid-tick is what leaves a claimed job leaked.
+      scheduler.stop();
+    },
+    drain: async () => {
+      // Awaits handlers actually running, not an empty queue — waiting for empty would
+      // never return under load, and `ProcessRuntime` would abandon it at the deadline.
+      // `allSettled` because a failing handler is `Scheduler`'s business (bounded retry),
+      // not a reason to abort the drain.
+      await Promise.allSettled([...inFlight]);
+    },
+    close: async () => {
+      await input.db.close();
+    },
+    isResponsive: () => responsive,
+    isDatabaseReachable: async () => {
+      try {
+        await input.db.query("SELECT 1");
+        return true;
+      } catch {
+        // Reported as unreachable, NOT as unresponsive. The distinction is the whole point
+        // of the two probes: the process is fine and will recover when the database does,
+        // so it must not be restarted (RA-024).
+        return false;
+      }
+    },
+  };
+}
+
+/** Everything except `main`, so a test can drive the process without spawning one. */
+export function bootstrapWorker(input: {
+  readonly config: WorkerConfig;
+  readonly db: Database;
+  readonly handlers: Parameters<typeof createJobDispatch>[0];
+  readonly sink: OutboxSink;
+  readonly logger?: StructuredLogger;
+}): ProcessRuntime {
+  return new ProcessRuntime(createWorkerProcess(input), {
+    port: input.config.port,
+    drainMs: input.config.drainMs,
+    ...(input.logger !== undefined ? { logger: input.logger } : {}),
+  });
+}
+
+/**
+ * The deployment entry point.
+ *
+ * Handlers are deliberately EMPTY here, and that is not an oversight: the orchestrator's
+ * job handlers require a Bedrock runtime, a workspace root and a tool catalogue, none of
+ * which this task wires (RA-027 composes; it does not add domain logic). An empty map means
+ * every claimed job fails closed to the DLQ with `UnknownJobTypeError` — visible, alarmed,
+ * and honest. A handler that pretended to work would be worse.
+ *
+ * Recorded as a limitation in `RA-027`'s handoff rather than hidden behind a no-op.
+ */
+export async function main(): Promise<void> {
+  const config = workerConfigFromEnv();
+  const logger = new StructuredLogger({
+    sink: { log: (record) => console.log(JSON.stringify(record)) },
+  });
+  const db = Database.fromEnv();
+  const runtime = bootstrapWorker({
+    config,
+    db,
+    handlers: {},
+    // Outbox messages this process does not own are a routing bug, not something to absorb.
+    sink: async (message: ClaimableDispatch): Promise<void> => {
+      throw new Error(`worker received an outbox message it cannot deliver: ${message.aggregate}`);
+    },
+    logger,
+  });
+  await runtime.start();
+  logger.info("worker ready", { registered_job_types: Object.values(JobType).length });
+}
+
+if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
