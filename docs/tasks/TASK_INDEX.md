@@ -53,6 +53,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 24 | [RA-024](RA-024.md) Security, privacy and observability hardening | DONE | RA-018, RA-019, RA-020, RA-021, RA-022, RA-023 | M6 |
 | 25 | [RA-025](RA-025.md) AWS deployment and disaster recovery | DONE | RA-024 | M6 |
 | 26 | [RA-026](RA-026.md) Final acceptance and production readiness | DONE | RA-025 | M6 |
+| 27 | [RA-027](RA-027.md) Composition roots: uruchamialne procesy | IN_PROGRESS | RA-026 | M7 |
 
 ## Milestone gates
 
@@ -63,6 +64,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - **M4 Google:** dwa konta Gmail i Calendar bez cross-account leakage.
 - **M5 Tools/actions:** MCP, policy, approval i external writes.
 - **M6 Production:** hardening, AWS, restore drill i final audit.
+- **M7 Runnable:** composition roots — procesy, health, Dockerfile.
 
 ## Prepared execution plans
 
@@ -85,6 +87,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-024 work units](../work-units/RA-024/WORK_UNITS.md)
 - [RA-025 work units](../work-units/RA-025/WORK_UNITS.md)
 - [RA-026 work units](../work-units/RA-026/WORK_UNITS.md)
+- [RA-027 work units](../work-units/RA-027/WORK_UNITS.md)
 - [RA-016 work units](../work-units/RA-016/WORK_UNITS.md)
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie

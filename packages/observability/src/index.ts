@@ -8,5 +8,6 @@ export * from "./tracing.js";
 export * from "./metrics.js";
 export * from "./alerts.js";
 export * from "./health.js";
+export * from "./process-runtime.js";
 export * from "./backpressure.js";
 export * from "./privileges.js";
