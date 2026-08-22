@@ -43,6 +43,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-015` | LOW | OTWARTY — decyzja `accept` | sześć nowych kolizji type-level poza `packageName`; nieosiągalne, wzmacniają `CTF-002-U1` |
 | `CTF-016` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `hookTimeout` został na 10s, gdy `testTimeout` podniesiono do 120s |
 | `CTF-017` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `process-runner`: kernel reapuje wnuka asynchronicznie po SIGKILL |
+| `CTF-018` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-028 | `cases.active_run_id` nie ustawiał ŻADEN kod produkcyjny; luka od RA-003 |
 
 ---
 
@@ -1429,3 +1430,69 @@ Polling z ograniczonym budżetem (100 × 20 ms), z tym samym uzasadnieniem co p�
 `CTF-003`: warunek wstępny, który jest jedynie **wolny**, nie może być raportowany
 jako awaria mechanizmu. Asercja nadal pada, jeśli wnuk **przeżyje** — daje jedynie
 kernelowi ograniczoną chwilę na dokończenie.
+
+## `CTF-018` — `cases.active_run_id` nie było ustawiane przez żaden kod produkcyjny
+
+- Severity: **LOW** (mechanizm domknięty w RA-028; wpis istnieje dla wzorca, nie dla naprawy)
+- Wykryty: `2026-08-22`, pierwszym realnym przebiegiem handlera w RA-028
+- Dotyczy: `RA-003` (schemat), `RA-008` (completion), każdego audytu do `RA-027`
+- Status: **ZAMKNIĘTY** — naprawiony w `apps/agent-worker/src/persistence.ts`
+
+### Co było nie tak
+
+`RunCompletionRepository.apply()` odrzuca completion, jeżeli
+`cases.active_run_id !== completion.run_id`:
+
+```sql
+-- run-completion.ts
+if (… || caseRow.active_run_id !== completion.run_id) {
+  throw new RunCompletionStateError("run/case is not eligible for completion");
+}
+```
+
+`grep` po całym repozytorium pokazał, że tę kolumnę kod produkcyjny **tylko czyści**
+(`SET active_run_id = NULL`, w `apply()` po domknięciu runa). **Nic jej nigdy nie ustawiało.**
+
+Skutek: pełna ścieżka „claim → start → invoke → persist" była **nieosiągalna** w produkcji.
+Pierwsze realne wywołanie failowało z `run/case is not eligible for completion`.
+
+### Dlaczego przeżyło każdy audyt
+
+Każdy test, który dochodził do completion, ustawiał tę kolumnę **ręcznie**:
+
+```text
+packages/database/test/checkpoint-recovery.integration.test.ts:58
+  UPDATE cases SET active_run_id='run-1' WHERE case_id='case-1'
+packages/database/test/case-recovery.integration.test.ts:58
+  UPDATE cases SET active_run_id='active-run-1' WHERE case_id='case-1'
+```
+
+Fixture dostarczał stan, którego nie tworzył żaden kod produkcyjny. Każdy test był zielony,
+każde kryterium akceptacji spełnione, a ścieżka nieosiągalna. To nie jest defekt testów —
+testy sprawdzały to, co miały. Brakowało testu, który uruchamia **proces**, bo dopóki nie
+istniał entry point (RA-027), nie było czego uruchomić.
+
+### Wzorzec do zapamiętania
+
+**Fixture, który ustawia stan, którego nie tworzy żaden kod produkcyjny, ukrywa brakującą
+ścieżkę zapisu.** Przy audycie warto zapytać nie tylko „czy test przechodzi", ale „kto
+ustawia ten wiersz w produkcji" — i sprawdzić `grep`em, że odpowiedź nie jest „nikt".
+
+Blisko spokrewnione z `CTF-010`: tam komentarz nie zgadzał się z zachowaniem, tu fixture nie
+zgadzał się z produkcją. W obu przypadkach rozstrzygnęło uruchomienie, nie przegląd.
+
+### Naprawa
+
+`WorkerPersistence.start()` przejmuje aktywny run w jednej transakcji z przejściem
+`PLANNED → STARTED`, z guardem:
+
+```sql
+UPDATE cases SET active_run_id = $2
+  WHERE case_id = $1 AND (active_run_id IS NULL OR active_run_id = $2)
+```
+
+Guard robi z tego **durable single-writer gate** dla case'a (`AGENTS.md` §7): drugi run nie
+przejmie case'a, który już ma aktywny. FK z migracji 011 pinuje run do tego samego case'a.
+Ponowienie z tym samym run id jest idempotentne, na czym polega recovery.
+
+Mutation check: usunięcie guardu czerwieni test.
