@@ -17,6 +17,9 @@ importers:
       '@remoteagent/connector-gitlab':
         specifier: workspace:*
         version: link:packages/connector-gitlab
+      '@remoteagent/connector-jira':
+        specifier: workspace:*
+        version: link:packages/connector-jira
       '@remoteagent/contracts':
         specifier: workspace:*
         version: link:packages/contracts
