@@ -142,7 +142,12 @@ export async function reconcileJiraIssues(
   const cursorMs = cursor ? Number(cursor.watermark_ms) : BOOTSTRAP_MS;
   const issues = validateIssues(
     await options.search.searchJql(
-      `project = ${valid.data.projectKey} AND updated >= ${new Date(cursorMs).toISOString()} ORDER BY updated ASC, key ASC`,
+      // Jira JQL rejects ISO 8601 (`...T..:..Z`) for date fields and, worse, answers a malformed
+      // date bound with HTTP 200 and zero rows instead of an error — so `new Date().toISOString()`
+      // silently matched nothing and the watermark never advanced. Epoch milliseconds ARE accepted.
+      // JQL date comparison is minute-granular, but the exact ms + key filter below (`eligible`)
+      // re-narrows the result, so a coarser bound only over-includes; it never drops a change.
+      `project = ${valid.data.projectKey} AND updated >= ${cursorMs} ORDER BY updated ASC, key ASC`,
       MAX_PAGES,
       MAX_ISSUES,
     ),

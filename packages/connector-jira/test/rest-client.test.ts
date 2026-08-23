@@ -79,10 +79,31 @@ describe("Jira REST client", () => {
       make("https://jira.example/rest/api/3/issue/PROJ-1", true).getIssue("PROJ-1"),
     ).rejects.toMatchObject({ kind: "auth" });
   });
-  it("rejects malformed/extra/oversized issue responses", async () => {
-    await expect(client({ ...issue, extra: true }).getIssue("PROJ-1")).rejects.toMatchObject({
-      kind: "invalid_response",
-    });
+  it("accepts a real rich issue but rejects malformed/oversized ones", async () => {
+    // A real Jira issue carries `self`/`expand`, rich `project`/`status` objects, and a `null`
+    // description. It must be accepted (unknown keys stripped) and normalized to the modeled shape.
+    const real = {
+      ...issue,
+      self: "https://jira.example/rest/api/3/issue/1",
+      expand: "renderedFields,names",
+      fields: {
+        ...issue.fields,
+        project: { self: "x", id: "10", key: "PROJ", name: "Project", projectTypeKey: "software" },
+        status: { self: "x", id: "3", name: "Open", statusCategory: { key: "new" } },
+        description: null,
+      },
+    };
+    const parsed = await client(real).getIssue("PROJ-1");
+    expect(parsed.fields.project).toEqual({ key: "PROJ" });
+    expect(parsed.fields.status).toEqual({ trust: "UNTRUSTED_DATA", value: "Open" });
+    expect(parsed.fields.description).toBeUndefined();
+    // Missing the required `updated` field is still malformed.
+    await expect(
+      client({ id: "1", key: "PROJ-1", fields: { project: { key: "PROJ" }, labels: [] } }).getIssue(
+        "PROJ-1",
+      ),
+    ).rejects.toMatchObject({ kind: "invalid_response" });
+    // Oversized provider text is still rejected.
     await expect(
       client({ ...issue, fields: { ...issue.fields, summary: "x".repeat(70_000) } }).getIssue(
         "PROJ-1",
@@ -145,10 +166,10 @@ describe("Jira REST client", () => {
       (error) => !JSON.stringify(error).includes("secret"),
     );
   });
-  it("rejects strict page extras and invalid token type", async () => {
-    await expect(client({ issues: [], extra: true }).searchJql("x")).rejects.toMatchObject({
-      kind: "invalid_response",
-    });
+  it("accepts unknown page keys but rejects an invalid token type", async () => {
+    // Real search envelopes may carry extra top-level keys; they are accepted (unknown stripped).
+    expect(await client({ issues: [], extra: true, isLast: true }).searchJql("x")).toEqual([]);
+    // A non-string nextPageToken is still a contract violation.
     await expect(client({ issues: [], nextPageToken: 4 }).searchJql("x")).rejects.toMatchObject({
       kind: "invalid_response",
     });

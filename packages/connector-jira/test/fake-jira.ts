@@ -80,7 +80,9 @@ export class FakeJira implements FakeJiraSurface {
     const parsed = JQL.exec(jql);
     if (parsed === null) throw new JiraRestError("invalid_response", "jira search jql rejected");
     const projectKey = parsed[1]!;
-    const cursorMs = Date.parse(parsed[2]!);
+    // The reconciler bounds `updated` with epoch milliseconds (ISO 8601 is silently ignored by
+    // real Jira JQL), so the cursor is a bare integer, not a parseable date string.
+    const cursorMs = Number(parsed[2]!);
     if (!Number.isFinite(cursorMs))
       throw new JiraRestError("invalid_response", "jira search cursor rejected");
     return [...this.#issues.values()]

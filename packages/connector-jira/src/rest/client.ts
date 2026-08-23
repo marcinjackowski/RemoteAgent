@@ -37,14 +37,19 @@ export interface JiraSearchPage {
   nextPageToken?: string;
   isLast?: boolean;
 }
-const rawIssueSchema = z.strictObject({
+// Real Jira responses carry far more than the fields we model: the issue has `self`/`expand`,
+// `project` and `status` are rich objects, and `description` arrives as `null`, not absent. A
+// strict schema rejected every real response — so this validated only synthetic fixtures. We
+// parse non-strict (Zod strips unknown keys) and pick the modeled fields; the values we DO keep
+// are still trust-wrapped below, so ignoring the rest narrows exposure rather than widening it.
+const rawIssueSchema = z.object({
   id: z.string().min(1).max(128),
   key: z.string().min(1).max(128),
-  fields: z.strictObject({
-    project: z.strictObject({ key: z.string().min(1).max(128) }),
-    summary: z.string().max(65_536).optional(),
-    description: z.string().max(65_536).optional(),
-    status: z.strictObject({ name: z.string().max(256) }).optional(),
+  fields: z.object({
+    project: z.object({ key: z.string().min(1).max(128) }),
+    summary: z.string().max(65_536).nullish(),
+    description: z.string().max(65_536).nullish(),
+    status: z.object({ name: z.string().max(256) }).nullish(),
     labels: z.array(z.string().max(256)).max(128).default([]),
     updated: z.string().max(64),
   }),
@@ -52,23 +57,25 @@ const rawIssueSchema = z.strictObject({
 function parseIssueResponse(value: unknown): JiraIssueResponse {
   const parsed = rawIssueSchema.safeParse(value);
   if (!parsed.success) throw new JiraRestError("invalid_response", "jira issue response invalid");
-  const mark = (value: string | undefined) =>
-    value === undefined ? undefined : { trust: TrustLevel.UNTRUSTED_DATA, value };
-  const fields = {
-    ...parsed.data.fields,
-    ...(mark(parsed.data.fields.summary) === undefined
-      ? {}
-      : { summary: mark(parsed.data.fields.summary) }),
-    ...(mark(parsed.data.fields.description) === undefined
-      ? {}
-      : { description: mark(parsed.data.fields.description) }),
-    ...(parsed.data.fields.status === undefined
-      ? {}
-      : { status: mark(parsed.data.fields.status.name) }),
+  const raw = parsed.data.fields;
+  const mark = (v: string | null | undefined) =>
+    v == null ? undefined : { trust: TrustLevel.UNTRUSTED_DATA, value: v };
+  // Build the normalized shape explicitly so `null` optionals become absent (not `null`) and only
+  // `{ key }` survives from `project` — the reconciler's own strict schema depends on both.
+  const fields: JiraIssueResponse["fields"] = {
+    project: { key: raw.project.key },
+    labels: raw.labels,
+    updated: raw.updated,
   };
-  return { ...parsed.data, fields } as JiraIssueResponse;
+  const summary = mark(raw.summary);
+  if (summary !== undefined) fields.summary = summary;
+  const description = mark(raw.description);
+  if (description !== undefined) fields.description = description;
+  const status = mark(raw.status?.name);
+  if (status !== undefined) fields.status = status;
+  return { id: parsed.data.id, key: parsed.data.key, fields };
 }
-const pageSchema = z.strictObject({
+const pageSchema = z.object({
   issues: z.array(rawIssueSchema).max(100),
   nextPageToken: z.string().min(1).max(4096).optional(),
   isLast: z.boolean().optional(),
@@ -148,7 +155,10 @@ export class JiraRestClient {
           throw new JiraRestError("pagination_cycle", "jira pagination token cycle");
         seen.add(token);
       }
-      const query = `?jql=${encodeURIComponent(jql)}&maxResults=${Math.min(100, maxIssues - results.length)}${token === undefined ? "" : `&nextPageToken=${encodeURIComponent(token)}`}`;
+      // `/search/jql` returns only `{ id }` per issue unless `fields` is requested — no `key`, no
+      // `fields` object — which the response schema below rejects as invalid. `getIssue` already
+      // sends this same list; `searchJql` omitted it, so every reconciliation parse failed.
+      const query = `?jql=${encodeURIComponent(jql)}&maxResults=${Math.min(100, maxIssues - results.length)}&fields=${ISSUE_FIELDS.join(",")}${token === undefined ? "" : `&nextPageToken=${encodeURIComponent(token)}`}`;
       const value = await this.get("/rest/api/3/search/jql", query);
       const pageResult = pageSchema.safeParse(value);
       if (!pageResult.success)
