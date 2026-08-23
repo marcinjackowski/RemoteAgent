@@ -106,7 +106,15 @@ export async function main(): Promise<void> {
   });
   // `runFromEnv` throws on a missing env var rather than defaulting — a bot with no token
   // would otherwise start, report healthy and silently receive nothing.
-  const { bot, db } = runFromEnv();
+  //
+  // The gateway logger is forwarded so a FATAL close is visible. A disallowed privileged
+  // intent closes with `4014` and correctly does NOT reconnect; without this the process
+  // would print "discord ready" and sit silent, indistinguishable from an idle bot.
+  const { bot, db } = runFromEnv(process.env, {
+    logger: (event, detail) => {
+      logger.info(`discord.${event}`, detail ?? {});
+    },
+  });
   const runtime = new ProcessRuntime(createDiscordProcess({ bot, db, logger }), {
     port: config.port,
     drainMs: config.drainMs,

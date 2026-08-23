@@ -160,10 +160,20 @@ export function createDiscordBotFromEnv(
  * bot so the caller can also drive its `outboxSink` from the relay. Never logs the
  * token.
  */
-export function runFromEnv(env: Env = process.env): { bot: DiscordBot; db: Database } {
+export function runFromEnv(
+  env: Env = process.env,
+  overrides: {
+    logger?: (event: string, detail?: Record<string, unknown>) => void;
+  } = {},
+): { bot: DiscordBot; db: Database } {
   const config = discordConfigFromEnv(env);
   const db = Database.fromEnv();
-  const bot = createDiscordBotFromEnv(config, db);
+  // The logger is forwarded because without it the process is UNDIAGNOSABLE. The gateway
+  // classifies a disallowed privileged intent as a FATAL close (`4014`) and stops rather than
+  // reconnecting — correct behaviour, but the only record of it is `gateway.close_fatal`. With
+  // no logger the process prints "discord ready" and then goes silent, which reads as a
+  // working bot that nobody is talking to.
+  const bot = createDiscordBotFromEnv(config, db, overrides);
   bot.session.start();
   return { bot, db };
 }
