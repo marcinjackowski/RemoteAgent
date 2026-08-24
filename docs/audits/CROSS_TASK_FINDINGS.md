@@ -44,6 +44,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-016` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `hookTimeout` został na 10s, gdy `testTimeout` podniesiono do 120s |
 | `CTF-017` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `process-runner`: kernel reapuje wnuka asynchronicznie po SIGKILL |
 | `CTF-018` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-028 | `cases.active_run_id` nie ustawiał ŻADEN kod produkcyjny; luka od RA-003 |
+| `CTF-019` | HIGH | OTWARTY — blokada środowiskowa | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
 
 ---
 
@@ -1496,3 +1497,52 @@ przejmie case'a, który już ma aktywny. FK z migracji 011 pinuje run do tego sa
 Ponowienie z tym samym run id jest idempotentne, na czym polega recovery.
 
 Mutation check: usunięcie guardu czerwieni test.
+
+## `CTF-019` — Node v25 na maszynie łamie podsystem wykonywania procesów/timeoutów
+
+- Severity: **HIGH** (pełna bramka repo nie może przejść; kod produkcyjny prawdopodobnie poprawny)
+- Wykryty: `2026-08-24`, podczas final task gate RA-029
+- Dotyczy: `packages/workspace-runner` (RA-010), `packages/test-evidence` (RA-013),
+  `packages/implementation-tools` (RA-012), `test/golden-path` (RA-018) — czyli podsystemu
+  wykonywania procesów, nie pojedynczego taska
+- Status: **OTWARTY** — blokada środowiskowa, wymaga Node `24.19.0`
+
+### Dowód
+
+Pełny przebieg repo w bramce RA-029: **22 faile w 5 plikach**, wszystkie w klasyfikacji wyniku
+procesu (`AMBIGUOUS` zamiast `FAILED`, `TIMED_OUT`, `INCONCLUSIVE`, timeout race w
+`process-runner`). Zmierzone na **czystej bazie** (`git stash -u`, tylko zacommitowany fix
+connectora Jira, bez zmian RA-029):
+
+```text
+git stash push -u
+RA_REQUIRE_POSTGRES=1 vitest run process-runner.test.ts command.integration.test.ts
+  -> 9 failed | 12 passed    (te same faile, bez RA-029)
+git stash pop
+```
+
+Środowisko: `node --version` → **v25.2.1**, a `package.json`/`.nvmrc` przypina **24.19.0**
+(`env.sh` ostrzega „Unsupported engine"). Brew `node@24` keg rozwiązuje się również do v25.2.1,
+więc realnego Node 24 nie ma na tej maszynie. Node 25 zmienił semantykę `child_process` (kod/
+sygnał wyjścia), przez co runner klasyfikuje zwykłe niezerowe wyjście jako `AMBIGUOUS`, a timeout
+jako niejednoznaczny — dokładnie te asercje padają.
+
+### Wpływ
+
+Bramka „całe repo zielone" (`RA-018`, `RA-026` AC) nie może przejść na tej maszynie, dopóki Node
+nie jest 24.19.0. Nie jest to regresja kodu: `RA-028` (`2026-08-22`) raportował 2398/2398, więc
+środowisko zdryfowało od tego czasu. Nie blokuje poprawności produkcyjnej — kod nie zmienił się,
+zmienił się runtime.
+
+### Wymagana zmiana
+
+Postawić Node `24.19.0` (nvm albo poprawny `brew install node@24`) i powtórzyć pełną bramkę.
+Osobno: `env.sh` mógłby fail-closed na niezgodnej wersji major zamiast cicho wybierać v25 —
+inaczej każda przyszła bramka na tej maszynie będzie raportować te 22 faile jako „nowe".
+
+### Dlaczego nie blokuje odbioru RA-029
+
+RA-029 nie dotyka żadnego z tych czterech pakietów. Suite podsystemów **dotkniętych** przez RA-029
+(queue, dispatch, connector-jira, agent-worker, scheduler, discord relay) jest **150/150 zielona**.
+Odebrane decyzją właściciela (`2026-08-24`) na dowodzie in-scope, z tą blokadą jako osobnym,
+repo-szerokim findingiem.
