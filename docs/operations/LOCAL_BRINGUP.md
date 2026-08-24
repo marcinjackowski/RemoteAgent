@@ -222,15 +222,47 @@ token wymaga `Basic base64(email:token)`. Transport w skrypcie podmienia nagłó
 nadal pilnuje allow-listy originów, walidacji ścieżki, odrzucania przekierowań i klasyfikacji
 retry. Audytowany kod nie został osłabiony dla wygody dev-skryptu.
 
+## Produkcyjna pętla Jira → Discord (RA-030)
+
+Od RA-030 pętla działa przez **uruchomione procesy**, nie dev-skrypt. Model auth: personal API
+token + Basic (ADR-0010, system jednego właściciela). Uruchamiasz **trzy procesy** z tym samym
+środowiskiem:
+
+```bash
+. scripts/dev/env.sh
+pnpm run build --force
+
+# Env (poza DISCORD_* z sekcji Discord — te same kanały):
+export JIRA_ORIGIN='https://twoja-domena.atlassian.net'
+export JIRA_EMAIL='twoj@email'
+export JIRA_API_TOKEN='...'
+export JIRA_PROJECT_KEY='KAN'                  # scheduler enqueue'uje reconcile dla tego projektu
+export RA_SCHEDULER_INTERVAL_MS='15000'        # szybciej niż domyślna minuta, do testów
+
+node apps/discord-bot/dist/discord.js   &      # relay discord_case → Discord
+node apps/agent-worker/dist/worker.js   &      # wykonuje jira.reconcile: reconcile→correlate→outbox
+node apps/scheduler/dist/scheduler.js   &      # enqueue'uje jira.reconcile co tick
+```
+
+Przepływ: scheduler enqueue'uje job `jira.reconcile` → worker odpytuje Jirę (Basic), tworzy case
+i wiersz outbox `discord_case` → discord-bot relayuje go do `#jira` jako wątek. Zmień coś na
+boardzie, poczekaj tick + chwilę na indeks Jiry, zobacz wątek na Discordzie.
+
+Bez `JIRA_API_TOKEN` worker **nie rejestruje** handlera, a bez `JIRA_PROJECT_KEY` scheduler **nie
+rejestruje** taska (fail-closed, głośny log) — nic nie idzie po cichu do DLQ. Worker idempotentnie
+zasiewa `owner-local`/`connection-local-jira` (te same, których używa poll).
+
+Wciąż odroczone: OAuth 3LO (świadomie, ADR-0010), deploy schedulera do CDK (krok AWS).
+
 ## Co działa, a co nie — tabela
 
 | Proces | Startuje | Wykonuje pracę | Czego brakuje |
 |---|---|---|---|
-| `discord` | **tak** | **tak** | nic — wymaga tokenu i case'a, żeby było o czym mówić |
-| `worker` | **tak** | **tak** (RA-028) | katalog narzędzi: agent nie edytuje jeszcze workspace'u |
+| `discord` | **tak** | **tak** — relayuje `discord_case` do Discorda (RA-029) | katalog narzędzi do rozmowy w wątku |
+| `worker` | **tak** | **tak** — `jira.reconcile` + role (RA-028/030) | katalog narzędzi: agent nie edytuje jeszcze workspace'u |
+| `scheduler` | **tak** | **tak** — enqueue `jira.reconcile` gdy `JIRA_PROJECT_KEY` (RA-030) | inne taski (renewal) wciąż nie wpięte |
 | `executor` | tak | **nie** | brak `ProviderAdapter` → `runOneAction` rzuca |
 | `ingress` | tak | **nie** | pusta tablica routów → każdy webhook 404 |
-| `scheduler` | tak | **nie** | pusta lista tasków → jawne `warn` na starcie |
 
 ## Następne kroki, w kolejności wartości
 
