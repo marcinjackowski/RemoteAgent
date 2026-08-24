@@ -13,14 +13,23 @@
  * contract WITHOUT a real token, network or database, satisfying the required
  * "contract/composition test without a real secret".
  */
+import { randomUUID } from "node:crypto";
+
 import { Database } from "@remoteagent/database";
 import {
   DiscordBindingRepository,
   DiscordReceiptRepository,
   DiscordSendIntentRepository,
   AuditLogRepository,
+  InboundMessageRepository,
+  productionRuntime,
 } from "@remoteagent/database";
-import { ChannelRegistry, DiscordDispatcher, type ChannelKey } from "@remoteagent/discord";
+import {
+  ChannelRegistry,
+  DiscordDispatcher,
+  type ChannelKey,
+  type IntakeOutcome,
+} from "@remoteagent/discord";
 
 import { createDiscordBot, type DiscordBot } from "./index.js";
 import { DiscordRestGateway } from "./rest-gateway.js";
@@ -97,6 +106,26 @@ export function discordConfigFromEnv(env: Env = process.env): DiscordEnvConfig {
 }
 
 /**
+ * RA-031: turn an authorized owner message in a case thread into durable work. It is recorded as
+ * UNTRUSTED context and materialized into a PENDING supervisor unit + a `case.resume` job (see
+ * {@link InboundMessageRepository}); every other outcome kind is left to its own path. Idempotent
+ * on the Discord message id — a redelivered gateway event creates no duplicate. A message with no
+ * id (never true for a real MESSAGE_CREATE) falls back to a random id so it is still processed,
+ * just not dedupable. Exported so a composition test can drive it without a live gateway.
+ */
+export function createOwnerMessageSink(db: Database): (outcome: IntakeOutcome) => Promise<void> {
+  const inbound = new InboundMessageRepository(productionRuntime());
+  return async (outcome) => {
+    if (outcome.kind !== "message") return;
+    await inbound.receiveOwnerMessage(db, {
+      messageId: outcome.messageId ?? randomUUID(),
+      caseId: outcome.caseId,
+      content: outcome.content,
+    });
+  };
+}
+
+/**
  * Compose a runnable {@link DiscordBot} from a parsed config and a database. The
  * REST transport (`fetch`) and gateway socket (`WebSocket`) are the concrete
  * production ones; both are still injected into the adapters so tests can swap
@@ -143,6 +172,7 @@ export function createDiscordBotFromEnv(
       db,
     },
     map,
+    onInboundOutcome: createOwnerMessageSink(db),
     session: {
       factory: overrides.socketFactory ?? nodeWebSocketFactory(),
       token: config.token,

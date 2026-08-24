@@ -27,6 +27,8 @@ import { decodeInteraction, type Interaction } from "./custom-id.js";
 export interface InboundMessage extends InboundContext {
   type: "message";
   content: string;
+  /** The provider (Discord) message id, used downstream to dedupe redelivered gateway events. */
+  messageId?: string;
 }
 
 export interface InboundCommand extends InboundContext {
@@ -45,7 +47,13 @@ export type InboundInteraction = InboundMessage | InboundCommand | InboundButton
 export type IntakeOutcome =
   | { kind: "denied"; audit: DeniedAudit }
   | { kind: "ignored"; reason: string }
-  | { kind: "message"; caseId: string; content: string; trust: "UNTRUSTED_DATA" }
+  | {
+      kind: "message";
+      caseId: string;
+      content: string;
+      trust: "UNTRUSTED_DATA";
+      messageId?: string;
+    }
   | { kind: "stop"; caseId: string }
   | { kind: "decision"; caseId: string; interaction: Extract<Interaction, { kind: "decision" }> }
   | { kind: "approval"; caseId: string; interaction: Extract<Interaction, { kind: "approval" }> };
@@ -72,6 +80,7 @@ export async function handleInbound(
         caseId: auth.caseId,
         content: interaction.content,
         trust: "UNTRUSTED_DATA",
+        ...(interaction.messageId !== undefined ? { messageId: interaction.messageId } : {}),
       };
     }
     case "command": {

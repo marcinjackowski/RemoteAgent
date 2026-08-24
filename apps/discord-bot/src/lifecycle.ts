@@ -30,6 +30,7 @@ import { ChannelRegistry, processInbound } from "@remoteagent/discord";
 const INTERACTION_TYPE = { APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3 } as const;
 
 interface RawMessageCreate {
+  id?: string;
   channel_id?: string;
   guild_id?: string | null;
   author?: { id?: string };
@@ -80,6 +81,7 @@ export function mapDispatchToInbound(
       userId,
       origin: originOf(config.registry, channelId),
       content: m.content ?? "",
+      ...(m.id !== undefined ? { messageId: m.id } : {}),
     };
   }
   if (t === "INTERACTION_CREATE") {
