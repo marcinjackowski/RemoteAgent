@@ -22,12 +22,14 @@
  * database degrades into an unbounded pile of scans. So a tick that is still running skips
  * the next slot rather than stacking.
  */
-import { Database } from "@remoteagent/database";
+import { Database, JobStore, productionRuntime } from "@remoteagent/database";
 import {
   ProcessRuntime,
   StructuredLogger,
   type ProcessDefinition,
 } from "@remoteagent/observability";
+
+import { createJiraReconcileTask, jiraReconcileProjectsFromEnv } from "./jira-reconcile-task.js";
 
 export const SCHEDULER_ENV = {
   port: "RA_HEALTH_PORT",
@@ -190,7 +192,14 @@ export async function main(): Promise<void> {
     sink: { log: (record) => console.log(JSON.stringify(record)) },
   });
   const db = Database.fromEnv();
-  const tasks: readonly SchedulerTask[] = [];
+  // RA-030: register the Jira reconcile scan when projects are configured. It only ENQUEUES a
+  // `jira.reconcile` job (no provider call); the worker runs the REST read under a lease. Absent
+  // JIRA_PROJECT_KEY = no task (the empty-tasks warning below fires, which is the intended signal).
+  const projects = jiraReconcileProjectsFromEnv();
+  const tasks: readonly SchedulerTask[] =
+    projects.length > 0
+      ? [createJiraReconcileTask({ db, jobs: new JobStore(productionRuntime()), projects })]
+      : [];
   const runtime = bootstrapScheduler({ db, config, tasks, logger });
   await runtime.start();
   if (tasks.length === 0) {

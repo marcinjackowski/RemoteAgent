@@ -29,6 +29,7 @@ import {
   productionRuntime,
   type ClaimableDispatch,
   type JobHandler,
+  type JobTypeHandlers,
   type OutboxSink,
 } from "@remoteagent/database";
 import {
@@ -37,8 +38,12 @@ import {
   type ProcessDefinition,
 } from "@remoteagent/observability";
 import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
+import { JiraRestClient } from "@remoteagent/connector-jira";
+import { ChannelRegistry } from "@remoteagent/discord";
 
-import { createWorkerHandlers } from "./handlers.js";
+import { createRenewalHandler, createWorkerHandlers } from "./handlers.js";
+import { basicAuthTransport, jiraReconcileConfigFromEnv } from "./jira-auth.js";
+import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.js";
 import { WorkerPersistence } from "./persistence.js";
 import { createRoles, roleConfigFromEnv } from "./roles.js";
 
@@ -216,6 +221,61 @@ export function bootstrapWorker(input: {
  * injected into the SAME `createRoles`/`createWorkerHandlers` code. That is what makes a
  * handler test evidence about this process rather than about a parallel implementation.
  */
+/**
+ * Build the `jira.reconcile` handler from the environment (RA-030 / ADR-0010), or `{}` if Jira is
+ * not configured. Single-owner API token over Basic: the client authenticates with the personal
+ * token, and the run correlates each changed issue into a case + `discord_case` outbox row (which
+ * the discord-bot relay then delivers). Absent `JIRA_API_TOKEN` = handler not registered, so the
+ * job fails closed to the DLQ rather than being silently dropped.
+ */
+export async function jiraReconcileHandlers(input: {
+  readonly db: Database;
+  readonly runtime: ReturnType<typeof productionRuntime>;
+  readonly logger: StructuredLogger;
+  readonly config: ReturnType<typeof jiraReconcileConfigFromEnv>;
+}): Promise<JobTypeHandlers> {
+  const config = input.config;
+  if (config === null) {
+    input.logger.info("jira.reconcile not configured (no JIRA_API_TOKEN); handler not registered");
+    return {};
+  }
+  // The correlator rejects an issue whose connection is missing; provision it idempotently first.
+  await ensureJiraConnection({
+    db: input.db,
+    ownerId: config.ownerId,
+    connectionId: config.connectionId,
+    alias: config.alias,
+    displayName: config.origin,
+  });
+  const client = new JiraRestClient({
+    origin: config.origin,
+    allowedOrigins: [config.origin],
+    getAccessToken: () => Promise.resolve(new TextEncoder().encode(config.token)),
+    transport: basicAuthTransport(config.email, config.token),
+  });
+  const run = createJiraReconcileRun({
+    db: input.db,
+    search: client,
+    channelRegistry: new ChannelRegistry({
+      guildId: config.guildId,
+      ownerId: config.discordOwnerId,
+      channels: config.channels,
+    }),
+    ids: {
+      caseId: () => input.runtime.ids.next("case"),
+      entityId: () => input.runtime.ids.next("entity"),
+      outboxId: () => input.runtime.ids.next("outbox"),
+    },
+    now: () => new Date().toISOString(),
+  });
+  input.logger.info("jira.reconcile handler registered", {
+    connection_id: config.connectionId,
+    origin: config.origin,
+  });
+  // `createRenewalHandler` is the generic injected-handler wrapper (heartbeat, then run).
+  return { [JobType.JIRA_RECONCILE]: createRenewalHandler(run) };
+}
+
 export async function main(): Promise<void> {
   const config = workerConfigFromEnv();
   const logger = new StructuredLogger({
@@ -223,16 +283,25 @@ export async function main(): Promise<void> {
   });
   const db = Database.fromEnv();
   const runtime = productionRuntime();
-  const handlers = createWorkerHandlers({
-    persistence: new WorkerPersistence(db, runtime),
-    roles: createRoles(WORKER_ROLES, {
-      transport: new AwsBedrockTransport(),
-      config: roleConfigFromEnv(),
-    }),
-    logger,
+  const extra = await jiraReconcileHandlers({
     db,
-    jobs: new JobStore(runtime),
+    runtime,
+    logger,
+    config: jiraReconcileConfigFromEnv(),
   });
+  const handlers = createWorkerHandlers(
+    {
+      persistence: new WorkerPersistence(db, runtime),
+      roles: createRoles(WORKER_ROLES, {
+        transport: new AwsBedrockTransport(),
+        config: roleConfigFromEnv(),
+      }),
+      logger,
+      db,
+      jobs: new JobStore(runtime),
+    },
+    extra,
+  );
   const workerRuntime = bootstrapWorker({
     config,
     db,

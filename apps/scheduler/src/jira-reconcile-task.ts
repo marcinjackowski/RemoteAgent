@@ -20,6 +20,28 @@ export interface JiraReconcileProject {
   readonly projectKey: string;
 }
 
+type Env = Record<string, string | undefined>;
+
+/**
+ * Parse the reconcile projects from the environment. Single-owner: one project via
+ * `JIRA_PROJECT_KEY` (owner/connection default to match the worker's `jira-auth`). Absent
+ * `JIRA_PROJECT_KEY` = no projects, so the scheduler registers no reconcile task.
+ */
+export function jiraReconcileProjectsFromEnv(env: Env = process.env): JiraReconcileProject[] {
+  const projectKey = env.JIRA_PROJECT_KEY?.trim();
+  if (projectKey === undefined || projectKey === "") return [];
+  if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(projectKey)) {
+    throw new Error(`JIRA_PROJECT_KEY must match ^[A-Z][A-Z0-9_]{0,127}$, got ${projectKey}`);
+  }
+  return [
+    {
+      ownerId: env.JIRA_OWNER_ID?.trim() || "owner-local",
+      connectionId: env.JIRA_CONNECTION_ID?.trim() || "connection-local-jira",
+      projectKey,
+    },
+  ];
+}
+
 export function createJiraReconcileTask(input: {
   readonly db: Database;
   readonly jobs: JobStore;

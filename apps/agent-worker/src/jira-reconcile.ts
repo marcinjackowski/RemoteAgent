@@ -24,7 +24,42 @@ import {
   type JiraReconciliationSearch,
 } from "@remoteagent/connector-jira";
 import type { ChannelRegistry } from "@remoteagent/discord";
-import type { Database, JobLease } from "@remoteagent/database";
+import type { ConnectionAlias } from "@remoteagent/contracts";
+import {
+  ConnectionRepository,
+  OwnerRepository,
+  type Database,
+  type JobLease,
+} from "@remoteagent/database";
+
+/**
+ * Idempotent provisioning of the owner + Jira connection the correlator validates scope against
+ * (`correlateJiraIssueInTransaction` rejects an issue whose connection is missing / not `jira` /
+ * not owned by `ownerId`). Single-owner: safe to run at every worker start. Mirrors what
+ * `scripts/dev/jira-poll.ts` seeds, but reusably and from the deployment's config.
+ */
+export async function ensureJiraConnection(input: {
+  readonly db: Database;
+  readonly ownerId: string;
+  readonly connectionId: string;
+  readonly alias: ConnectionAlias;
+  readonly displayName: string;
+}): Promise<void> {
+  const owners = new OwnerRepository();
+  const connections = new ConnectionRepository();
+  if ((await owners.findById(input.db, input.ownerId)) === null) {
+    await owners.insert(input.db, { ownerId: input.ownerId, displayName: "owner" });
+  }
+  if ((await connections.findById(input.db, input.connectionId)) === null) {
+    await connections.insert(input.db, {
+      connectionId: input.connectionId,
+      ownerId: input.ownerId,
+      provider: "jira",
+      alias: input.alias,
+      displayName: input.displayName,
+    });
+  }
+}
 
 export interface JiraReconcileDeps {
   readonly db: Database;
