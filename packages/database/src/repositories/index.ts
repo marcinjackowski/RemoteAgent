@@ -6,6 +6,7 @@ export * from "./jira-webhook-ingress.js";
 export * from "./case.js";
 export * from "./case-message.js";
 export * from "./inbound-message.js";
+export * from "./agent-config.js";
 export * from "./checkpoint.js";
 export * from "./decision.js";
 export * from "./audit-log.js";

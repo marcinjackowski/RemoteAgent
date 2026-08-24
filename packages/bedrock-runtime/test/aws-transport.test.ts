@@ -249,29 +249,41 @@ describe("AwsBedrockTransport", () => {
       config,
     );
 
+    // Structured output is a TOOL (verified: Bedrock rejects outputConfig), alongside other tools.
     expect(input).toMatchObject({
-      toolConfig: { tools: [{ toolSpec: { name: "lookup" } }] },
-      outputConfig: {
-        textFormat: {
-          type: "json_schema",
-          structure: {
-            jsonSchema: {
+      toolConfig: {
+        tools: [
+          { toolSpec: { name: "lookup" } },
+          {
+            toolSpec: {
               name: "answer",
               description: "The answer payload",
-              schema: '{"properties":{"answer":{"type":"string"}},"type":"object"}',
+              // The schema is wrapped under `output` because Bedrock requires a top-level object.
+              inputSchema: {
+                json: {
+                  type: "object",
+                  properties: {
+                    output: { type: "object", properties: { answer: { type: "string" } } },
+                  },
+                  required: ["output"],
+                },
+              },
             },
           },
-        },
+        ],
       },
     });
+    // Other tools present → the output tool must NOT be forced (that would block them).
+    expect(input).not.toHaveProperty("toolConfig.toolChoice");
+    expect(input).not.toHaveProperty("outputConfig");
   });
 
-  it("serializes semantically identical schemas canonically", async () => {
-    const inputs: Record<string, unknown>[] = [];
+  it("forces the output-schema tool when it is the only tool", async () => {
+    let input: Record<string, unknown> | undefined;
     const transport = new AwsBedrockTransport({
       client: {
         send: async (command) => {
-          inputs.push(command.input);
+          input = command.input;
           return {
             output: { message: { role: "assistant", content: [{ text: "ok" }] } },
             $metadata: {},
@@ -279,63 +291,48 @@ describe("AwsBedrockTransport", () => {
         },
       },
     });
-    const messages = [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }] }];
-
     await transport.converse(
       {
-        messages,
-        outputSchema: { name: "answer", schema: { b: 2, a: [3, { d: 4, c: 5 }] } },
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+        outputSchema: { name: "answer", schema: { type: "object" } },
       },
       config,
     );
-    await transport.converse(
-      {
-        messages,
-        outputSchema: { name: "answer", schema: { a: [3, { c: 5, d: 4 }], b: 2 } },
-      },
-      config,
-    );
-
-    expect(inputs[0]).toMatchObject({
-      outputConfig: {
-        textFormat: {
-          structure: {
-            jsonSchema: {
-              schema: '{"a":[3,{"c":5,"d":4}],"b":2}',
-            },
-          },
-        },
+    expect(input).toMatchObject({
+      toolConfig: {
+        tools: [{ toolSpec: { name: "answer", inputSchema: { json: { type: "object" } } } }],
+        toolChoice: { tool: { name: "answer" } },
       },
     });
-    expect(inputs[1]).toEqual(inputs[0]);
+    expect(input).not.toHaveProperty("outputConfig");
   });
 
-  it.each([NaN, Infinity, -Infinity])(
-    "rejects non-finite schema numbers before sending (%s)",
-    async (value) => {
-      let sends = 0;
-      const transport = new AwsBedrockTransport({
-        client: {
-          send: async () => {
-            sends += 1;
-            return {
-              output: { message: { role: "assistant", content: [{ text: "ok" }] } },
-              $metadata: {},
-            };
+  it("surfaces the output tool's input as a json content block", async () => {
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async () => ({
+          output: {
+            message: {
+              role: "assistant",
+              // The model returns the completion wrapped under `output`; the transport unwraps it.
+              content: [
+                {
+                  toolUse: { toolUseId: "t1", name: "answer", input: { output: { answer: "hi" } } },
+                },
+              ],
+            },
           },
-        },
-      });
-
-      await expect(
-        transport.converse(
-          {
-            messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
-            outputSchema: { name: "answer", schema: { value } },
-          },
-          config,
-        ),
-      ).rejects.toThrow("Unsupported non-finite JSON schema number");
-      expect(sends).toBe(0);
-    },
-  );
+          $metadata: {},
+        }),
+      },
+    });
+    const res = await transport.converse(
+      {
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+        outputSchema: { name: "answer", schema: { type: "object" } },
+      },
+      config,
+    );
+    expect(res.content).toEqual([{ type: "json", value: { answer: "hi" } }]);
+  });
 });

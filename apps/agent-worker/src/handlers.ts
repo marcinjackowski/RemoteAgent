@@ -16,6 +16,7 @@ import {
 } from "@remoteagent/database";
 import type { StructuredLogger } from "@remoteagent/observability";
 
+import { projectCompletionReply } from "./completion-reply.js";
 import type { WorkerPersistence } from "./persistence.js";
 
 /**
@@ -144,7 +145,17 @@ async function persistThroughAuditedPath(
       finishedAt: deps.persistence.nowIso(),
     },
   });
-  return deps.persistence.persistPrepared(prepared);
+  const result = await deps.persistence.persistPrepared(prepared);
+  // RA-032: deliver the agent's reply to the case's Discord thread (idempotent on run id;
+  // no-op when the case has no thread). Separate from the completion commit — see the note in
+  // `completion-reply.ts` on the (LOW, recoverable) crash window.
+  await projectCompletionReply({
+    db: deps.db,
+    caseId: completion.case_id,
+    runId,
+    body: completion.summary,
+  });
+  return result;
 }
 
 /**
