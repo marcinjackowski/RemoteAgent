@@ -133,18 +133,20 @@ describe("an unknown job_type fails closed", () => {
 });
 
 describe("the job type registry matches production", () => {
-  it("recognises exactly the three types production enqueues", () => {
+  it("recognises exactly the four types production enqueues", () => {
     // Verified by grep against production code, not invented: `case.resume`
     // (`decision-resume.ts`, `case-recovery.ts`), `jira.webhook.renewal`
-    // (`connector-jira/src/webhook/*`), `agent.implementer` (`WRITER_JOB_TYPE`).
+    // (`connector-jira/src/webhook/*`), `agent.implementer` (`WRITER_JOB_TYPE`),
+    // `jira.reconcile` (`apps/scheduler/src/jira-reconcile-task.ts`, RA-029).
     expect(Object.values(JobType).sort()).toEqual([
       "agent.implementer",
       "case.resume",
+      "jira.reconcile",
       "jira.webhook.renewal",
     ]);
   });
 
-  it("isKnownJobType accepts the three and rejects a plausible near-miss", () => {
+  it("isKnownJobType accepts the four and rejects a plausible near-miss", () => {
     for (const known of Object.values(JobType)) {
       expect(isKnownJobType(known)).toBe(true);
     }

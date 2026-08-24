@@ -40,6 +40,8 @@ export const JobType = {
   CASE_RESUME: "case.resume",
   /** A Jira webhook registration is due for renewal. */
   JIRA_WEBHOOK_RENEWAL: "jira.webhook.renewal",
+  /** A Jira project is due for reconciliation (poll changed issues, correlate into cases). */
+  JIRA_RECONCILE: "jira.reconcile",
   /** An agent implementation unit; holds the single-writer lease for its case. */
   AGENT_IMPLEMENTER: "agent.implementer",
 } as const;

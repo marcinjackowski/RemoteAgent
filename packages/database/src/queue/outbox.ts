@@ -136,7 +136,7 @@ export class OutboxRepository {
   public async relayOnce(
     db: { withTransaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> },
     sink: OutboxSink,
-    options: { batchSize?: number; leaseMs?: number } = {},
+    options: { batchSize?: number; leaseMs?: number; aggregates?: readonly string[] } = {},
   ): Promise<RelayResult> {
     const batchSize = options.batchSize ?? 32;
     const leaseMs = options.leaseMs ?? 30_000;
@@ -147,17 +147,40 @@ export class OutboxRepository {
     // (lease_expires_at) protects the claimed rows until they are resolved.
     const nowMs = this.clock.now();
     const owner = this.ids.next("relay");
-    const claimed = await db.withTransaction(async (tx) => {
-      const rows = await tx.query<ClaimableDispatch>(
-        `WITH claimable AS (
-           SELECT d.outbox_id
+
+    // Aggregate-scoped claim (ADR-0009). A relay only claims rows for aggregates it can
+    // deliver, so process-scoped relays never contend over the same rows. Absent filter =
+    // claim everything (backward compatible with pre-ADR-0009 callers). An EMPTY list is a
+    // real value meaning "claim nothing" (`= ANY('{}')` is always false) — that is how a
+    // job-only process (the worker) opts out of delivery without disabling the relay pass.
+    // When filtering we join `outbox` in the claimable CTE and lock ONLY `outbox_dispatch`
+    // (`FOR UPDATE OF d`): the `outbox` ledger is immutable and must never be lock-contended.
+    const scoped = options.aggregates !== undefined;
+    const claimParams: unknown[] = [nowMs, batchSize, owner, leaseMs];
+    if (scoped) claimParams.push(options.aggregates);
+    const claimable = scoped
+      ? `SELECT d.outbox_id
+           FROM outbox_dispatch d
+           JOIN outbox o ON o.outbox_id = d.outbox_id
+           WHERE d.status = 'PENDING'
+             AND d.available_at <= ${this.lt.now(1)}
+             AND (d.lease_expires_at IS NULL OR d.lease_expires_at <= ${this.lt.now(1)})
+             AND o.aggregate = ANY($5::text[])
+           ORDER BY d.available_at ASC
+           FOR UPDATE OF d SKIP LOCKED
+           LIMIT $2`
+      : `SELECT d.outbox_id
            FROM outbox_dispatch d
            WHERE d.status = 'PENDING'
              AND d.available_at <= ${this.lt.now(1)}
              AND (d.lease_expires_at IS NULL OR d.lease_expires_at <= ${this.lt.now(1)})
            ORDER BY d.available_at ASC
            FOR UPDATE SKIP LOCKED
-           LIMIT $2
+           LIMIT $2`;
+    const claimed = await db.withTransaction(async (tx) => {
+      const rows = await tx.query<ClaimableDispatch>(
+        `WITH claimable AS (
+           ${claimable}
          )
          UPDATE outbox_dispatch d
          SET lease_owner = $3,
@@ -169,7 +192,7 @@ export class OutboxRepository {
          RETURNING d.outbox_id, o.aggregate, o.aggregate_id, o.event_type, o.payload,
                    d.attempts, d.max_attempts, d.backoff_base_ms, d.backoff_cap_ms,
                    d.dispatch_token, d.lease_owner`,
-        [nowMs, batchSize, owner, leaseMs],
+        claimParams,
       );
       return rows.rows;
     });

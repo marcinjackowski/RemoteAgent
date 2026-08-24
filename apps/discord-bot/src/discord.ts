@@ -22,9 +22,11 @@ import {
   StructuredLogger,
   type ProcessDefinition,
 } from "@remoteagent/observability";
+import { DISCORD_OUTBOX_AGGREGATE } from "@remoteagent/discord";
 
 import type { DiscordBot } from "./index.js";
 import { runFromEnv } from "./env.js";
+import { startOutboxRelay, type OutboxRelayHandle } from "./outbox-relay.js";
 
 export const DISCORD_ENV = {
   port: "RA_HEALTH_PORT",
@@ -67,17 +69,32 @@ export function createDiscordProcess(input: {
   readonly bot: DiscordBot;
   readonly db: Database;
   readonly logger?: StructuredLogger;
+  /** Outbox relay poll interval (ms). Small values are for tests; production defaults apply. */
+  readonly relayIntervalMs?: number;
 }): ProcessDefinition {
   let started = false;
+  let relay: OutboxRelayHandle | null = null;
 
   return {
     name: "discord",
     start: () => {
-      // `runFromEnv` already started the session, so `start` is idempotent here rather than
-      // starting a second one — which would be the two-connections bug above.
+      // `runFromEnv` already started the inbound session, so starting one here would be the
+      // two-connections bug above. What it did NOT start is the OUTBOUND relay: the discord-bot
+      // is the only process that can deliver Discord messages, so it owns the `discord_case`
+      // outbox aggregate (ADR-0009). Without this loop, case events are enqueued and never sent.
+      relay = startOutboxRelay({
+        db: input.db,
+        sink: input.bot.outboxSink,
+        aggregates: [DISCORD_OUTBOX_AGGREGATE],
+        ...(input.relayIntervalMs !== undefined ? { intervalMs: input.relayIntervalMs } : {}),
+        onError: (error) => {
+          input.logger?.warn("discord.relay_error", { error: String(error) });
+        },
+      });
       started = true;
     },
     stopAcceptingWork: () => {
+      relay?.stop();
       input.bot.session.stop();
     },
     // No `drain`: there is no claimed work. An interaction being handled when the socket

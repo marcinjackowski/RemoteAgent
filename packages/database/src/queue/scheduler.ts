@@ -36,7 +36,11 @@ export interface SchedulerDeps {
   sink: OutboxSink;
   handler: JobHandler;
   claim?: ClaimOptions;
-  relay?: { batchSize?: number; leaseMs?: number };
+  /**
+   * Relay pass options. `aggregates` (ADR-0009) scopes this process's relay to the outbox
+   * aggregates it can deliver; omit to relay everything. `tick` forwards it to `relayOnce`.
+   */
+  relay?: { batchSize?: number; leaseMs?: number; aggregates?: readonly string[] };
   reap?: { limit?: number };
   /** Poll interval for the production loop (ms). */
   intervalMs?: number;

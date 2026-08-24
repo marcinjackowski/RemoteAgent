@@ -411,6 +411,68 @@ describeIntegration(
         "PUBLISHED",
       );
     });
+
+    it("scoped relay claims only its aggregates and leaves others PENDING (ADR-0009)", async () => {
+      await seedCase("case-1");
+      const discordRow = await db.withTransaction((tx) =>
+        outbox.enqueue(tx, {
+          aggregate: "discord_case",
+          aggregateId: "case-1",
+          eventType: "discord.root_thread",
+          payload: { case_id: "case-1" },
+        }),
+      );
+      const caseRow = await db.withTransaction((tx) =>
+        outbox.enqueue(tx, {
+          aggregate: "case",
+          aggregateId: "case-1",
+          eventType: "agent.completion.recorded",
+          payload: { case_id: "case-1" },
+        }),
+      );
+
+      // A discord-scoped relay must publish the discord_case row and NEVER be handed the
+      // `case` row. The sink throws on a foreign aggregate, so a leak would surface here; the
+      // decisive guard is that the out-of-scope row stays untouched (attempts 0), which fails
+      // if the aggregate filter is removed (the row would be claimed, then retried).
+      const delivered: string[] = [];
+      const scoped = await outbox.relayOnce(
+        db,
+        async (m) => {
+          if (m.aggregate !== "discord_case") throw new Error(`leaked aggregate ${m.aggregate}`);
+          delivered.push(m.outbox_id);
+        },
+        { aggregates: ["discord_case"] },
+      );
+      expect(scoped.published).toEqual([discordRow.outbox_id]);
+      expect(delivered).toEqual([discordRow.outbox_id]);
+      expect(await outbox.dispatchStatus(db, discordRow.outbox_id).then((s) => s!.status)).toBe(
+        "PUBLISHED",
+      );
+      // Out-of-scope row was never claimed: still PENDING, still 0 attempts, not dead-lettered.
+      expect(await outbox.dispatchStatus(db, caseRow.outbox_id)).toMatchObject({
+        status: "PENDING",
+        attempts: 0,
+      });
+
+      // An EMPTY allow-list claims nothing (a job-only process opting out of delivery).
+      const none = await outbox.relayOnce(
+        db,
+        async () => {
+          throw new Error("empty allow-list must not claim any row");
+        },
+        { aggregates: [] },
+      );
+      expect(none).toEqual({ published: [], retried: [], deadLettered: [] });
+      expect(await outbox.dispatchStatus(db, caseRow.outbox_id)).toMatchObject({
+        status: "PENDING",
+        attempts: 0,
+      });
+
+      // The default (no filter) still claims the remaining aggregate — backward compatible.
+      const all = await outbox.relayOnce(db, async () => undefined);
+      expect(all.published).toEqual([caseRow.outbox_id]);
+    });
   },
   available,
 );

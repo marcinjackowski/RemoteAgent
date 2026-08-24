@@ -31,6 +31,7 @@ export * from "./gateway-session.js";
 export * from "./ws-factory.js";
 export * from "./lifecycle.js";
 export * from "./env.js";
+export * from "./outbox-relay.js";
 
 /**
  * Adapt a {@link DiscordDispatcher} into an outbox {@link OutboxSink}.

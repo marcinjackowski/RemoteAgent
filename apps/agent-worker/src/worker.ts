@@ -145,6 +145,11 @@ export function createWorkerProcess(input: {
     handler: trackedHandler,
     claim: { owner: input.config.owner },
     intervalMs: input.config.intervalMs,
+    // The worker is a job processor, not an outbox deliverer (ADR-0009). It relays NO
+    // aggregates: an empty allow-list claims nothing, so it never grabs a `discord_case` row
+    // (which only the discord-bot can deliver) and dead-letters it. `input.sink` stays as a
+    // fail-closed safety net that must never actually be reached on this path.
+    relay: { aggregates: [] },
   });
 
   const responsive = true;
