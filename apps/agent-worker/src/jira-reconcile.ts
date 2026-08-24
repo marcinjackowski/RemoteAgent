@@ -26,11 +26,14 @@ import {
 import type { ChannelRegistry } from "@remoteagent/discord";
 import type { ConnectionAlias } from "@remoteagent/contracts";
 import {
+  CaseMessageRepository,
   ConnectionRepository,
   OwnerRepository,
   type Database,
   type JobLease,
 } from "@remoteagent/database";
+
+import { renderJiraIssueContext } from "./jira-issue-context.js";
 
 /**
  * Idempotent provisioning of the owner + Jira connection the correlator validates scope against
@@ -107,7 +110,7 @@ export function createJiraReconcileRun(
         capturedAt: deps.now(),
         applyIssue: async (tx, context) => {
           const fields = context.issue.fields;
-          await correlateJiraIssueInTransaction(
+          const result = await correlateJiraIssueInTransaction(
             tx,
             {
               eventId: context.eventId,
@@ -123,6 +126,27 @@ export function createJiraReconcileRun(
               ids: deps.ids,
             },
           );
+          // RA-033: also record the issue itself into the case transcript, so the SUPERVISOR that
+          // answers in the thread sees WHAT the task is — not just the owner's reply. The reconciler
+          // already has these (UNTRUSTED) fields but until now only projected them to Discord; the
+          // model reads `case_messages` (RA-032), not the Discord outbox.
+          //
+          // Same `tx` as the correlation → atomic with the case. Keyed on the correlation
+          // `eventId` → exactly-once: a redelivered event or a correlation replay is an
+          // `ON CONFLICT` no-op, while a genuine issue change carries a NEW `eventId` (its digest
+          // covers the updated timestamp) and so adds a fresh context turn reflecting the new state.
+          await new CaseMessageRepository().append(tx, {
+            messageId: `jira-issue:${context.eventId}`,
+            caseId: result.caseId,
+            role: "SYSTEM",
+            trust: "UNTRUSTED_DATA",
+            body: renderJiraIssueContext({
+              issueKey: context.issue.key,
+              status: fields.status?.value,
+              summary: fields.summary?.value,
+              description: fields.description?.value,
+            }),
+          });
         },
       },
     );

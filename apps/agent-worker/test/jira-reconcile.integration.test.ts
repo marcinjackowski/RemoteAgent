@@ -66,6 +66,7 @@ it("reconcile run correlates a changed issue into a case and enqueues a discord_
           project: { key: "PROJ" },
           summary: { trust: "UNTRUSTED_DATA", value: "Do the thing" },
           status: { trust: "UNTRUSTED_DATA", value: "In Progress" },
+          description: { trust: "UNTRUSTED_DATA", value: "Full context of the task." },
           labels: [],
           updated: "2026-08-23T21:00:00.000Z",
         },
@@ -100,4 +101,60 @@ it("reconcile run correlates a changed issue into a case and enqueues a discord_
     "SELECT channel_id FROM discord_case_bindings",
   );
   expect(binding.rows[0]?.channel_id).toBe("jira-channel");
+
+  // RA-033: the issue itself is recorded into the case transcript as UNTRUSTED SYSTEM context, so
+  // the SUPERVISOR (which reads case_messages, not the Discord outbox) sees what the task is.
+  const messages = await db.query<{ role: string; trust: string; body: string }>(
+    "SELECT role, trust, body FROM case_messages",
+  );
+  expect(messages.rows).toHaveLength(1);
+  const context = messages.rows[0]!;
+  expect(context.role).toBe("SYSTEM");
+  // The trust MARKING is the load-bearing security property (AGENTS.md §5). Mutation check:
+  // flipping this to 'TRUSTED' in `jira-reconcile.ts` turns this assertion red.
+  expect(context.trust).toBe("UNTRUSTED_DATA");
+  expect(context.body).toContain("Jira issue PROJ-1");
+  expect(context.body).toContain("Status: In Progress");
+  expect(context.body).toContain("Summary: Do the thing");
+  expect(context.body).toContain("Description: Full context of the task.");
+});
+
+it("does not duplicate the issue context turn when the same issue is reconciled again", async () => {
+  let idCounter = 0;
+  const search = {
+    searchJql: async () => [
+      {
+        id: "10001",
+        key: "PROJ-1",
+        fields: {
+          project: { key: "PROJ" },
+          summary: { trust: "UNTRUSTED_DATA", value: "Do the thing" },
+          status: { trust: "UNTRUSTED_DATA", value: "In Progress" },
+          labels: [],
+          // Same `updated` on both runs → same correlation eventId → the second run is a replay.
+          updated: "2026-08-23T21:00:00.000Z",
+        },
+      },
+    ],
+  };
+  const run = createJiraReconcileRun({
+    db,
+    search,
+    channelRegistry: channels,
+    ids: {
+      caseId: () => `case-${++idCounter}`,
+      entityId: () => `entity-${idCounter}`,
+      outboxId: () => `outbox-${idCounter}`,
+    },
+    now: () => "2026-08-23T21:30:00.000Z",
+  });
+
+  const lease = {
+    payload: { ownerId: "owner-1", connectionId: "conn-1", projectKey: "PROJ" },
+  } as unknown as JobLease;
+  await run(lease);
+  await run(lease);
+
+  const messages = await db.query<{ message_id: string }>("SELECT message_id FROM case_messages");
+  expect(messages.rows).toHaveLength(1);
 });
