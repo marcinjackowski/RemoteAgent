@@ -58,6 +58,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 29 | [RA-029](RA-029.md) Okablowanie pętli Jira → Discord (routing outboxu + reconciler) | DONE | RA-028 | M7 |
 | 30 | [RA-030](RA-030.md) Produkcyjne wpięcie reconcile Jiry (single-owner API token) | DONE | RA-029 | M7 |
 | 31 | [RA-031](RA-031.md) Inbound conversation loop (wiadomość → praca agenta) | DONE | RA-030 | M7 |
+| 32 | [RA-032](RA-032.md) Model runtime: agent myśli i odpisuje (Bedrock + config w DB) | DONE | RA-031 | M7 |
 
 ## Milestone gates
 
@@ -96,6 +97,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-029 work units](../work-units/RA-029/WORK_UNITS.md)
 - [RA-030 work units](../work-units/RA-030/WORK_UNITS.md)
 - [RA-031 work units](../work-units/RA-031/WORK_UNITS.md)
+- [RA-032 work units](../work-units/RA-032/WORK_UNITS.md)
 - [RA-016 work units](../work-units/RA-016/WORK_UNITS.md)
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
