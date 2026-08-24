@@ -19,8 +19,21 @@ uruchomiona** — skrypt polla istnieje i przechodzi bramki, brakuje tylko crede
 ### 1. Toolchain
 
 ```bash
-. scripts/dev/env.sh      # ustala node, pnpm przez corepack, sprawdza PostgreSQL na 5433
+. scripts/dev/env.sh      # ustala node (po majorze z .nvmrc), pnpm przez corepack, sprawdza PostgreSQL na 5433
 ```
+
+**Node musi być `24.19.0`** (`.nvmrc`/`engines`). Node 25 po cichu łamie podsystem
+procesów/timeoutów — 22 faile w pełnej suicie (`CTF-019`). `env.sh` wybiera node po majorze i
+**ostrzega**, jeśli zgodnego nie ma. Instalacja bez sudo (arm64), jeśli `env.sh` ostrzega:
+
+```bash
+mkdir -p $HOME/.local/opt
+curl -fsSL https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz | tar -xz -C $HOME/.local/opt
+# ponów: . scripts/dev/env.sh  → powinno raportować node v24.19.0
+```
+
+`env.sh` znajdzie tę instalację automatycznie. Uwaga: brew `node@24` na tej maszynie rozwiązuje
+się do v25 — nie polegaj na nim.
 
 Znane realne breakage tej maszyny (`2026-08-20`): Homebrew `node` nie ładuje
 `libllhttp.9.3.dylib` i przesłania działający `/usr/local/bin/node`; Docker ma niezgodny

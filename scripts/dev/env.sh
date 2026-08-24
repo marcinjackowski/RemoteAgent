@@ -19,19 +19,37 @@
 # it is safe to source repeatedly.
 
 # --- node ---------------------------------------------------------------------
-# Pick the first node that actually executes. A broken binary still satisfies
-# `command -v`, so probe with `node -v` instead of testing for existence.
+# Pin to the MAJOR in .nvmrc. A working-but-wrong-major node must not be chosen:
+# Node 25 silently breaks the process/timeout classification suite (CTF-019),
+# and picking it because it merely executes is exactly how the gate drifted. So
+# probe with `node -v` (a broken binary still satisfies `command -v`), and prefer
+# a candidate whose major matches the pin; fall back to any working node with a
+# loud warning that names the fix.
+_ra_pin="$(cat ./.nvmrc 2>/dev/null || echo 24.19.0)"
+_ra_major="${_ra_pin%%.*}"
+_ra_arch="$(uname -m)"
+_ra_pinned_bin="$HOME/.local/opt/node-v${_ra_pin}-darwin-${_ra_arch}/bin/node"
+
 _ra_node=""
-for _candidate in /usr/local/bin/node "$(command -v node 2>/dev/null)"; do
+_ra_fallback=""
+for _candidate in "$_ra_pinned_bin" /usr/local/bin/node "$(command -v node 2>/dev/null)"; do
   [ -n "$_candidate" ] || continue
-  if "$_candidate" -v >/dev/null 2>&1; then
-    _ra_node="$_candidate"
-    break
-  fi
+  _ra_v="$("$_candidate" -v 2>/dev/null)" || continue
+  [ -n "$_ra_fallback" ] || _ra_fallback="$_candidate"
+  case "$_ra_v" in
+    v"${_ra_major}".*) _ra_node="$_candidate"; break ;;
+  esac
 done
 
+if [ -z "$_ra_node" ] && [ -n "$_ra_fallback" ]; then
+  _ra_node="$_ra_fallback"
+  echo "env: WARNING using $("$_ra_node" -v) but .nvmrc pins v${_ra_pin}." >&2
+  echo "     Node's process/timeout tests (CTF-019) need v${_ra_pin}. Install without sudo:" >&2
+  echo "     mkdir -p \$HOME/.local/opt && curl -fsSL https://nodejs.org/dist/v${_ra_pin}/node-v${_ra_pin}-darwin-${_ra_arch}.tar.gz | tar -xz -C \$HOME/.local/opt" >&2
+fi
+
 if [ -z "$_ra_node" ]; then
-  echo "env: no working node found. Repair with: brew reinstall node" >&2
+  echo "env: no working node found." >&2
 else
   PATH="$(dirname "$_ra_node"):$PATH"
   export PATH
@@ -79,4 +97,5 @@ else
   echo "       start with: brew services start postgresql@17" >&2
 fi
 
-unset _ra_node _ra_shim _ra_pg_ok _candidate _pg
+unset _ra_node _ra_shim _ra_pg_ok _candidate _pg \
+  _ra_pin _ra_major _ra_arch _ra_pinned_bin _ra_fallback _ra_v

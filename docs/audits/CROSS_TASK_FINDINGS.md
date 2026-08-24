@@ -44,7 +44,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-016` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `hookTimeout` został na 10s, gdy `testTimeout` podniesiono do 120s |
 | `CTF-017` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `process-runner`: kernel reapuje wnuka asynchronicznie po SIGKILL |
 | `CTF-018` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-028 | `cases.active_run_id` nie ustawiał ŻADEN kod produkcyjny; luka od RA-003 |
-| `CTF-019` | HIGH | OTWARTY — blokada środowiskowa | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
+| `CTF-019` | HIGH | **ZAMKNIĘTY** `2026-08-24` — Node 24.19.0 postawiony, `env.sh` fixnięty | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
 
 ---
 
@@ -1505,7 +1505,7 @@ Mutation check: usunięcie guardu czerwieni test.
 - Dotyczy: `packages/workspace-runner` (RA-010), `packages/test-evidence` (RA-013),
   `packages/implementation-tools` (RA-012), `test/golden-path` (RA-018) — czyli podsystemu
   wykonywania procesów, nie pojedynczego taska
-- Status: **OTWARTY** — blokada środowiskowa, wymaga Node `24.19.0`
+- Status: **ZAMKNIĘTY** `2026-08-24` — Node `24.19.0` postawiony, `env.sh` fail-closuje na majorze
 
 ### Dowód
 
@@ -1546,3 +1546,22 @@ RA-029 nie dotyka żadnego z tych czterech pakietów. Suite podsystemów **dotkn
 (queue, dispatch, connector-jira, agent-worker, scheduler, discord relay) jest **150/150 zielona**.
 Odebrane decyzją właściciela (`2026-08-24`) na dowodzie in-scope, z tą blokadą jako osobnym,
 repo-szerokim findingiem.
+
+### Domknięcie (`2026-08-24`)
+
+Node `24.19.0` (arm64) postawiony bez sudo w `$HOME/.local/opt/node-v24.19.0-darwin-arm64`
+(oficjalny tarball nodejs.org). `env.sh` przepisany tak, by **wybierał node po majorze z
+`.nvmrc`** (preferuje lokalną instalację 24), a gdy zgodnego majora brak — używa fallbacku z
+**głośnym ostrzeżeniem** i komendą instalacyjną, zamiast cicho brać v25. To domyka mechanizm:
+working-but-wrong-major nie zostanie już wybrany po cichu.
+
+Dowód:
+
+```text
+. scripts/dev/env.sh            → node v24.19.0 (było: v25.2.1)
+process-runner + command        → 21/21 (było: 9 failed)
+RA_REQUIRE_POSTGRES=1 vitest run (całe repo) → 2403/2403, 172 pliki, exit 0
+```
+
+Zostaje zalecenie długoterminowe (poza tą maszyną): CI powinno przypinać Node przez `.nvmrc`,
+żeby ta klasa driftu nie wracała.
