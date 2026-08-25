@@ -51,13 +51,16 @@ Trzy dodatkowe wymogi, każdy z realnego incydentu w tym repozytorium:
 ## Środowisko
 
 Przed bramką: `. scripts/dev/env.sh`. Skrypt ustala działający `node`, `pnpm`
-przez `corepack` i sprawdza PostgreSQL na `127.0.0.1:5433`.
+przez `corepack` i sprawdza PostgreSQL realnym `psql ... SELECT 1`. Szanuje jawny
+`RA_DATABASE_URL`/`DATABASE_URL` albo `RA_PG*`/`PG*`; bez konfiguracji preferuje
+repozytoryjny default `127.0.0.1:5433`, a następnie dostępny local fallback
+`127.0.0.1:5432`, eksportowany jako dyskretne `RA_PG*`.
 
 Znane, realne breakage tej maszyny (`2026-08-20`): Homebrew `node` nie ładuje
 `libllhttp.9.3.dylib` i przesłania działający `/usr/local/bin/node`; Docker ma
-niezgodny client/engine i zwraca `500`. PostgreSQL 17 działa lokalnie na `5433`,
-co jest domyślną wartością w `packages/database/src/config.ts`, więc Docker nie
-jest potrzebny.
+niezgodny client/engine i zwraca `500`. Na tej maszynie (`2026-08-25`) działa
+PostgreSQL 15 na `5432`; formula PostgreSQL 17 opisana wcześniej nie jest
+zainstalowana. `env.sh` wykrywa ten stan bez instalowania ani uruchamiania usług.
 
 Integracyjne bramki uruchamiaj z `RA_REQUIRE_POSTGRES=1` — bez tego niedostępny
 PostgreSQL daje ciche skipy zamiast błędu.

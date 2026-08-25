@@ -47,7 +47,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-019` | HIGH | **ZAMKNIĘTY** `2026-08-24` — Node 24.19.0 postawiony, `env.sh` fixnięty | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
 | `CTF-020` | HIGH | **ZAMKNIĘTY** `2026-08-25` — fix zacommitowany `3a0c5ed`, mutacja RED→GREEN | Żaden kod produkcyjny nie tworzył bazowego checkpointu case'a; PIERWSZY completion każdego runu rzucał „has no checkpoint to advance". Naprawione leniwym baseline'em (revision-0, bez bumpu `cases.checkpoint_revision`) w ścieżce completion (`CheckpointRepository.ensureBaseline` → `handlers.ts`). Odblokowało pętlę odpowiedzi RA-031/032 i RA-034. |
 | `CTF-021` | LOW | **ZAMKNIĘTY** `2026-08-25` — fix w `roles.ts` | Worker `createRole` (`apps/agent-worker/src/roles.ts`) NIE używa `RoleRegistry`/`ROLE_PROMPTS` (RA-009), a transport nie ma kanału `system` (`RuntimeMessage` = user/assistant/tool). SUPERVISOR system-prompt nigdy nie docierał do modelu → `summary` wychodziło trzecioosobowe („Owner asked… I provided…"). Fix: dyrektywa konwersacyjna wstrzyknięta w pierwszy user-turn `createRole`. |
-| `CTF-022` | LOW | OTWARTY — decyzja `fix` | RA-038 WU-00: `env.sh` i instrukcje nadal zakładają nieobecny PG17/5433; na maszynie działa PG15/5432 |
+| `CTF-022` | LOW | **ZAMKNIĘTY** `2026-08-25` — RA-038-WU-00, realny `SELECT 1`, integracja 8/8 + mutation RED→GREEN | `env.sh` szanuje explicit config, preferuje 5433 i wykrywa local fallback PG15/5432 jako dyskretne `RA_PG*` |
 
 ---
 
@@ -1647,7 +1647,7 @@ osobny, większy refactor — poza zakresem tego fixa.
 - Severity: **LOW** (blokuje lokalną bramkę, nie zmienia zachowania produkcyjnego)
 - Wykryty: `2026-08-25`, podczas finalnej bramki RA-037
 - Dotyczy: `scripts/dev/env.sh`, instrukcji środowiska i wszystkich bramek z PostgreSQL
-- Status: **OTWARTY** — decyzja `fix`, owner `RA-038-WU-00`
+- Status: **ZAMKNIĘTY** `2026-08-25` — potwierdzony przez `RA-038-WU-00`
 
 ### Dowód i wpływ
 
@@ -1669,3 +1669,30 @@ RA-038 zaczyna od urealnienia `env.sh` i instrukcji: bezpieczna autodetekcja alb
 jawne ustawienie faktycznie dostępnego lokalnego serwera, bez instalowania lub
 uruchamiania usług i bez osłabienia `RA_REQUIRE_POSTGRES=1`. Bramka musi nadal
 failować, gdy żaden PostgreSQL nie jest osiągalny.
+
+### Zamknięcie
+
+`env.sh` zachowuje jawny `RA_DATABASE_URL`/`DATABASE_URL` oraz dyskretne
+`RA_PG*`/`PG*`. Bez jawnej konfiguracji sprawdza repozytoryjny default
+`127.0.0.1:5433`, następnie rzeczywiście dostępny local PostgreSQL na `5432`.
+Fallback eksportuje wyłącznie dyskretne `RA_PGHOST`, `RA_PGPORT`, `RA_PGUSER` i
+`RA_PGDATABASE`; nie syntetyzuje URL-a ani hasła, więc per-test override
+`{ database: dbName }` pozostaje skuteczny. Dostępność oznacza wykonany przez
+`psql -X -w` realny `SELECT 1`, z connection/statement timeoutem i bez
+drukowania diagnostyki mogącej zawierać URL albo hasło. Niedostępna jawna
+konfiguracja nie uruchamia local fallbacku. Skrypt niczego nie instaluje ani nie
+uruchamia i głośno raportuje brak obu serwerów.
+
+Dowód `2026-08-25`:
+
+- deterministyczny harness: `test/processes/env-script.test.ts` — exit `0`,
+  `8/8` (oba aliasy URL, oba zestawy discrete, explicit-unreachable bez
+  fallbacku, 5433→5432 i oba DOWN); fake `psql` odrzuca probe bez `-X`, `-w`,
+  timeoutów albo rzeczywistego `SELECT 1`, a canary hasła nie trafia do outputu;
+- realne `. scripts/dev/env.sh` wybrało `local fallback 127.0.0.1:5432` i
+  wyeksportowało dyskretne `RA_PG*` bez URL-a;
+- `RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+  packages/database/test/repositories.integration.test.ts` — exit `0`, `8/8`;
+- mutation: eksport portu fallbacku zmieniony `5432→5433`; harness — exit `1`,
+  test fallbacku RED. Po przywróceniu i przejściu na probe `SELECT 1` finalny
+  harness — exit `0`, `8/8`.
