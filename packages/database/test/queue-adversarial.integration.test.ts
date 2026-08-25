@@ -583,6 +583,44 @@ describeIntegration(
       ).rejects.toBeInstanceOf(IdempotencyConflictError);
     });
 
+    it("RA-038 WU-02: transaction-scoped intent composes and rolls back atomically", async () => {
+      await seedCase("case-intent-tx");
+      await jobs.enqueue(db, { jobType: "w", payload: {}, caseId: "case-intent-tx" });
+      const lease = await jobs.claim(db, { owner: "W1", leaseMs: 30_000 });
+      const input = {
+        kind: "op",
+        descriptor: { destination: "tx" },
+        idempotencyKey: "intent-tx-rollback",
+      };
+
+      await expect(
+        db.withTransaction(async (tx) => {
+          await jobs.recordIntentInTransaction(tx, lease!, input);
+          await tx.query(
+            `INSERT INTO job_attempts
+               (job_id, attempt_number, lease_owner, fencing_token, outcome, error,
+                started_at, finished_at)
+             VALUES ($1, $2, $3, $4, 'FAILED', $5, to_timestamp($6 / 1000.0), to_timestamp($6 / 1000.0))`,
+            [lease!.jobId, 99, lease!.leaseOwner, lease!.fencingToken, "rollback", clock.now()],
+          );
+          throw new Error("rollback intent transaction");
+        }),
+      ).rejects.toThrow("rollback intent transaction");
+
+      const rolledBack = await db.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM job_intents WHERE idempotency_key = $1",
+        [input.idempotencyKey],
+      );
+      expect(rolledBack.rows[0]!.count).toBe("0");
+
+      const wrapperInput = { ...input, idempotencyKey: "intent-wrapper-parity" };
+      const wrapperId = await jobs.recordIntent(db, lease!, wrapperInput);
+      const replayId = await db.withTransaction((tx) =>
+        jobs.recordIntentInTransaction(tx, lease!, wrapperInput),
+      );
+      expect(replayId).toBe(wrapperId);
+    });
+
     // ----- HIGH-05: cased job cannot disable per-case serialization -----
     it("HIGH-05: serializationKey=null on a cased job is forced to the case_id", async () => {
       await seedCase("case-x");

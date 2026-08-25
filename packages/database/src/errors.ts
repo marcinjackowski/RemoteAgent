@@ -143,6 +143,19 @@ export class WorkUnitConflictError extends PersistenceError {
 /** A work unit or its bound run is not eligible for the requested transition. */
 export class WorkUnitStateError extends PersistenceError {}
 
+/** An engineering operation/artifact/event identity was replayed with different semantics. */
+export class EngineeringControlConflictError extends PersistenceError {
+  public readonly identity: string;
+
+  public constructor(identity: string) {
+    super(`engineering control-plane conflict for ${identity}`);
+    this.identity = identity;
+  }
+}
+
+/** Durable engineering state or its authoritative scope/fence is not eligible. */
+export class EngineeringControlStateError extends PersistenceError {}
+
 /**
  * Credential-refresh failures are defined ONCE, in `@remoteagent/contracts`, and
  * re-exported here so existing importers keep working (RA-023-WU-00, `CTF-001`).

@@ -44,6 +44,8 @@ export {
   CaseRecoveryStateError,
   WorkUnitConflictError,
   WorkUnitStateError,
+  EngineeringControlConflictError,
+  EngineeringControlStateError,
 } from "./errors.js";
 
 export { loadMigrations, migrateUp, migrateDown, migrationStatus } from "./migrate.js";

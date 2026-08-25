@@ -585,75 +585,85 @@ export class JobStore {
       idempotencyKey: string;
     },
   ): Promise<string> {
+    return db.withTransaction((tx) => this.recordIntentInTransaction(tx, lease, input));
+  }
+
+  public async recordIntentInTransaction(
+    tx: Transaction,
+    lease: JobLease,
+    input: {
+      kind: string;
+      descriptor: Record<string, unknown>;
+      idempotencyKey: string;
+    },
+  ): Promise<string> {
     const nowMs = this.clock.now();
     const intentId = this.ids.next("jobintent");
     const descriptorJson = JSON.stringify(input.descriptor);
-    return db.withTransaction(async (tx) => {
-      const held = await tx.query<{ one: number }>(
-        `SELECT 1 AS one FROM jobs
+    const held = await tx.query<{ one: number }>(
+      `SELECT 1 AS one FROM jobs
          WHERE job_id = $1 AND lease_owner = $2 AND fencing_token = $3
            AND status = 'LEASED' AND lease_expires_at > ${this.lt.now(4)}
          FOR UPDATE`,
-        [lease.jobId, lease.leaseOwner, lease.fencingToken, nowMs],
-      );
-      if (held.rowCount === 0) {
-        await this.throwStale(tx, lease);
-      }
+      [lease.jobId, lease.leaseOwner, lease.fencingToken, nowMs],
+    );
+    if (held.rowCount === 0) {
+      await this.throwStale(tx, lease);
+    }
 
-      let inserted: string | undefined;
-      try {
-        const r = await tx.query<{ intent_id: string }>(
-          `INSERT INTO job_intents (
+    let inserted: string | undefined;
+    try {
+      const r = await tx.query<{ intent_id: string }>(
+        `INSERT INTO job_intents (
              intent_id, job_id, case_id, fencing_token, kind, descriptor, idempotency_key, recorded_at)
            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, to_timestamp($8 / 1000.0))
            ON CONFLICT (idempotency_key) DO NOTHING
            RETURNING intent_id`,
-          [
-            intentId,
-            lease.jobId,
-            lease.caseId,
-            lease.fencingToken,
-            input.kind,
-            descriptorJson,
-            input.idempotencyKey,
-            nowMs,
-          ],
-        );
-        inserted = r.rows[0]?.intent_id;
-      } catch (error) {
-        throw translatePgError(error) ?? error;
-      }
-      if (inserted !== undefined) {
-        return inserted;
-      }
-      // The live lease remains locked here; a conflict can only replay an intent
-      // created by this same job and fencing token with identical semantics.
-      const existing = await tx.query<{
-        intent_id: string;
-        job_id: string;
-        fencing_token: string;
-        kind: string;
-        descriptor_matches: boolean;
-      }>(
-        `SELECT intent_id, job_id, fencing_token, kind,
+        [
+          intentId,
+          lease.jobId,
+          lease.caseId,
+          lease.fencingToken,
+          input.kind,
+          descriptorJson,
+          input.idempotencyKey,
+          nowMs,
+        ],
+      );
+      inserted = r.rows[0]?.intent_id;
+    } catch (error) {
+      throw translatePgError(error) ?? error;
+    }
+    if (inserted !== undefined) {
+      return inserted;
+    }
+    // The live lease remains locked here; a conflict can only replay an intent
+    // created by this same job and fencing token with identical semantics.
+    const existing = await tx.query<{
+      intent_id: string;
+      job_id: string;
+      fencing_token: string;
+      kind: string;
+      descriptor_matches: boolean;
+    }>(
+      `SELECT intent_id, job_id, fencing_token, kind,
                 descriptor IS NOT DISTINCT FROM $2::jsonb AS descriptor_matches
          FROM job_intents WHERE idempotency_key = $1`,
-        [input.idempotencyKey, descriptorJson],
-      );
-      const prior = existing.rows[0];
-      if (prior === undefined) {
-        throw new Error(`recordIntent: conflict row disappeared for ${input.idempotencyKey}`);
-      }
-      if (
-        prior!.job_id !== lease.jobId ||
-        Number(prior!.fencing_token) !== lease.fencingToken ||
-        prior!.kind !== input.kind ||
-        !prior!.descriptor_matches
-      ) {
-        throw new IdempotencyConflictError(input.idempotencyKey, prior!.job_id, lease.jobId);
-      }
-      return prior!.intent_id;
-    });
+      [input.idempotencyKey, descriptorJson],
+    );
+    const prior = existing.rows[0];
+    if (prior === undefined) {
+      throw new Error(`recordIntent: conflict row disappeared for ${input.idempotencyKey}`);
+    }
+    if (
+      prior!.job_id !== lease.jobId ||
+      Number(prior!.fencing_token) !== lease.fencingToken ||
+      prior!.kind !== input.kind ||
+      !prior!.descriptor_matches
+    ) {
+      throw new IdempotencyConflictError(input.idempotencyKey, prior!.job_id, lease.jobId);
+    }
+    return prior!.intent_id;
   }
 
   /**
