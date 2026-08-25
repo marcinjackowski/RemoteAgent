@@ -47,6 +47,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-019` | HIGH | **ZAMKNIĘTY** `2026-08-24` — Node 24.19.0 postawiony, `env.sh` fixnięty | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
 | `CTF-020` | HIGH | **ZAMKNIĘTY** `2026-08-25` — fix zacommitowany `3a0c5ed`, mutacja RED→GREEN | Żaden kod produkcyjny nie tworzył bazowego checkpointu case'a; PIERWSZY completion każdego runu rzucał „has no checkpoint to advance". Naprawione leniwym baseline'em (revision-0, bez bumpu `cases.checkpoint_revision`) w ścieżce completion (`CheckpointRepository.ensureBaseline` → `handlers.ts`). Odblokowało pętlę odpowiedzi RA-031/032 i RA-034. |
 | `CTF-021` | LOW | **ZAMKNIĘTY** `2026-08-25` — fix w `roles.ts` | Worker `createRole` (`apps/agent-worker/src/roles.ts`) NIE używa `RoleRegistry`/`ROLE_PROMPTS` (RA-009), a transport nie ma kanału `system` (`RuntimeMessage` = user/assistant/tool). SUPERVISOR system-prompt nigdy nie docierał do modelu → `summary` wychodziło trzecioosobowe („Owner asked… I provided…"). Fix: dyrektywa konwersacyjna wstrzyknięta w pierwszy user-turn `createRole`. |
+| `CTF-022` | LOW | OTWARTY — decyzja `fix` | RA-038 WU-00: `env.sh` i instrukcje nadal zakładają nieobecny PG17/5433; na maszynie działa PG15/5432 |
 
 ---
 
@@ -1640,3 +1641,31 @@ Dyrektywa konwersacyjna (first-person, `summary` = dosłowna wiadomość do wła
 PIERWSZY user-turn `createRole`, obok `bindingContext`. Guard w `role-context.test.ts` (asercja, że
 dyrektywa dociera do modelu). Pełne wpięcie RoleRegistry w worker (zamiast duplikatu `createRole`) to
 osobny, większy refactor — poza zakresem tego fixa.
+
+## `CTF-022` — skrypt środowiska wskazuje nieistniejący PostgreSQL
+
+- Severity: **LOW** (blokuje lokalną bramkę, nie zmienia zachowania produkcyjnego)
+- Wykryty: `2026-08-25`, podczas finalnej bramki RA-037
+- Dotyczy: `scripts/dev/env.sh`, instrukcji środowiska i wszystkich bramek z PostgreSQL
+- Status: **OTWARTY** — decyzja `fix`, owner `RA-038-WU-00`
+
+### Dowód i wpływ
+
+`. scripts/dev/env.sh` raportuje `DOWN` na `127.0.0.1:5433` i zaleca
+`brew services start postgresql@17`, lecz formula/usługa `postgresql@17` nie jest
+zainstalowana. Na tej maszynie działa PostgreSQL 15 na `127.0.0.1:5432` jako
+lokalny użytkownik. Pełna bramka RA-037 przeszła `2472/2472` z
+`RA_REQUIRE_POSTGRES=1` dopiero po wyczyszczeniu URL-i i ustawieniu dyskretnych
+`RA_PGHOST`, `RA_PGPORT`, `RA_PGUSER` i `RA_PGDATABASE`.
+
+Użycie `RA_DATABASE_URL` nie jest równoważnym obejściem dla tej suite: dwa testy
+tworzą nowy pool przez `resolvePoolConfig({ database: dbName })`, a obecny
+`connectionString` nadal wygrywa po stronie klienta `pg`, więc testy trafiają do
+bazy `postgres` zamiast izolowanej bazy testowej.
+
+### Wymagana zmiana
+
+RA-038 zaczyna od urealnienia `env.sh` i instrukcji: bezpieczna autodetekcja albo
+jawne ustawienie faktycznie dostępnego lokalnego serwera, bez instalowania lub
+uruchamiania usług i bez osłabienia `RA_REQUIRE_POSTGRES=1`. Bramka musi nadal
+failować, gdy żaden PostgreSQL nie jest osiągalny.

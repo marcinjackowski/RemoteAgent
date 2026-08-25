@@ -60,9 +60,18 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 31 | [RA-031](RA-031.md) Inbound conversation loop (wiadomość → praca agenta) | DONE | RA-030 | M7 |
 | 32 | [RA-032](RA-032.md) Model runtime: agent myśli i odpisuje (Bedrock + config w DB) | DONE | RA-031 | M7 |
 | 33 | [RA-033](RA-033.md) Kontekst zadania dla agenta: issue Jiry w transkrypcie case'a | DONE | RA-032 | M7 |
-| 34 | [RA-034](RA-034.md) Agent DZIAŁA: IMPLEMENTER → realny lokalny commit | IN_PROGRESS | RA-033 | M7 |
+| 34 | [RA-034](RA-034.md) Agent DZIAŁA: IMPLEMENTER → realny lokalny commit | BLOCKED | RA-033 | M7 |
 | 35 | [RA-035](RA-035.md) Discord UX: natywny wskaźnik „Bot pisze…" w wątku | DONE | RA-032 | M7 |
 | 36 | [RA-036](RA-036.md) Discord UX: informacja o błędzie agenta w wątku | DONE | RA-032 | M7 |
+| 37 | [RA-037](RA-037.md) Engineering workflow contracts i granica control plane | DONE | — | M8 |
+| 38 | [RA-038](RA-038.md) Trwałe operacje, eventy i recovery control plane | READY | RA-037 | M8 |
+| 39 | [RA-039](RA-039.md) Generyczne structured output dla etapów Bedrock | READY | RA-037 | M8 |
+| 40 | [RA-040](RA-040.md) Context compiler i trzywarstwowa pamięć | BLOCKED_BY_DEPENDENCIES | RA-037, RA-038 | M8 |
+| 41 | [RA-041](RA-041.md) Workflow stages w istniejącym SupervisorRuntime | BLOCKED_BY_DEPENDENCIES | RA-037, RA-038, RA-039, RA-040 | M8 |
+| 42 | [RA-042](RA-042.md) Deterministyczny gate runner i evidence binding | BLOCKED_BY_DEPENDENCIES | RA-037, RA-038 | M8 |
+| 43 | [RA-043](RA-043.md) Vertical-slice executor, GitLifecycle i review loop | BLOCKED_BY_DEPENDENCIES | RA-041, RA-042 | M8 |
+| 44 | [RA-044](RA-044.md) Kwalifikacja core Engineering Control Plane | BLOCKED_BY_DEPENDENCIES | RA-043 | M8 |
+| 45 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | BLOCKED_BY_DEPENDENCIES | RA-044 | M9 |
 
 ## Milestone gates
 
@@ -74,6 +83,11 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - **M5 Tools/actions:** MCP, policy, approval i external writes.
 - **M6 Production:** hardening, AWS, restore drill i final audit.
 - **M7 Runnable:** composition roots — procesy, health, Dockerfile.
+- **M8 Engineering Control Plane:** jeden human-steered control plane rozszerzający istniejący
+  `SupervisorRuntime`: risk-proportional product/system/program design, fresh context, vertical
+  slices, durable recovery, deterministyczne gates i review (`ADR-0011`); zastępuje RA-034.
+- **M9 iOS Qualification:** jawnie uruchamiany live smoke M8 na macOS/Xcode i `sondermind-ios`;
+  brak środowiska live nie blokuje kwalifikacji core.
 
 ## Prepared execution plans
 
@@ -124,3 +138,13 @@ przy starcie i dopiero wtedy oznacza pierwszy unit jako gotowy do wykonania.
 RA-019 i RA-020 pozostają semantycznie niezależne. Ich units dotykające migracji
 i `repositories/index.ts` są serializowane przez Sol jako konflikt allowed paths;
 tymczasowy migration lane nie jest kodowany jako fałszywa zależność domenowa.
+
+## Dependency rationale — M8/M9, 2026-08-25
+
+- RA-037 najpierw definiuje kontrakty i dowodzi, że nie powstaje drugi orchestrator.
+- RA-038 (durability) i RA-039 (generic structured output) mogą powstać niezależnie po RA-037.
+- RA-040 wymaga trwałych source revisions/manifestów z RA-038.
+- RA-041 spina kontrakty, store, transport i context w istniejącym `SupervisorRuntime`.
+- RA-042 może rozwijać bezpieczne command/evidence boundary po RA-038, równolegle do model flow.
+- RA-043 łączy gotowy workflow i gates z jedynym writerem, `GitLifecycle` i `review-loop`.
+- RA-044 kwalifikuje core na deterministycznych boundary fakes; RA-045 osobno kwalifikuje Xcode/live.
