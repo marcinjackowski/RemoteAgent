@@ -1,13 +1,10 @@
 /**
- * CTF-020 regression: a case created the way the reconciler creates one has NO checkpoint, and
- * nothing in production ever wrote the first one — so the FIRST completion of any run on a fresh
- * case used to throw "has no checkpoint to advance", silently breaking the reply loop (RA-031/032)
- * and the implementer loop (RA-034). Every handler test masked it by seeding a revision-0 checkpoint
- * directly (`handlers.integration` seed(), line ~143).
- *
- * This drives the REAL `case.resume` handler on a fresh case with NO seeded checkpoint and asserts
- * the completion now persists: a revision-0 baseline is created lazily and the run advances 0 → 1.
- * The mutation check (revert `handlers.ts` to `throw`) turns this red.
+ * RA-035: an owner-driven `case.resume` pass shows the owner a native "typing…" indicator while
+ * the model composes its reply. This drives the REAL `case.resume` handler and asserts that a
+ * `discord.thread_typing` outbox event is enqueued BEFORE the model pass — but ONLY when the job
+ * is owner-driven (`reason: "owner_message"`). A recovery/implementer pass (no owner waiting)
+ * must NOT emit the hint. The mutation check (remove the `reason` gate in handlers.ts) turns the
+ * "recovery pass emits none" case red.
  */
 import { afterEach, beforeEach, expect, it } from "vitest";
 
@@ -65,6 +62,73 @@ function completionJson(caseId: string, runId: string): Record<string, unknown> 
   };
 }
 
+async function seedCaseWithUnit(caseId: string): Promise<void> {
+  await new OwnerRepository().insert(db, { ownerId: "owner-1", displayName: "o" });
+  await new ConnectionRepository().insert(db, {
+    connectionId: "conn-1",
+    ownerId: "owner-1",
+    provider: "jira",
+    displayName: "c",
+  });
+  await new CaseRepository().insert(db, {
+    caseId,
+    ownerId: "owner-1",
+    status: "NEW",
+    integrationScope: { providers: ["jira"], connection_ids: ["conn-1"] },
+    discordThreadId: "thread-1",
+  });
+  await new WorkUnitRepository().insert(db, {
+    workUnitId: "unit-1",
+    caseId,
+    role: "SUPERVISOR",
+    objective: "reply to the owner",
+    authoritativeScope: { connection_ids: [], repo_allowlist: [], can_write_workspace: false },
+  });
+}
+
+function handlersFor(caseId: string) {
+  return createWorkerHandlers({
+    persistence: new WorkerPersistence(db, runtime),
+    roles: createRoles(["SUPERVISOR"], {
+      transport: new FakeTransport([
+        {
+          model: config.model,
+          content: [{ type: "json", value: completionJson(caseId, "run-1") }],
+        },
+      ]),
+      config,
+    }),
+    logger: new StructuredLogger({ sink: { log: () => undefined } }),
+    db,
+    jobs: new JobStore({ ...runtime, leaseTime: "injected" }),
+  });
+}
+
+function lease(caseId: string, payload: Record<string, unknown>): JobLease {
+  return {
+    jobId: "job-1",
+    caseId,
+    jobType: "case.resume",
+    payload,
+    provider: null,
+    serializationKey: caseId,
+    attempts: 0,
+    maxAttempts: 10,
+    fencingToken: 1,
+    leaseExpiresAtMs: FIXED_MS + 60_000,
+    leaseOwner: "worker-1",
+  };
+}
+
+async function typingEventCount(caseId: string): Promise<number> {
+  const rows = await db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM outbox
+      WHERE event_type = 'discord.thread_typing' AND payload->>'case_id' = $1`,
+    [caseId],
+  );
+  return Number(rows.rows[0]?.n ?? "0");
+}
+
 beforeEach(async () => {
   const created = await createTestDatabase();
   db = created.db;
@@ -75,78 +139,20 @@ afterEach(async () => {
   await drop();
 });
 
-it("first completion on a fresh (checkpoint-less) case creates the baseline and persists (CTF-020)", async () => {
-  // Exactly what the correlator + inbound-message produce: a case and a PENDING SUPERVISOR unit,
-  // and NO checkpoint (the masked gap).
-  await new OwnerRepository().insert(db, { ownerId: "owner-1", displayName: "o" });
-  await new ConnectionRepository().insert(db, {
-    connectionId: "conn-1",
-    ownerId: "owner-1",
-    provider: "jira",
-    displayName: "c",
-  });
-  await new CaseRepository().insert(db, {
-    caseId: "case-1",
-    ownerId: "owner-1",
-    status: "NEW",
-    integrationScope: { providers: ["jira"], connection_ids: ["conn-1"] },
-    discordThreadId: "thread-1",
-  });
-  await new WorkUnitRepository().insert(db, {
-    workUnitId: "unit-1",
-    caseId: "case-1",
-    role: "SUPERVISOR",
-    objective: "reply to the owner",
-    authoritativeScope: { connection_ids: [], repo_allowlist: [], can_write_workspace: false },
-  });
-  // Precondition: the fresh case genuinely has no checkpoint.
-  const persistence = new WorkerPersistence(db, runtime);
-  expect(await persistence.latestCheckpoint("case-1")).toBeNull();
-
-  const handlers = createWorkerHandlers({
-    persistence,
-    roles: createRoles(["SUPERVISOR"], {
-      transport: new FakeTransport([
-        {
-          model: config.model,
-          content: [{ type: "json", value: completionJson("case-1", "run-1") }],
-        },
-      ]),
-      config,
-    }),
-    logger: new StructuredLogger({ sink: { log: () => undefined } }),
-    db,
-    jobs: new JobStore({ ...runtime, leaseTime: "injected" }),
-  });
-
-  const lease: JobLease = {
-    jobId: "job-1",
-    caseId: "case-1",
-    jobType: "case.resume",
-    payload: {},
-    provider: null,
-    serializationKey: "case-1",
-    attempts: 0,
-    maxAttempts: 10,
-    fencingToken: 1,
-    leaseExpiresAtMs: FIXED_MS + 60_000,
-    leaseOwner: "worker-1",
-  };
-  // Before CTF-020 this threw "has no checkpoint to advance".
-  await handlers["case.resume"]!(lease, async () => undefined);
-
-  // The completion persisted...
-  const completion = await db.query<{ case_id: string }>("SELECT case_id FROM run_completions");
-  expect(completion.rows).toHaveLength(1);
-  expect(completion.rows[0]?.case_id).toBe("case-1");
-  // ...the baseline (revision 0) was created and the run advanced to revision 1...
-  const revisions = await db.query<{ revision: number }>(
-    "SELECT revision FROM case_checkpoints WHERE case_id = 'case-1' ORDER BY revision",
+it("an owner-driven resume enqueues a discord.thread_typing hint (RA-035)", async () => {
+  await seedCaseWithUnit("case-1");
+  const handlers = handlersFor("case-1");
+  await handlers["case.resume"]!(
+    lease("case-1", { reason: "owner_message", messageId: "m1" }),
+    async () => undefined,
   );
-  expect(revisions.rows.map((r) => r.revision)).toEqual([0, 1]);
-  // ...and the case now points at the advanced revision.
-  const caseRow = await db.query<{ checkpoint_revision: number }>(
-    "SELECT checkpoint_revision FROM cases WHERE case_id = 'case-1'",
-  );
-  expect(caseRow.rows[0]?.checkpoint_revision).toBe(1);
+  expect(await typingEventCount("case-1")).toBe(1);
+});
+
+it("a resume that is NOT owner-driven emits no typing hint (RA-035)", async () => {
+  await seedCaseWithUnit("case-1");
+  const handlers = handlersFor("case-1");
+  // A recovery-triggered resume has no owner waiting on the thread — no reason field.
+  await handlers["case.resume"]!(lease("case-1", {}), async () => undefined);
+  expect(await typingEventCount("case-1")).toBe(0);
 });

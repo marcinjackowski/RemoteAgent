@@ -49,20 +49,20 @@ function trimmed(env: Env, name: string): string | undefined {
 export function workspaceConfigFromEnv(env: Env = process.env): WorkspaceConfig | null {
   const workspaceRoot = trimmed(env, "RA_WORKSPACE_ROOT");
   if (workspaceRoot === undefined) return null;
-  if (!isAbsolute(workspaceRoot))
-    throw new Error("RA_WORKSPACE_ROOT must be an absolute path");
+  if (!isAbsolute(workspaceRoot)) throw new Error("RA_WORKSPACE_ROOT must be an absolute path");
 
   const repoId = trimmed(env, "RA_WORKSPACE_REPO_ID");
   const sourcePath = trimmed(env, "RA_WORKSPACE_REPO_PATH");
   if (repoId === undefined || sourcePath === undefined) {
     // Root without a repo is a misconfiguration, not "no repos": provisioning would always fail
     // closed at create() with "not on the allowlist", which reads as a bug rather than a config gap.
-    throw new Error("RA_WORKSPACE_ROOT is set but RA_WORKSPACE_REPO_ID/RA_WORKSPACE_REPO_PATH are not");
+    throw new Error(
+      "RA_WORKSPACE_ROOT is set but RA_WORKSPACE_REPO_ID/RA_WORKSPACE_REPO_PATH are not",
+    );
   }
   if (!REPO_ID.test(repoId))
     throw new Error(`RA_WORKSPACE_REPO_ID must match ${REPO_ID.source}, got ${repoId}`);
-  if (!isAbsolute(sourcePath))
-    throw new Error("RA_WORKSPACE_REPO_PATH must be an absolute path");
+  if (!isAbsolute(sourcePath)) throw new Error("RA_WORKSPACE_REPO_PATH must be an absolute path");
   const baseBranch = trimmed(env, "RA_WORKSPACE_BASE_BRANCH") ?? "main";
 
   return {

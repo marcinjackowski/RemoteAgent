@@ -142,6 +142,20 @@ describe("DiscordRestGateway (RA-006 production adapter)", () => {
     ]);
   });
 
+  it("triggerTyping POSTs to the thread's typing endpoint (RA-035)", async () => {
+    const { gateway, requests } = gatewayWith([
+      {
+        match: (r) => r.method === "POST" && r.path.endsWith("/channels/t1/typing"),
+        response: ok(null, 204),
+      },
+    ]);
+    await gateway.triggerTyping({ threadId: "t1" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.method).toBe("POST");
+    expect(requests[0]!.path.endsWith("/channels/t1/typing")).toBe(true);
+    expect(requests[0]!.headers.authorization).toBe(`Bot ${TOKEN}`);
+  });
+
   it("getThread returns null on 404 and archived state on 200", async () => {
     const missing = gatewayWith([
       {

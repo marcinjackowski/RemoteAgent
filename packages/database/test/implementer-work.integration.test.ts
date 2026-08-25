@@ -75,7 +75,10 @@ it("materializes a PENDING IMPLEMENTER unit with write scope and enqueues agent.
 
 it("refuses a second writer for the same case (single-writer, AGENTS.md §7)", async () => {
   await seedCase();
-  const first = await implementer.enqueueImplementerWork(db, { caseId: "case-1", repoId: "repo-1" });
+  const first = await implementer.enqueueImplementerWork(db, {
+    caseId: "case-1",
+    repoId: "repo-1",
+  });
   expect(first.status).toBe("accepted");
 
   const second = await implementer.enqueueImplementerWork(db, {

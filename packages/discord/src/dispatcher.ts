@@ -35,9 +35,11 @@ import {
   rootThreadPayload,
   statusPayload,
   threadMessagePayload,
+  threadTypingPayload,
   type RootThreadPayload,
   type StatusPayload,
   type ThreadMessagePayload,
+  type ThreadTypingPayload,
 } from "./messages.js";
 import { isSafeToRetry, withDiscordRetry, type RetryOptions } from "./retry.js";
 import { renderStatusMessage } from "./status.js";
@@ -194,6 +196,8 @@ export class DiscordDispatcher {
           message.outboxId,
           this.#parse(threadMessagePayload, message),
         );
+      case DISCORD_EVENT_TYPES.THREAD_TYPING:
+        return this.#deliverThreadTyping(this.#parse(threadTypingPayload, message));
       case DISCORD_EVENT_TYPES.STATUS:
         return this.#deliverStatus(message.outboxId, this.#parse(statusPayload, message));
       default:
@@ -463,6 +467,28 @@ export class DiscordDispatcher {
       }
       return { status: "delivered", caseId: p.case_id, threadId };
     });
+  }
+
+  /**
+   * Deliver a "typing…" hint (RA-035). Unlike every other event this is BEST-EFFORT and
+   * fire-once: it reserves no seq, records no receipt, and NEVER throws. A missed typing
+   * indicator is invisible, so a transient gateway error or a not-yet-created thread must not
+   * dead-letter the outbox row or block the ordered message stream — we simply return
+   * `delivered` so the relay marks the row PUBLISHED and moves on.
+   */
+  async #deliverThreadTyping(p: ThreadTypingPayload): Promise<DeliveryResult> {
+    const { db, bindings, gateway } = this.#deps;
+    const binding = await bindings.find(db, p.case_id);
+    if (binding === null || binding.thread_id === null) {
+      // No thread to show typing in yet; drop the hint rather than deferring/retrying.
+      return { status: "delivered", caseId: p.case_id, threadId: null };
+    }
+    try {
+      await gateway.triggerTyping({ threadId: binding.thread_id });
+    } catch {
+      // Disposable UX hint — swallow any failure so it never blocks or duplicates a real send.
+    }
+    return { status: "delivered", caseId: p.case_id, threadId: binding.thread_id };
   }
 
   async #deliverStatus(outboxId: string, p: StatusPayload): Promise<DeliveryResult> {

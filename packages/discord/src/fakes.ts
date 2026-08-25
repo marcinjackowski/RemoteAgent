@@ -305,6 +305,16 @@ export class FakeDiscordGateway implements DiscordGateway {
     return Promise.resolve();
   }
 
+  /** Thread ids for which `triggerTyping` was called, in call order (RA-035). */
+  public readonly typingCalls: string[] = [];
+
+  public triggerTyping(input: { threadId: string }): Promise<void> {
+    // Honour a programmed failure so a test can prove the dispatcher SWALLOWS it.
+    this.#maybeRateLimit();
+    this.typingCalls.push(input.threadId);
+    return Promise.resolve();
+  }
+
   public getThread(threadId: string): Promise<ThreadState | null> {
     const thread = this.#threads.get(threadId);
     return Promise.resolve(thread === undefined ? null : { threadId, archived: thread.archived });

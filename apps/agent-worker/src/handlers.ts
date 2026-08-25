@@ -17,6 +17,7 @@ import {
 import type { StructuredLogger } from "@remoteagent/observability";
 
 import { projectCompletionReply } from "./completion-reply.js";
+import { projectThinkingIndicator } from "./thinking-indicator.js";
 import type { WorkerPersistence } from "./persistence.js";
 
 /**
@@ -178,6 +179,20 @@ export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = fa
     const runtime = runtimeFor(deps, asWriter ? lease : undefined);
     await runtime.recover();
     await heartbeat();
+    // RA-035: while the model composes a reply, show the owner a native "typing…" hint. Only
+    // for owner-driven resumes (a person is waiting on the thread) — not recovery/implementer
+    // passes. Best-effort: a failed hint must never fail the pass or block the model call.
+    if (lease.payload.reason === "owner_message" && lease.caseId !== null) {
+      try {
+        await projectThinkingIndicator({ db: deps.db, caseId: lease.caseId });
+      } catch (error) {
+        deps.logger.warn("failed to enqueue typing indicator", {
+          job_id: lease.jobId,
+          case_id: lease.caseId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     const result = await runtime.pumpOnce();
     deps.logger.info("case.resume pass complete", {
       job_id: lease.jobId,

@@ -30,7 +30,7 @@ import {
   type OutboxMessage,
 } from "../src/dispatcher.js";
 import { MAX_MESSAGE_LENGTH } from "../src/sanitize.js";
-import { DISCORD_EVENT_TYPES } from "../src/messages.js";
+import { DISCORD_EVENT_TYPES, DISCORD_OUTBOX_AGGREGATE } from "../src/messages.js";
 import { FakeDiscordGateway, FakeOrchestrator } from "../src/fakes.js";
 import { handleInbound } from "../src/intake.js";
 import {
@@ -1048,6 +1048,88 @@ describeIntegration(
       // Redelivery reconciles the existing thread by the exact tag (no duplicate).
       expect((await dispatcher.deliver(await claim(db, rootId))).status).toBe("duplicate");
       expect(gateway.createThreadCalls).toBe(1);
+    });
+
+    // RA-035: the "typing…" hint. Enqueue a bare typing event on the outbox (no seq).
+    async function enqueueTyping(caseId: string): Promise<string> {
+      return db.withTransaction(async (tx) => {
+        const row = await new OutboxRepository(productionRuntime()).enqueue(tx, {
+          aggregate: DISCORD_OUTBOX_AGGREGATE,
+          aggregateId: caseId,
+          eventType: DISCORD_EVENT_TYPES.THREAD_TYPING,
+          payload: { case_id: caseId },
+        });
+        return row.outbox_id;
+      });
+    }
+
+    it("RA-035: a typing event triggers the native indicator on the case thread", async () => {
+      const caseId = `case-typing-${Date.now()}`;
+      await seedCase(db, caseId);
+      const rootId = await orchestrator.openCase({
+        caseId,
+        ownerId: OWNER,
+        provider: "jira",
+        alias: "private",
+        channelId: registry().channelId("jira"),
+        title: "Typing case",
+        body: "root",
+      });
+      const root = await dispatcher.deliver(await claim(db, rootId));
+      const threadId = root.threadId!;
+
+      const typingId = await enqueueTyping(caseId);
+      const result = await dispatcher.deliver(await claim(db, typingId));
+
+      expect(result.status).toBe("delivered");
+      expect(result.threadId).toBe(threadId);
+      expect(gateway.typingCalls).toEqual([threadId]);
+      // Typing must NOT create a message or reserve a seq — the thread still holds only the anchor.
+      expect(gateway.messagesIn(threadId).length).toBe(1);
+    });
+
+    it("RA-035: a typing event before the thread exists is a best-effort no-op (not deferred)", async () => {
+      const caseId = `case-typing-nothread-${Date.now()}`;
+      await seedCase(db, caseId);
+      // openCase creates the binding but leaves thread_id null until the root is delivered.
+      await orchestrator.openCase({
+        caseId,
+        ownerId: OWNER,
+        provider: "jira",
+        alias: "private",
+        channelId: registry().channelId("jira"),
+        title: "No thread yet",
+        body: "root",
+      });
+
+      const typingId = await enqueueTyping(caseId);
+      // Unlike a thread_message (which defers), typing drops the hint rather than throwing.
+      const result = await dispatcher.deliver(await claim(db, typingId));
+      expect(result.status).toBe("delivered");
+      expect(result.threadId).toBeNull();
+      expect(gateway.typingCalls).toEqual([]);
+    });
+
+    it("RA-035: a failed typing trigger is swallowed, never dead-lettering the outbox", async () => {
+      const caseId = `case-typing-fail-${Date.now()}`;
+      await seedCase(db, caseId);
+      const rootId = await orchestrator.openCase({
+        caseId,
+        ownerId: OWNER,
+        provider: "jira",
+        alias: "private",
+        channelId: registry().channelId("jira"),
+        title: "Typing fails",
+        body: "root",
+      });
+      await dispatcher.deliver(await claim(db, rootId));
+
+      const typingId = await enqueueTyping(caseId);
+      gateway.queueUnknownFailure(); // the next gateway call throws
+      // The dispatcher must NOT rethrow — a failed hint is invisible, and rethrowing would
+      // retry/dead-letter the outbox row.
+      const result = await dispatcher.deliver(await claim(db, typingId));
+      expect(result.status).toBe("delivered");
     });
   },
   available,

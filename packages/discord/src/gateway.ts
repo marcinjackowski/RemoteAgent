@@ -95,6 +95,13 @@ export interface DiscordGateway {
   /** Post the pinned status message (first status projection for a case). */
   sendStatusMessage(input: { threadId: string; content: string }): Promise<SentMessage>;
 
+  /**
+   * Trigger the ephemeral "typing…" indicator in a thread (RA-035). Discord shows it for
+   * ~10s or until the next message. It creates NO durable object and has no id, so it is a
+   * disposable UX hint — safe to skip on any failure (the dispatcher never retries it).
+   */
+  triggerTyping(input: { threadId: string }): Promise<void>;
+
   /** Edit an existing message in place (idempotent status re-projection). */
   editMessage(input: { threadId: string; messageId: string; content: string }): Promise<void>;
 

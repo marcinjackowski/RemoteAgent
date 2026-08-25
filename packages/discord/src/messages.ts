@@ -55,6 +55,15 @@ export const threadMessagePayload = z.strictObject({
   approval: approvalButtonsSpec.optional(),
 });
 
+/**
+ * A "the agent is composing a reply" hint (RA-035). It carries NO seq: typing is an
+ * ephemeral, disposable UX signal (Discord shows it for ~10s), orthogonal to the ordered
+ * message stream, so it must never reserve or advance a delivery sequence.
+ */
+export const threadTypingPayload = z.strictObject({
+  case_id: id,
+});
+
 export const statusPayload = z.strictObject({
   case_id: id,
   status: z.string().min(1).max(64),
@@ -70,11 +79,13 @@ export const statusPayload = z.strictObject({
 
 export type RootThreadPayload = z.infer<typeof rootThreadPayload>;
 export type ThreadMessagePayload = z.infer<typeof threadMessagePayload>;
+export type ThreadTypingPayload = z.infer<typeof threadTypingPayload>;
 export type StatusPayload = z.infer<typeof statusPayload>;
 
 export const DISCORD_EVENT_TYPES = {
   ROOT_THREAD: "discord.root_thread",
   THREAD_MESSAGE: "discord.thread_message",
+  THREAD_TYPING: "discord.thread_typing",
   STATUS: "discord.status",
 } as const;
 

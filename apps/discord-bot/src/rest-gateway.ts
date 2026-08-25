@@ -244,6 +244,11 @@ export class DiscordRestGateway implements DiscordGateway, InteractionAcknowledg
     await this.#request("PUT", `/channels/${input.threadId}/pins/${input.messageId}`);
   }
 
+  public async triggerTyping(input: { threadId: string }): Promise<void> {
+    // Fire-and-forget: Discord shows "typing…" for ~10s. No body, no created object.
+    await this.#request("POST", `/channels/${input.threadId}/typing`);
+  }
+
   public async getThread(threadId: string): Promise<ThreadState | null> {
     const res = await this.#request("GET", `/channels/${threadId}`, { allowStatuses: [404] });
     if (res.status === 404) return null;

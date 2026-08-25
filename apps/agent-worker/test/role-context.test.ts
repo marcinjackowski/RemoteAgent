@@ -28,6 +28,7 @@ it("sends the objective plus the UNTRUSTED case conversation as a separate turn"
       unit: {
         workUnit: { objective: "Reply to the owner", role: "SUPERVISOR", case_id: "case-1" },
       },
+      run: { runId: "run-1" },
     })
     .catch(() => undefined);
 
@@ -36,20 +37,29 @@ it("sends the objective plus the UNTRUSTED case conversation as a separate turn"
   expect(text).toContain("Reply to the owner"); // trusted objective
   expect(text).toContain("please retry the failing test"); // untrusted owner message
   expect(text).toContain("UNTRUSTED"); // explicitly delimited as data, not instructions
+  // The run/case binding is prepended so the model echoes matching ids in its completion.
+  expect(text).toContain("case-1");
+  expect(text).toContain("run-1");
 });
 
 it("sends only the objective when there is no conversation (or no reader)", async () => {
   const withEmpty = new FakeTransport([]);
   const role = createRole({ transport: withEmpty, config, readCaseMessages: async () => [] });
   await role
-    .invoke({ unit: { workUnit: { objective: "X", role: "SUPERVISOR", case_id: "c" } } })
+    .invoke({
+      unit: { workUnit: { objective: "X", role: "SUPERVISOR", case_id: "c" } },
+      run: { runId: "run-1" },
+    })
     .catch(() => undefined);
   expect(withEmpty.requests[0]!.messages).toHaveLength(1);
 
   const noReader = new FakeTransport([]);
   const role2 = createRole({ transport: noReader, config });
   await role2
-    .invoke({ unit: { workUnit: { objective: "Y", role: "SUPERVISOR", case_id: "c" } } })
+    .invoke({
+      unit: { workUnit: { objective: "Y", role: "SUPERVISOR", case_id: "c" } },
+      run: { runId: "run-1" },
+    })
     .catch(() => undefined);
   expect(noReader.requests[0]!.messages).toHaveLength(1);
 });

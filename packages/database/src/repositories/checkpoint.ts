@@ -170,7 +170,8 @@ export class CheckpointRepository {
       throw translatePgError(error) ?? error;
     }
     const row = await this.atRevision(tx, input.caseId, 0);
-    if (!row) throw new PersistenceError(`failed to create baseline checkpoint for ${input.caseId}`);
+    if (!row)
+      throw new PersistenceError(`failed to create baseline checkpoint for ${input.caseId}`);
     return row.checkpoint;
   }
 

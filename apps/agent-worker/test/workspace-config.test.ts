@@ -29,12 +29,16 @@ describe("workspaceConfigFromEnv", () => {
   it("defaults the base branch to main", () => {
     const { RA_WORKSPACE_BASE_BRANCH, ...noBranch } = base;
     void RA_WORKSPACE_BASE_BRANCH;
-    expect(workspaceConfigFromEnv(noBranch).repositories["sondermind-ios"]!.baseBranch).toBe("main");
+    expect(workspaceConfigFromEnv(noBranch).repositories["sondermind-ios"]!.baseBranch).toBe(
+      "main",
+    );
   });
 
   it("returns null when RA_WORKSPACE_ROOT is absent (provisioning not configured)", () => {
     expect(workspaceConfigFromEnv({})).toBeNull();
-    expect(workspaceConfigFromEnv({ RA_WORKSPACE_REPO_ID: "x", RA_WORKSPACE_REPO_PATH: "/a" })).toBeNull();
+    expect(
+      workspaceConfigFromEnv({ RA_WORKSPACE_REPO_ID: "x", RA_WORKSPACE_REPO_PATH: "/a" }),
+    ).toBeNull();
   });
 
   it("throws on a relative workspace root", () => {

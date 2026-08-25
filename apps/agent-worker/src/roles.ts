@@ -68,7 +68,10 @@ export function createRole(options: RoleBindingOptions): {
         `case_id: "${input.unit.workUnit.case_id}"\n` +
         `run_id: "${input.run.runId}"\n\n`;
       const messages: RuntimeMessage[] = [
-        { role: "user", content: [{ type: "text", text: bindingContext + input.unit.workUnit.objective }] },
+        {
+          role: "user",
+          content: [{ type: "text", text: bindingContext + input.unit.workUnit.objective }],
+        },
       ];
       // The case conversation is UNTRUSTED external content. It is sent as a SEPARATE, explicitly
       // delimited turn so the model treats it as data, never as instructions (AGENTS.md §5) — the
