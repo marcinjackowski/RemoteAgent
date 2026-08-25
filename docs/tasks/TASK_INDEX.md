@@ -65,7 +65,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 36 | [RA-036](RA-036.md) Discord UX: informacja o błędzie agenta w wątku | DONE | RA-032 | M7 |
 | 37 | [RA-037](RA-037.md) Engineering workflow contracts i granica control plane | DONE | — | M8 |
 | 38 | [RA-038](RA-038.md) Trwałe operacje, eventy i recovery control plane | DONE | RA-037 | M8 |
-| 39 | [RA-039](RA-039.md) Generyczne structured output dla etapów Bedrock | READY | RA-037 | M8 |
+| 39 | [RA-039](RA-039.md) Generyczne structured output dla etapów Bedrock | DONE | RA-037 | M8 |
 | 40 | [RA-040](RA-040.md) Context compiler i trzywarstwowa pamięć | READY | RA-037, RA-038 | M8 |
 | 41 | [RA-041](RA-041.md) Workflow stages w istniejącym SupervisorRuntime | BLOCKED_BY_DEPENDENCIES | RA-037, RA-038, RA-039, RA-040 | M8 |
 | 42 | [RA-042](RA-042.md) Deterministyczny gate runner i evidence binding | READY | RA-037, RA-038 | M8 |
