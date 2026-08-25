@@ -45,7 +45,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-017` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `process-runner`: kernel reapuje wnuka asynchronicznie po SIGKILL |
 | `CTF-018` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-028 | `cases.active_run_id` nie ustawiał ŻADEN kod produkcyjny; luka od RA-003 |
 | `CTF-019` | HIGH | **ZAMKNIĘTY** `2026-08-24` — Node 24.19.0 postawiony, `env.sh` fixnięty | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
-| `CTF-020` | HIGH | **OTWARTY** `2026-08-25` — reprodukcja zielona | Żaden kod produkcyjny nie tworzy bazowego checkpointu case'a; PIERWSZY completion każdego runu rzuca „has no checkpoint to advance". Blokuje pętlę odpowiedzi (RA-031/032) i RA-034. Domknięcie w `RA-034-WU-00`. |
+| `CTF-020` | HIGH | **ZAMKNIĘTY** `2026-08-25` — fix zacommitowany `3a0c5ed`, mutacja RED→GREEN | Żaden kod produkcyjny nie tworzył bazowego checkpointu case'a; PIERWSZY completion każdego runu rzucał „has no checkpoint to advance". Naprawione leniwym baseline'em (revision-0, bez bumpu `cases.checkpoint_revision`) w ścieżce completion (`CheckpointRepository.ensureBaseline` → `handlers.ts`). Odblokowało pętlę odpowiedzi RA-031/032 i RA-034. |
 
 ---
 
@@ -1573,7 +1573,9 @@ Zostaje zalecenie długoterminowe (poza tą maszyną): CI powinno przypinać Nod
 - Wykryty: `2026-08-25`, podczas RA-034 WU-01 (śledzenie kontraktu writer-lease → checkpoint)
 - Dotyczy: `RA-003`/`RA-008` (checkpoint), tworzenie case'a (`connector-jira` correlation / RA-029),
   pętla RA-031/RA-032, blokuje RA-034
-- Status: **OTWARTY** — domknięcie zaplanowane w `RA-034-WU-00`
+- Status: **ZAMKNIĘTY** `2026-08-25` — fix zacommitowany `3a0c5ed` (RA-034 WU-00); mutacja
+  (revert `handlers.ts` do `throw`) potwierdzona RED, przywrócone GREEN; pętla odpowiedzi
+  zweryfikowana live tego samego dnia
 
 ### Dowód
 
