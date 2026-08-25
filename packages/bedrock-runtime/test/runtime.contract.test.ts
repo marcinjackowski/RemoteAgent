@@ -79,6 +79,16 @@ describe("Runtime public contract", () => {
     }
     expect(results[0]).toMatchObject({ mode: "text", text: "" });
     expect(results[1]).toMatchObject({ mode: "stream", text: "hello" });
-    expect(results[2]).toMatchObject({ mode: "structured", repaired: false });
+    expect(results[2]).toMatchObject({
+      mode: "structured",
+      repaired: false,
+      completion: {
+        schema_version: 1,
+        run_id: "run",
+        case_id: "case",
+        status: "COMPLETED",
+      },
+    });
+    expect(results[2]).not.toHaveProperty("value");
   });
 });

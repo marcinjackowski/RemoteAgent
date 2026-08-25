@@ -1,9 +1,24 @@
-import { describe, expect, it } from "vitest";
+import {
+  canonicalDigest,
+  EngineeringStage,
+  engineeringProgramDesign,
+  engineeringReviewDecision,
+} from "@remoteagent/contracts";
+import * as z from "zod";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   StructuredCompletionError,
+  StructuredContractOutputError,
+  StructuredModelIdentityError,
+  StructuredSchemaIdentityError,
+  RuntimeCancelledError,
+  RuntimeTimeoutError,
   TransportError,
   createRuntimeConfig,
+  defineStructuredContract,
+  runAgentCompletion,
+  runStructuredContract,
   runStructuredCompletion,
   type RuntimeConfig,
   type RuntimeJsonValue,
@@ -11,6 +26,42 @@ import {
   type RuntimeResponse,
   type RuntimeTransport,
 } from "../src/index.js";
+
+const planReportSchema = engineeringProgramDesign;
+const reviewReportSchema = engineeringReviewDecision;
+const sha = `sha256:${"a".repeat(64)}`;
+const validProgramDesign = {
+  schema_version: 1,
+  artifact_kind: "ProgramDesign",
+  case_id: "case",
+  run_id: "run",
+  revision: 1,
+  call_flow: ["entry -> result"],
+  file_tree_delta: ["src/feature.ts"],
+  key_types_and_signatures: ["run(): Result"],
+  uncertainty_review: ["none"],
+  expected_tests: ["feature test"],
+  slice_order: ["slice-a"],
+  source_digest: sha,
+};
+const validReviewDecision = {
+  schema_version: 1,
+  artifact_kind: "ReviewDecision",
+  case_id: "case",
+  run_id: "run",
+  revision: 1,
+  decision_id: "decision",
+  rationale: "evidence is complete",
+  decision: "PASS",
+  findings: [],
+  reviewed_digest: sha,
+};
+
+const programDesignDefinition = defineStructuredContract({
+  name: "ProgramDesign_v1",
+  version: 1,
+  schema: planReportSchema,
+});
 
 const config: RuntimeConfig = createRuntimeConfig({
   model: { provider: "test", model_id: "model" },
@@ -124,6 +175,19 @@ describe("runStructuredCompletion", () => {
     expect(transport.requests).toHaveLength(1);
   });
 
+  it("retains the runAgentCompletion alias and legacy .completion result", async () => {
+    const transport = new ScriptTransport([response(completion)]);
+    const result = await runAgentCompletion(transport, config, { messages: [] });
+
+    expect(result.completion).toMatchObject({
+      schema_version: 1,
+      run_id: "run",
+      case_id: "case",
+      status: "COMPLETED",
+    });
+    expect(result).not.toHaveProperty("value");
+  });
+
   it("accepts exactly one text JSON object", async () => {
     const transport = new ScriptTransport([textResponse(JSON.stringify(completion))]);
     const result = await runStructuredCompletion(transport, config, { messages: [] });
@@ -232,6 +296,465 @@ describe("runStructuredCompletion", () => {
     );
     expect(error).toBeInstanceOf(StructuredCompletionError);
     expect(String(error)).not.toContain("secret-canary");
+    expect(transport.requests).toHaveLength(2);
+  });
+});
+
+describe("defineStructuredContract", () => {
+  it("derives typed parsers, provider schemas, and canonical digests for distinct contracts", () => {
+    const plan = defineStructuredContract({
+      name: "ProgramDesign_v1",
+      version: 1,
+      schema: planReportSchema,
+      description: "One versioned program design",
+    });
+    const review = defineStructuredContract({
+      name: "ReviewDecision_v1",
+      version: 1,
+      schema: reviewReportSchema,
+    });
+
+    const parsedPlan = plan.parse(validProgramDesign);
+    const parsedReview = review.parse(validReviewDecision);
+
+    expectTypeOf(parsedPlan).toEqualTypeOf<z.output<typeof planReportSchema>>();
+    expectTypeOf(parsedReview).toEqualTypeOf<z.output<typeof reviewReportSchema>>();
+    expect(plan.schema).toBe(planReportSchema);
+    expect(review.schema).toBe(reviewReportSchema);
+    expect(plan.outputSchema).toMatchObject({
+      name: "ProgramDesign_v1",
+      description: "One versioned program design",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          schema_version: { type: "number", const: 1 },
+          artifact_kind: { type: "string", const: "ProgramDesign" },
+        },
+      },
+    });
+    expect(review.outputSchema).toMatchObject({
+      name: "ReviewDecision_v1",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          schema_version: { type: "number", const: 1 },
+          artifact_kind: { type: "string", const: "ReviewDecision" },
+        },
+      },
+    });
+    expect(plan.schemaDigest).toBe(canonicalDigest(plan.outputSchema.schema));
+    expect(review.schemaDigest).toBe(canonicalDigest(review.outputSchema.schema));
+    expect(plan.schemaDigest).not.toBe(review.schemaDigest);
+    expect(Object.isFrozen(plan.outputSchema.schema)).toBe(true);
+    const providerSchema = plan.outputSchema.schema;
+    if (
+      typeof providerSchema !== "object" ||
+      providerSchema === null ||
+      Array.isArray(providerSchema)
+    )
+      throw new Error("expected object JSON Schema");
+    expect(Object.isFrozen(providerSchema["properties"])).toBe(true);
+    expect(parsedPlan.slice_order).toEqual(["slice-a"]);
+    expect(parsedReview.decision).toBe("PASS");
+  });
+
+  it("rejects invalid provider names and versions before constructing a definition", () => {
+    expect(() =>
+      defineStructuredContract({ name: "contains spaces", version: 1, schema: planReportSchema }),
+    ).toThrow("Structured contract name");
+    expect(() =>
+      defineStructuredContract({ name: "ProgramDesign_v1", version: 0, schema: planReportSchema }),
+    ).toThrow("positive safe integer");
+    expect(() =>
+      defineStructuredContract({
+        name: "ProgramDesign_v1",
+        version: Number.MAX_SAFE_INTEGER + 1,
+        schema: planReportSchema,
+      }),
+    ).toThrow("positive safe integer");
+  });
+
+  it("requires a strict object with an exact schema_version matching the declaration", () => {
+    expect(() =>
+      defineStructuredContract({
+        name: "LooseContract_v1",
+        version: 1,
+        schema: z.object({ schema_version: z.literal(1), result: z.string() }).passthrough(),
+      }),
+    ).toThrow("reject unknown properties");
+    expect(() =>
+      defineStructuredContract({
+        name: "UnversionedContract_v1",
+        version: 1,
+        schema: z.strictObject({ result: z.string() }),
+      }),
+    ).toThrow("require schema_version");
+    expect(() =>
+      defineStructuredContract({
+        name: "ProgramDesign_v2",
+        version: 2,
+        schema: planReportSchema,
+      }),
+    ).toThrow("must equal the declared contract version");
+  });
+
+  it("fails closed when output has a mismatched version or unknown fields", () => {
+    const definition = defineStructuredContract({
+      name: "ProgramDesign_v1",
+      version: 1,
+      schema: planReportSchema,
+    });
+
+    expect(() =>
+      definition.parse({
+        ...validProgramDesign,
+        schema_version: 2,
+      }),
+    ).toThrow();
+    expect(() =>
+      definition.parse({
+        ...validProgramDesign,
+        widened_scope: true,
+      }),
+    ).toThrow();
+  });
+
+  it("snapshots a mutable definition input before building parser and identity", () => {
+    const mutableInput: {
+      name: string;
+      version: number;
+      schema: typeof planReportSchema | typeof reviewReportSchema;
+      description: string;
+    } = {
+      name: "MutableProgramDesign_v1",
+      version: 1,
+      schema: planReportSchema,
+      description: "original description",
+    };
+    const definition = defineStructuredContract(mutableInput);
+    const originalDigest = definition.schemaDigest;
+    const originalOutputSchema = definition.outputSchema;
+
+    mutableInput.name = "MutatedReviewDecision_v2";
+    mutableInput.version = 2;
+    mutableInput.schema = reviewReportSchema;
+    mutableInput.description = "mutated description";
+
+    expect(definition.name).toBe("MutableProgramDesign_v1");
+    expect(definition.version).toBe(1);
+    expect(definition.schema).toBe(planReportSchema);
+    expect(definition.schemaDigest).toBe(originalDigest);
+    expect(definition.outputSchema).toBe(originalOutputSchema);
+    expect(definition.outputSchema.description).toBe("original description");
+    expect(definition.parse(validProgramDesign)).toMatchObject({
+      schema_version: 1,
+      artifact_kind: "ProgramDesign",
+    });
+    expect(() => definition.parse(validReviewDecision)).toThrow();
+  });
+});
+
+describe("runStructuredContract", () => {
+  it("returns a typed value with complete pinned provenance", async () => {
+    const transport = new ScriptTransport([response(validProgramDesign, "program-design-request")]);
+
+    const result = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v3",
+      messages: [],
+    });
+
+    expectTypeOf(result.value).toEqualTypeOf<z.output<typeof planReportSchema>>();
+    expect(result.value.artifact_kind).toBe("ProgramDesign");
+    expect(result).toMatchObject({
+      model: config.model,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      schemaName: "ProgramDesign_v1",
+      schemaVersion: 1,
+      schemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v3",
+      requestId: "program-design-request",
+      usage: { totalTokens: 1 },
+      repaired: false,
+      transportCalls: 1,
+      toolIterations: 0,
+      toolCalls: 0,
+      modelCompletions: [
+        {
+          model: config.model,
+          requestId: "program-design-request",
+          usage: { totalTokens: 1 },
+          transportAttempts: 1,
+        },
+      ],
+    });
+    expect(transport.requests[0]?.outputSchema).toBe(programDesignDefinition.outputSchema);
+  });
+
+  it("fails closed on an expected schema digest mismatch before transport", async () => {
+    const transport = new ScriptTransport([response(validProgramDesign)]);
+    const secretExpectedDigest = `sha256:${"b".repeat(64)}`;
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: secretExpectedDigest,
+      promptVersion: "v1",
+      messages: [],
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredSchemaIdentityError);
+    expect(String(error)).not.toContain(secretExpectedDigest);
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("rejects a mismatched response identity before executing tool-use", async () => {
+    let executions = 0;
+    const transport = new ScriptTransport([
+      {
+        model: { provider: "unexpected-provider", model_id: "unexpected-model" },
+        content: [{ type: "tool-use", id: "tool-1", name: "lookup", input: {} }],
+      },
+    ]);
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v1",
+      messages: [],
+      tools: [{ name: "lookup", inputSchema: { type: "object" } }],
+      execute: async () => {
+        executions += 1;
+        return { leaked: true };
+      },
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredModelIdentityError);
+    expect(String(error)).not.toContain("unexpected-provider");
+    expect(String(error)).not.toContain("unexpected-model");
+    expect(executions).toBe(0);
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it("checks every response identity and preserves tool-loop metadata", async () => {
+    let executions = 0;
+    const transport = new ScriptTransport([
+      {
+        model: config.model,
+        content: [{ type: "tool-use", id: "tool-1", name: "lookup", input: {} }],
+        requestId: "tool-request",
+      },
+      {
+        model: { provider: config.model.provider, model_id: "swapped-model" },
+        content: [{ type: "json", value: validProgramDesign }],
+      },
+    ]);
+
+    await expect(
+      runStructuredContract(transport, config, {
+        definition: programDesignDefinition,
+        stage: EngineeringStage.PROGRAM_DESIGN,
+        expectedSchemaDigest: programDesignDefinition.schemaDigest,
+        promptVersion: "v1",
+        messages: [],
+        tools: [{ name: "lookup", inputSchema: { type: "object" } }],
+        execute: async () => {
+          executions += 1;
+          return { found: true };
+        },
+      }),
+    ).rejects.toBeInstanceOf(StructuredModelIdentityError);
+    expect(executions).toBe(1);
+    expect(transport.requests).toHaveLength(2);
+  });
+
+  it("repairs once without tools and reports repair provenance", async () => {
+    const transport = new ScriptTransport([
+      response({ malformed: true }, "malformed-request"),
+      response(validProgramDesign, "repair-request"),
+    ]);
+
+    const result = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "engineering.v1",
+      messages: [],
+    });
+
+    expect(result).toMatchObject({
+      repaired: true,
+      transportCalls: 2,
+      toolIterations: 0,
+      toolCalls: 0,
+      requestId: "repair-request",
+      promptVersion: "engineering.v1",
+    });
+    expect(result.modelCompletions).toHaveLength(2);
+    expect(transport.requests[1]?.tools).toBeUndefined();
+    expect(transport.requests[1]?.outputSchema).toBe(programDesignDefinition.outputSchema);
+  });
+
+  it("never repairs a malformed implementation report", async () => {
+    const invalidCanary = "malformed-implementation-canary";
+    const transport = new ScriptTransport([
+      response({ malformed: invalidCanary }, "implementation-report"),
+      response(validProgramDesign, "forbidden-repair"),
+    ]);
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.SLICE_IMPLEMENTATION,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v1",
+      messages: [],
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredContractOutputError);
+    expect(String(error)).not.toContain(invalidCanary);
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it("bounds a read-only malformed output to exactly one repair", async () => {
+    const invalidCanary = "malformed-read-only-canary";
+    const transport = new ScriptTransport([
+      response({ malformed: invalidCanary }, "initial-invalid"),
+      response({ malformed: invalidCanary }, "repair-invalid"),
+      response(validProgramDesign, "forbidden-second-repair"),
+    ]);
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v1",
+      messages: [],
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredContractOutputError);
+    expect(String(error)).not.toContain(invalidCanary);
+    expect(transport.requests).toHaveLength(2);
+  });
+
+  it("repairs from complete tool-loop history without exposing tools to repair", async () => {
+    const initialMessages = [
+      { role: "user" as const, content: [{ type: "text" as const, text: "design" }] },
+    ];
+    const toolUseContent = [{ type: "tool-use" as const, id: "tool-1", name: "lookup", input: {} }];
+    const invalidContent = [{ type: "json" as const, value: { malformed: true } }];
+    const transport = new ScriptTransport([
+      { model: config.model, content: toolUseContent, requestId: "tool-request" },
+      { model: config.model, content: invalidContent, requestId: "invalid-request" },
+      response(validProgramDesign, "repair-request"),
+    ]);
+    let executions = 0;
+
+    const result = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v1",
+      messages: initialMessages,
+      tools: [{ name: "lookup", inputSchema: { type: "object" } }],
+      execute: async () => {
+        executions += 1;
+        return { found: true };
+      },
+    });
+
+    expect(executions).toBe(1);
+    expect(result).toMatchObject({
+      repaired: true,
+      transportCalls: 3,
+      toolIterations: 1,
+      toolCalls: 1,
+      requestId: "repair-request",
+    });
+    expect(result.modelCompletions).toHaveLength(3);
+    expect(transport.requests[2]?.tools).toBeUndefined();
+    expect(transport.requests[2]?.outputSchema).toBe(programDesignDefinition.outputSchema);
+    expect(transport.requests[2]?.messages).toEqual([
+      ...initialMessages,
+      { role: "assistant", content: toolUseContent },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            id: "tool-1",
+            output: { ok: true, value: { found: true } },
+          },
+        ],
+      },
+      { role: "assistant", content: invalidContent },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Return only one valid JSON object matching ProgramDesign_v1 schema version 1.",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    ["initial cancellation", "initial", new RuntimeCancelledError(), "CANCELLED", 1],
+    ["repair cancellation", "repair", new RuntimeCancelledError(), "CANCELLED", 2],
+    ["initial timeout", "initial", new RuntimeTimeoutError(), "TIMEOUT", 1],
+    ["repair timeout", "repair", new RuntimeTimeoutError(), "TIMEOUT", 2],
+  ] as const)(
+    "preserves %s as an operational error",
+    async (_name, phase, operational, code, calls) => {
+      let transportCalls = 0;
+      const transport: RuntimeTransport = {
+        converse: async () => {
+          transportCalls += 1;
+          if (phase === "repair" && transportCalls === 1) return response({ malformed: true });
+          throw operational;
+        },
+      };
+
+      const error = await runStructuredContract(transport, config, {
+        definition: programDesignDefinition,
+        stage: EngineeringStage.PROGRAM_DESIGN,
+        expectedSchemaDigest: programDesignDefinition.schemaDigest,
+        promptVersion: "v1",
+        messages: [],
+      }).catch((value: unknown) => value);
+
+      expect(error).toBe(operational);
+      expect(error).toMatchObject({ code });
+      expect(error).not.toBeInstanceOf(StructuredContractOutputError);
+      expect(transportCalls).toBe(calls);
+    },
+  );
+
+  it("preserves repair response identity failures", async () => {
+    const transport = new ScriptTransport([
+      response({ malformed: true }, "initial-invalid"),
+      {
+        model: { provider: "unexpected-provider", model_id: "unexpected-model" },
+        content: [{ type: "json", value: validProgramDesign }],
+      },
+    ]);
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v1",
+      messages: [],
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredModelIdentityError);
+    expect(error).not.toBeInstanceOf(StructuredContractOutputError);
     expect(transport.requests).toHaveLength(2);
   });
 });

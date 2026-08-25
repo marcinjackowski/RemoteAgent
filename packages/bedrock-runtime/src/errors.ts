@@ -22,6 +22,14 @@ export class ConfigurationError extends RuntimeError {
   }
 }
 
+/** A server-pinned structured schema does not match the requested definition. */
+export class StructuredSchemaIdentityError extends ConfigurationError {
+  constructor() {
+    super("Structured schema identity mismatch");
+    this.name = "StructuredSchemaIdentityError";
+  }
+}
+
 export class RuntimeTimeoutError extends RuntimeError {
   constructor(message = "The runtime request timed out") {
     super("TIMEOUT", message, true);
@@ -56,5 +64,21 @@ export class TransportError extends RuntimeError {
     );
     this.name = "TransportError";
     this.kind = normalizedKind;
+  }
+}
+
+/** A transport response claims a model other than the configured provider/model. */
+export class StructuredModelIdentityError extends TransportError {
+  constructor() {
+    super("Structured model identity mismatch", "FATAL");
+    this.name = "StructuredModelIdentityError";
+  }
+}
+
+/** The model response could not be parsed as its server-owned structured contract. */
+export class StructuredContractOutputError extends TransportError {
+  constructor() {
+    super("Structured contract output is invalid", "FATAL");
+    this.name = "StructuredContractOutputError";
   }
 }

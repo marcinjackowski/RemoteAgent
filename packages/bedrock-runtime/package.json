@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "3.1113.0",
-    "@remoteagent/contracts": "workspace:*"
+    "@remoteagent/contracts": "workspace:*",
+    "zod": "4.4.3"
   }
 }
