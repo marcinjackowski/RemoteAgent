@@ -60,8 +60,15 @@ export function createRole(options: RoleBindingOptions): {
   return {
     invoke: async (input) => {
       // The objective is the TRUSTED, supervisor-authored directive.
+      // Prepend case_id and run_id so the model can echo them back in its completion JSON;
+      // without these it has no way to know the values and will hallucinate them, causing a
+      // "role completion binding mismatch" in the runtime (found in live test 2026-08-25).
+      const bindingContext =
+        `[Required JSON fields — copy exactly as given]\n` +
+        `case_id: "${input.unit.workUnit.case_id}"\n` +
+        `run_id: "${input.run.runId}"\n\n`;
       const messages: RuntimeMessage[] = [
-        { role: "user", content: [{ type: "text", text: input.unit.workUnit.objective }] },
+        { role: "user", content: [{ type: "text", text: bindingContext + input.unit.workUnit.objective }] },
       ];
       // The case conversation is UNTRUSTED external content. It is sent as a SEPARATE, explicitly
       // delimited turn so the model treats it as data, never as instructions (AGENTS.md §5) — the

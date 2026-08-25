@@ -61,6 +61,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 32 | [RA-032](RA-032.md) Model runtime: agent myśli i odpisuje (Bedrock + config w DB) | DONE | RA-031 | M7 |
 | 33 | [RA-033](RA-033.md) Kontekst zadania dla agenta: issue Jiry w transkrypcie case'a | DONE | RA-032 | M7 |
 | 34 | [RA-034](RA-034.md) Agent DZIAŁA: IMPLEMENTER → realny lokalny commit | IN_PROGRESS | RA-033 | M7 |
+| 35 | [RA-035](RA-035.md) Discord UX: loader „Agent pisze…" w wątku | READY | RA-032 | M7 |
+| 36 | [RA-036](RA-036.md) Discord UX: informacja o błędzie agenta w wątku | READY | RA-032 | M7 |
 
 ## Milestone gates
 
