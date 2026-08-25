@@ -260,10 +260,6 @@ export class WorkerPersistence {
     readonly runId: string;
     readonly reason: string;
   }): Promise<void> {
-    // Temporary diagnostic: log the root-cause before it is discarded.
-    process.stderr.write(
-      `[markAmbiguous] unit=${input.workUnitId} run=${input.runId} reason=${input.reason}\n`,
-    );
     await this.#db.query(
       `UPDATE agent_runs SET safety_state = 'AMBIGUOUS'
         WHERE run_id = $1 AND safety_state = 'STARTED'`,

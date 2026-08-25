@@ -17,6 +17,7 @@ import {
 import type { StructuredLogger } from "@remoteagent/observability";
 
 import { projectCompletionReply } from "./completion-reply.js";
+import { projectDeadLetterNotice } from "./dead-letter-notice.js";
 import { projectThinkingIndicator } from "./thinking-indicator.js";
 import type { WorkerPersistence } from "./persistence.js";
 
@@ -227,6 +228,26 @@ export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = fa
         ambiguous: result.ambiguous,
         blocked: result.blocked,
       });
+      // RA-036: on the TERMINAL attempt of an owner-driven resume, tell the owner in the thread
+      // that the agent hit an error and could not reply — otherwise the thread just goes silent.
+      // `lease.attempts >= maxAttempts` mirrors `JobStore.fail`'s dead-letter condition exactly, so
+      // this throw is guaranteed to dead-letter. Best-effort + idempotent on the job id, so a crash
+      // + re-claim never posts a duplicate and never masks the underlying failure.
+      if (
+        lease.payload.reason === "owner_message" &&
+        lease.caseId !== null &&
+        lease.attempts >= lease.maxAttempts
+      ) {
+        try {
+          await projectDeadLetterNotice({ db: deps.db, caseId: lease.caseId, jobId: lease.jobId });
+        } catch (error) {
+          deps.logger.warn("failed to enqueue dead-letter notice", {
+            job_id: lease.jobId,
+            case_id: lease.caseId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       throw new Error(
         `case.resume did not complete its work; ambiguous: [${result.ambiguous.join(", ")}], ` +
           `blocked: [${result.blocked.join(", ")}]`,
