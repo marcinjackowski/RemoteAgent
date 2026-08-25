@@ -2,20 +2,23 @@
 
 Ten plik jest nadrzędnym kontraktem pracy dla całego repozytorium.
 
-Obowiązująca decyzja o procesie:
-[ADR-0007](docs/decisions/ADR-0007-verification-first-delivery.md), która
-zastąpiła ADR-0006, ADR-0004 i ADR-0003.
+Obowiązujące decyzje o procesie:
 
-Jest jedna rola wykonawcza: ta sesja planuje, implementuje i weryfikuje.
-Rozdział na `COORDINATOR_AUDITOR` i `IMPLEMENTER` oraz dispatch osobnych sesji
-implementera **nie obowiązują**. Aliasy `Sol` i `Luna` są historyczne — mają
-znaczenie wyłącznie w dokumentach powstałych przed `2026-08-20`.
+- [ADR-0007](docs/decisions/ADR-0007-verification-first-delivery.md) ustanawia
+  nadrzędną bramkę verification-first i zastąpił ceremonialne handoffy/audyty
+  per work unit;
+- [ADR-0012](docs/decisions/ADR-0012-sol-luna-codex-orchestration.md) przywraca
+  rozdział Sol/Luna przez natywne, projektowe subagenty Codex, bez przywracania
+  starego protokołu dispatchu i bez osłabienia bramki ADR-0007;
+- [ADR-0013](docs/decisions/ADR-0013-continuous-sol-luna-milestone-execution.md)
+  ustanawia ciągłe wykonanie kolejnych tasków przez Sol/Luna aż do osiągnięcia
+  celu milestone'u, bez pauzy na audycie, commicie albo granicy taska.
 
-Uzasadnienie zmiany jest w ADR-0007: rozdział ról kosztował dwa incydenty
-naruszające single-writer i utratę pracy jednego unitu, nie wykrywając ani
-jednego defektu. Defekt, który realnie blokował RA-012 — odwrócone kryterium
-„model nie poszerza policy” — wykryło uruchomienie istniejących testów, nie
-granica sesji.
+GPT-5.6 Sol jest primary agentem, planistą i finalnym audytorem. GPT-5.6 Luna
+wykonuje ograniczoną eksplorację albo implementację. W danym zakresie zapisu
+działa najwyżej jeden `luna_implementer`; Sol nie edytuje równolegle tych samych
+plików. Raport subagenta nigdy nie zastępuje odczytu diffu ani uruchomionej
+komendy weryfikacyjnej przez Sol.
 
 ## Reguła nadrzędna — bramką jest uruchomiona komenda
 
@@ -145,6 +148,155 @@ notatnikiem: każdy otwarty MEDIUM blokuje końcowe `PASS` projektu.
    zgadzają, uruchomiony test rozstrzyga — dokładnie tak powstał defekt
    `POLICY_NOT_EXTENSIBLE` w RA-012.
 
+## Sol / Luna orchestration
+
+### Primary-agent role
+
+The primary agent is the technical lead and final reviewer.
+
+For coding tasks, the primary agent must preserve the user's requirements, make
+architectural decisions, delegate implementation work, inspect the actual
+resulting changes, and decide final acceptance.
+
+The primary agent should not perform production implementation itself when the
+`luna_implementer` agent can reasonably perform it.
+
+### Default coding workflow
+
+Use this sequence:
+
+1. Understand the user's request and constraints.
+2. Decide whether repository exploration is necessary.
+3. If the relevant code path is not already clear, delegate read-only discovery
+   to `luna_explorer`.
+4. Using the task requirements and any explorer report, create a bounded
+   implementation plan.
+5. Delegate production code/test changes to `luna_implementer`.
+6. Wait for the implementation result.
+7. Independently inspect the resulting git diff and critical changed files.
+8. Verify the implementation against the original user request.
+9. Review for correctness, regressions, architecture consistency,
+   state/concurrency issues where relevant, error handling, and test coverage.
+10. If problems exist, delegate a focused correction to `luna_implementer`.
+11. Re-audit the correction.
+12. Only then provide the final answer.
+
+### Small-task fast path
+
+Do not spawn an explorer just because one exists.
+
+If the task is clearly localized and enough context is already available:
+
+1. primary agent makes a minimal plan;
+2. `luna_implementer` performs the change and validation;
+3. primary agent audits the diff.
+
+### Delegation quality
+
+Do not give Luna vague requests such as "fix this feature".
+
+An implementation delegation should include, as available:
+
+- exact goal;
+- expected behavior;
+- relevant files/symbols from exploration;
+- constraints;
+- implementation decisions already made by Sol;
+- what must not change;
+- validation expectations.
+
+Do not paste large files or raw logs into the delegation when paths/symbols and
+a concise explanation are sufficient.
+
+### Final audit
+
+Never treat the implementer's summary as proof that the task is correct.
+
+The primary agent must inspect the actual changes.
+
+Prefer:
+
+- `git diff --stat`;
+- targeted `git diff`;
+- changed files;
+- directly relevant tests;
+- summarized validation results.
+
+Avoid rereading the entire repository after implementation unless the diff
+reveals a reason to expand the review.
+
+### Correction loop
+
+When review finds a problem, send Luna the smallest useful correction request.
+
+Prefer:
+
+> Loading and empty state are conflated in `GoalsViewModel`. Preserve loading
+> behavior and change only the empty-result handling. Re-run the affected tests.
+
+Avoid vague, repo-wide correction requests. The goal is to keep correction
+iterations cheap and bounded.
+
+### Write concurrency
+
+Do not run multiple write-capable agents against overlapping code at the same
+time.
+
+Parallel agents are preferred for independent read-heavy work, not overlapping
+implementation.
+
+### Token-efficiency rules
+
+The main Sol thread should contain:
+
+- user requirements;
+- important constraints;
+- distilled repository facts;
+- architecture decisions;
+- implementation plan;
+- concise worker reports;
+- final diff/review evidence.
+
+Keep out of the Sol thread whenever possible:
+
+- broad grep output;
+- long source-file dumps;
+- build logs;
+- compiler logs;
+- test logs;
+- repeated repository exploration;
+- intermediate implementation attempts.
+
+Use Luna for that work and return summaries. Do not spawn subagents
+speculatively. Each spawned agent must have a bounded purpose.
+
+### Model responsibilities
+
+Use Sol for:
+
+- ambiguity resolution;
+- architecture;
+- planning;
+- difficult tradeoffs;
+- audit/review;
+- final acceptance.
+
+Use Luna for:
+
+- code search;
+- codebase mapping;
+- routine investigation;
+- implementation;
+- tests/builds;
+- compiler/test-log analysis;
+- focused corrections.
+
+### External actions
+
+This orchestration does not broaden repository permissions. Commits, pushes,
+PRs/MRs, remote-service changes and destructive actions remain governed by the
+repository-specific authorization rules below.
+
 ## Zakazy wymagające zgody właściciela
 
 - `git commit` — tylko po jawnym potwierdzeniu właściciela. **Wyjątek stały
@@ -155,11 +307,13 @@ notatnikiem: każdy otwarty MEDIUM blokuje końcowe `PASS` projektu.
 - Zmiana albo tranzycja ticketów (Jira, Linear) — nigdy bez potwierdzenia.
 - Wysłanie czegokolwiek na zewnątrz (Slack, mail) — najpierw draft.
 
-## Domknięcie taska — przygotowanie do `/clear`
+## Domknięcie taska — przygotowanie do natychmiastowego następnego taska
 
-Właściciel pracuje w cyklu: **jeden task → `/clear` → `continue`**. Historia chatu
-znika po każdym tasku, więc domknięcie taska musi zostawić repozytorium w stanie,
-z którego następna sesja odtworzy WSZYSTKO bez pytania. Ustalone `2026-08-21`.
+Właściciel ustanowił `2026-08-25` ciągły cykl: **task → gate → audyt → commit →
+następny task**, bez wymagania `/clear` ani `continue` na granicy taska
+(`ADR-0013`). Historia chatu nadal może zniknąć przez compaction lub nową sesję,
+więc domknięcie taska musi zostawić repozytorium w stanie, z którego agent
+odtworzy WSZYSTKO bez pytania i natychmiast ruszy dalej.
 
 Zanim ogłosisz task zamkniętym, wykonaj w tej kolejności:
 
@@ -189,15 +343,36 @@ Jeżeli pauza wypada **w środku** taska, punkty 5, 7 i 9 obowiązują tak samo:
 oznacz ukończone units jako `DONE` z wynikiem bramki, zapisz następny krok i
 opisz brudne drzewo. Nie commituj pracy częściowej bez pytania.
 
-## Ciągły przebieg i `continue`
+## Ciągły przebieg, recovery i `continue`
 
-Wiadomość `continue` jest komendą workflow, nie prośbą o odtworzenie rozmowy.
-Historia chatu może być pusta; repozytorium jest źródłem prawdy dla stanu pracy.
+Po rozpoczęciu celu obejmującego wiele tasków Sol nie kończy pracy na granicy
+taska. Po `DONE`, commicie i czystym drzewie wybiera następny task według kolejki,
+czyta jego obowiązkowe dokumenty, tworzy just-in-time `WORK_UNITS.md` i zaczyna
+wykonanie. Nie czeka na osobne `continue`.
+
+Wiadomość `continue` pozostaje komendą recovery/manual resume, nie prośbą o
+odtworzenie rozmowy. Historia chatu może być pusta; repozytorium jest źródłem
+prawdy dla stanu pracy.
 
 Po `continue`: odtwórz stan z dokumentów obowiązkowych, wybierz task według
 kolejki (`CHANGES_REQUESTED` → `AUDIT_PASSED` → `IN_PROGRESS` → pierwszy
 `READY`) i prowadź przebieg dalej. Nie odpowiadaj, że brakuje kontekstu sesji.
 
 Handoff, audyt, `PASS` i granica taska nie są punktami pauzy. Zatrzymujesz się
-po poleceniu pauzy właściciela, przy materialnej decyzji do podjęcia albo przy
-realnej blokadzie zewnętrznej.
+wyłącznie po `pause`/`stop` właściciela, przy materialnej decyzji do podjęcia,
+gdy dalszy krok wymaga nowego uprawnienia lub przy realnej blokadzie zewnętrznej.
+Brak nowej wiadomości użytkownika, compaction, status `DONE` i granica milestone'u
+nie są poleceniem zatrzymania.
+
+### Aktywny ciągły cel M8/M9
+
+Decyzja właściciela `2026-08-25`: po rozpoczęciu RA-037 prowadź kolejno
+RA-037..RA-045 aż każdy będzie `DONE`. Sol planuje i audytuje; jeden
+`luna_implementer` wykonuje bounded work units, a `luna_explorer` jest używany
+tylko do potrzebnej eksploracji. Po każdym tasku stosuj pełne domknięcie powyżej
+i automatycznie przechodź do następnego odblokowanego taska.
+
+Ta decyzja nie autoryzuje push/MR/merge, zewnętrznych write'ów ani działań
+destrukcyjnych. Nie omija też pytań o materialne decyzje. RA-045 może zatrzymać
+się na prawdziwym braku macOS/Xcode/AWS albo wymaganym zatwierdzeniu dokładnego
+zadania live; takiej blokady nie zastępuje dokument ani fake evidence.

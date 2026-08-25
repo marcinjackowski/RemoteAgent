@@ -21,3 +21,13 @@ Aktualne decyzje:
 - `ADR-0006` — Claude Opus 5 koordynuje/audytuje, Claude Opus 4.8 implementuje w
   ephemerycznych sesjach per work unit z allowlistą ścieżek egzekwowaną przez
   permissions harnessu.
+- `ADR-0007` — verification-first; uruchomiona, niecache'owana bramka i mutation
+  checks są dowodem, a protokół handoffów/audytów per work unit jest historyczny.
+- `ADR-0011` — jeden human-steered Engineering Control Plane: risk-proportional
+  product/system/program design, vertical slices, durable recovery, context
+  compiler i deterministyczne gates w istniejącym `SupervisorRuntime`.
+- `ADR-0012` — GPT-5.6 Sol planuje i wykonuje finalny audyt, a projektowe agenty
+  GPT-5.6 Luna eksplorują i implementują pod single-writer oraz bramką ADR-0007.
+- `ADR-0013` — Sol/Luna wykonują sekwencję RA-037..RA-045 ciągle; audyt, commit,
+  `/clear` i granica taska nie są pauzą, a uprawnienia zewnętrzne pozostają bez
+  zmian.

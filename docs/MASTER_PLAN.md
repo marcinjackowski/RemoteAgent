@@ -119,27 +119,37 @@ właścicielem. Supervisor uruchamia w razie potrzeby role:
 
 Role są one-shot. Ich ciągłość zapewniają kontrakty i checkpointy.
 
+Role nie tworzą własnych, konkurencyjnych orchestratorów. `SupervisorRuntime`
+jest jedynym production control plane, a `apps/agent-worker` jedynym composition
+rootem wykonującym role. Model może proponować następny krok, lecz control flow,
+process class, uprawnienia, approvals i gates są egzekwowane deterministycznie.
+
 Powyższe role opisują docelowy runtime produktu. Proces budowy tego repozytorium
-ma osobny kontrakt z ADR-0004: Sol high pełni rolę koordynatora, planisty i
-audytora, a GPT-5.6 Luna medium wykonuje work units. To rozdzielenie nie
-hardcoduje modeli w kontraktach runtime RemoteAgent.
+ma osobny kontrakt z ADR-0007 i ADR-0012: Sol high jest primary agentem,
+planistą i finalnym audytorem, a GPT-5.6 Luna medium wykonuje ograniczoną
+eksplorację oraz implementację przez projektowe custom agents Codex. To
+rozdzielenie nie hardcoduje modeli w kontraktach runtime RemoteAgent.
 
 ### 3.6 Proces budowy repozytorium
 
 - Wiersz `RA-NNN` w `TASK_INDEX.md` jest makro-taskiem: jednostką zależności,
   kryteriów akceptacji i końcowego audytu.
-- Przed implementacją Sol rozpisuje makro-task na atomowe work units w
-  `docs/work-units/<TASK_ID>/WORK_UNITS.md`.
-- Jeden work unit ma jeden rezultat, mały context pack, ograniczone ścieżki i
-  jedną celowaną weryfikację.
-- Luna wykonuje units danego taska sekwencyjnie w ephemerycznych sesjach; Sol
-  może prowadzić do trzech niezależnych tasków równolegle, gdy ich zależności i
-  zakresy zapisu są rozłączne. Luna nie planuje, nie audytuje i nie zmienia
-  artefaktów workflow.
-- Sol po każdym unit sprawdza diff i ponawia celowany test, a po całym tasku
-  wykonuje pełny niezależny audyt.
-- To workflow służy oszczędzaniu ograniczonego budżetu Sol bez obniżania
-  jakości decyzji architektonicznych i audytu.
+- Przed implementacją Sol rozpisuje makro-task na kroki w
+  `docs/work-units/<TASK_ID>/WORK_UNITS.md`; każdy krok ma jeden rezultat,
+  ograniczone ścieżki i jedną celowaną weryfikację.
+- Dla zakresu niejasnego albo przekrojowego Sol może najpierw zlecić read-only
+  discovery agentowi `luna_explorer`; małe, oczywiste zmiany pomijają ten krok.
+- `luna_implementer` wykonuje bounded implementation, testy i iteracyjne poprawki.
+  W nakładającym się zakresie działa najwyżej jeden writer.
+- Sol po każdym kroku czyta rzeczywisty diff, sam uruchamia komendę weryfikacyjną,
+  a po całym tasku wykonuje audyt. Raport Luny nie jest dowodem.
+- Obowiązuje verification-first z ADR-0007: mutation checks dla mechanizmów
+  bezpieczeństwa oraz niecache'owane `typecheck`/`build` mają pierwszeństwo przed
+  dokumentacją i statusem.
+- Dla ciągłego celu wielotaskowego (`ADR-0013`) Sol po pełnym domknięciu taska
+  automatycznie wybiera następny odblokowany task i kontynuuje bez `continue`.
+  Granice autonomii pozostają niezmienne: push/MR/merge, zewnętrzne write'y,
+  destrukcja i materialne poszerzenie scope wymagają osobnej zgody.
 
 ## 4. Architektura przepływu
 
@@ -289,22 +299,61 @@ external_receipt
 
 Model proponuje, policy decyduje, deterministic executor wykonuje.
 
+### 5.7 Engineering design i evidence
+
+Przed implementacją, zależnie od klasy ryzyka, powstają strict, wersjonowane
+kontrakty:
+
+```text
+OutcomeContract   = problem + outcome + non-goals + success + process class
+SystemDesign      = boundaries + data/API/integrations + invariants
+ProgramDesign     = call-flow + file-tree delta + types/signatures + uncertainties + tests
+SliceContract     = one observable result + allowed paths + gate IDs + inspection + stop
+ContextManifest   = source refs + revision/digest + trust/freshness + budget + reason
+EvidenceBundle    = tree/config digests + receipts + test-first + diff + review findings
+```
+
+`SMALL` może pominąć osobne product/system documents. `MEDIUM` łączy system i
+program design. `LARGE_OR_HIGH_RISK` wymaga product, system i program design oraz
+odpowiedniej akceptacji przed pierwszym write. Model ani pojedyncza decyzja
+operacyjna nie mogą zejść poniżej deterministycznego minimum. Właściciel może
+podnieść klasę; obniżenie minimum wymaga jawnej zmiany wersjonowanej policy i
+ponownej kwalifikacji jej guardów.
+
+Pamięć ma trzy warstwy: niezmienne raw evidence, trwałą wiedzę projektową oraz
+niewładczą working projection w checkpoint. Każdy stage dostaje świeży context
+packet z `ContextManifest`; summary nigdy nie zastępuje źródeł ani nie poszerza
+policy/tool scope.
+
 ## 6. State machines
 
 ### 6.1 Case
 
 ```text
-NEW -> TRIAGED -> PLANNING -> WAITING_FOR_USER -> PLANNING
-                    |
-                    v
-              IMPLEMENTING -> VERIFYING -> REVIEWING -> FIXING
-                    ^                         |
-                    +-------------------------+
-                                              v
-                                      READY_FOR_MR -> MR_OPEN
-                                              |
-                                   DONE | BLOCKED | CANCELLED
+NEW -> TRIAGED -> DISCOVERING -> DESIGNING -> WAITING_FOR_USER
+                              ^                 |
+                              +-----------------+
+                                      |
+                                      v
+                               SLICE_READY -> IMPLEMENTING -> VERIFYING -> REVIEWING
+                                    ^                                      |
+                                    +---------- NEXT/FIX/REPLAN ------------+
+                                                                           |
+                                                                           v
+                                                                   READY_FOR_MR -> MR_OPEN
+                                                                           |
+                                                               DONE | BLOCKED | CANCELLED
 ```
+
+Designing rozwija się zależnie od `ProcessClass`: `SMALL` może przejść po
+discovery bez osobnych artefaktów product/system, `MEDIUM` wymaga combined
+system/program design, a `LARGE_OR_HIGH_RISK` — outcome, system, program design i
+approval. Każdy write należy do dokładnie jednego `SliceContract`.
+
+`WAITING_FOR_USER` jest stanem case'a. Run, który zadał pytanie, jest terminalny;
+odpowiedź materializuje nowy run przez event związany z `decision_id`,
+`parent_run_id` i checkpoint revision. Żaden niedokończony model call nie jest
+wznawiany.
 
 ### 6.2 Run safety
 
@@ -341,20 +390,24 @@ Runner zapewnia:
 
 Kolejność engineering loop:
 
-1. repository discovery i instrukcje repo;
-2. analiza Jira i linked context;
-3. pytania decyzyjne;
-4. wersjonowany plan;
-5. utworzenie brancha;
-6. implementacja małymi krokami;
-7. deterministyczne testy;
-8. ocena snapshotów;
-9. niezależny review;
-10. fix loop z limitem iteracji;
-11. lokalne commity;
-12. push i draft MR;
-13. pipeline/review feedback;
-14. dalsze poprawki albo zakończenie.
+1. repository discovery, instrukcje repo i source manifest;
+2. analiza Jira/linked context oraz deterministyczna klasyfikacja ryzyka;
+3. `OutcomeContract` tam, gdzie problem/rezultat nie jest oczywisty;
+4. `SystemDesign` dla zmian przekrojowych;
+5. `ProgramDesign`: call-flow, file-tree delta, typy/sygnatury, testy i
+   niepewności;
+6. pytanie/akceptacja właściciela, gdy wymaga jej klasa procesu lub policy;
+7. wybór jednego pionowego `SliceContract` i utworzenie/provisioning brancha;
+8. implementacja przez jedynego writera;
+9. rzeczywisty diff, deterministyczne gates i test-first/mutation evidence;
+10. niezależny, read-only, diff-bound review;
+11. correction/replan albo następny slice z limitem iteracji i no-progress;
+12. final verification i lokalne evidence-bound commity;
+13. push i draft MR po właściwym scope grant/approval;
+14. pipeline/review/production feedback wraca jako nowe evidence albo task.
+
+Pionowy slice ma dawać obserwowalny rezultat i możliwość taniego resteeringu.
+Liczba linii jest heurystyką review, nie kontraktem poprawności.
 
 ## 8. Integracje ingress
 

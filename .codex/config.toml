@@ -1,0 +1,14 @@
+# Primary agent: GPT-5.6 Sol. This installation exposes the exact model ID.
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+
+[agents]
+enabled = true
+
+# Keep concurrency intentionally low. We optimize for clear ownership and
+# token efficiency rather than spawning many agents.
+max_concurrent_threads_per_session = 2
+
+# If Codex spawns an unspecified child agent, make Luna the cheap default.
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "medium"
