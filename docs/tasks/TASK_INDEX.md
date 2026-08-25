@@ -62,7 +62,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 33 | [RA-033](RA-033.md) Kontekst zadania dla agenta: issue Jiry w transkrypcie case'a | DONE | RA-032 | M7 |
 | 34 | [RA-034](RA-034.md) Agent DZIAŁA: IMPLEMENTER → realny lokalny commit | IN_PROGRESS | RA-033 | M7 |
 | 35 | [RA-035](RA-035.md) Discord UX: natywny wskaźnik „Bot pisze…" w wątku | DONE | RA-032 | M7 |
-| 36 | [RA-036](RA-036.md) Discord UX: informacja o błędzie agenta w wątku | READY | RA-032 | M7 |
+| 36 | [RA-036](RA-036.md) Discord UX: informacja o błędzie agenta w wątku | DONE | RA-032 | M7 |
 
 ## Milestone gates
 
@@ -105,6 +105,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - [RA-033 work units](../work-units/RA-033/WORK_UNITS.md)
 - [RA-034 work units](../work-units/RA-034/WORK_UNITS.md)
 - [RA-035 work units](../work-units/RA-035/WORK_UNITS.md)
+- [RA-036 work units](../work-units/RA-036/WORK_UNITS.md)
 - [RA-016 work units](../work-units/RA-016/WORK_UNITS.md)
 
 Plan może mieć status `DRAFT` przed odblokowaniem taska. Sol sprawdza go ponownie
