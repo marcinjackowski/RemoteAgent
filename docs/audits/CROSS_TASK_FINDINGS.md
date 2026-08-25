@@ -45,6 +45,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-017` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-025 | `process-runner`: kernel reapuje wnuka asynchronicznie po SIGKILL |
 | `CTF-018` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-028 | `cases.active_run_id` nie ustawiał ŻADEN kod produkcyjny; luka od RA-003 |
 | `CTF-019` | HIGH | **ZAMKNIĘTY** `2026-08-24` — Node 24.19.0 postawiony, `env.sh` fixnięty | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
+| `CTF-020` | HIGH | **OTWARTY** `2026-08-25` — reprodukcja zielona | Żaden kod produkcyjny nie tworzy bazowego checkpointu case'a; PIERWSZY completion każdego runu rzuca „has no checkpoint to advance". Blokuje pętlę odpowiedzi (RA-031/032) i RA-034. Domknięcie w `RA-034-WU-00`. |
 
 ---
 
@@ -1565,3 +1566,50 @@ RA_REQUIRE_POSTGRES=1 vitest run (całe repo) → 2403/2403, 172 pliki, exit 0
 
 Zostaje zalecenie długoterminowe (poza tą maszyną): CI powinno przypinać Node przez `.nvmrc`,
 żeby ta klasa driftu nie wracała.
+
+## `CTF-020` — żaden kod produkcyjny nie tworzy bazowego checkpointu case'a
+
+- Severity: **HIGH** (blokuje realną pętlę odpowiedzi agenta; osiągalne w produkcji)
+- Wykryty: `2026-08-25`, podczas RA-034 WU-01 (śledzenie kontraktu writer-lease → checkpoint)
+- Dotyczy: `RA-003`/`RA-008` (checkpoint), tworzenie case'a (`connector-jira` correlation / RA-029),
+  pętla RA-031/RA-032, blokuje RA-034
+- Status: **OTWARTY** — domknięcie zaplanowane w `RA-034-WU-00`
+
+### Dowód
+
+`persistThroughAuditedPath` (`apps/agent-worker/src/handlers.ts:128`) woła
+`latestCheckpoint(case_id)` i rzuca `has no checkpoint to advance`, gdy null. `apply()`
+(`run-completion.ts:194-201`) wymaga `caseRow.checkpoint_revision === checkpoint.revision - 1` i
+dopiero wtedy `checkpoints.append`. `CheckpointRepository.append` to compare-and-set advance
+(revision N → N+1), nie tworzy baseline'u „z niczego" w sensie domenowym.
+
+`grep` po produkcyjnych zapisach `case_checkpoints` (bez testów): **jedynymi** miejscami są
+`run-completion.ts:214` (sam completion — wymaga wcześniejszego checkpointu) i `restore.ts` (DR).
+Korelator Jiry (`connector-jira/src/correlation.ts`) tworzy `cases` + `external_entities` +
+`discord_case_bindings` + `outbox`, **bez** checkpointu. `InboundMessageRepository` też nie.
+
+Reprodukcja (zielona), `apps/agent-worker/test/baseline-checkpoint-gap.integration.test.ts`:
+case utworzony jak przez korelator → `persistence.latestCheckpoint(case) === null`. To dokładnie
+stan, na którym handler rzuca.
+
+### Wpływ
+
+PIERWSZY completion KAŻDEGO runu na świeżym case rzuca → `case.resume`/`agent.implementer` job
+failuje → retry → DLQ, a odpowiedź nigdy nie persystuje i nie trafia do wątku. Czyli:
+- **RA-031/RA-032**: pętla „właściciel pisze → SUPERVISOR odpisuje" NIE dostarcza odpowiedzi w
+  produkcji dla świeżego case'a Jiry. Live-weryfikacja RA-032 sprawdziła tylko wywołanie modelu
+  (`createRole.invoke` → poprawny AgentCompletion), NIE pełną ścieżkę persistThroughAuditedPath.
+- **RA-034**: IMPLEMENTER ma tę samą blokadę na completion.
+
+Wzorzec identyczny z `CTF-018`: fixture ustawia stan, którego nie tworzy żaden kod produkcyjny
+(`handlers.integration` seeduje checkpoint bezpośrednio, `seed()` linia ~138), więc brakująca
+ścieżka baseline'u nigdy nie była ćwiczona.
+
+### Wymagana zmiana
+
+Utworzyć bazowy checkpoint przy tworzeniu case'a (albo leniwie tuż przed pierwszym completion).
+Rekomendacja: `RA-034-WU-00` dodaje deterministyczne „ensure baseline checkpoint" (revision 0 → 1,
+pusty/początkowy stan case'a) w jednej tx, idempotentne, wywoływane przy tworzeniu case'a (korelator
+Jiry) — co odblokowuje ZARÓWNO pętlę odpowiedzi (RA-031/032), JAK I RA-034. Reprodukcja z tego wpisu
+staje się testem regresyjnym (odwrócenie oczekiwania po fixie). Dotyka kontraktu RA-008; zakres i
+miejsce baseline'u do potwierdzenia przy implementacji.
