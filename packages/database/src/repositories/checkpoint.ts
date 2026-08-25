@@ -20,7 +20,7 @@
  * hazard — calling `append` with the auto-commit pool and leaving the revision
  * bumped after a failed insert — a compile-time error.
  */
-import type { CaseCheckpoint } from "@remoteagent/contracts";
+import { caseCheckpoint, type CaseCheckpoint } from "@remoteagent/contracts";
 
 import type { Queryable, Transaction } from "../client.js";
 import { CheckpointConflictError, translatePgError } from "../client.js";
@@ -122,6 +122,56 @@ export class CheckpointRepository {
       }
       throw translated ?? error;
     }
+  }
+
+  /**
+   * Ensure a case has a revision-0 baseline checkpoint (CTF-020).
+   *
+   * Nothing in production ever wrote the FIRST checkpoint: `append` only advances (revision
+   * N → N+1), and `run-completion` requires a prior checkpoint — so the first completion of any
+   * run on a fresh case threw "has no checkpoint to advance", silently breaking the whole reply /
+   * implementer loop (masked because every handler test seeds a checkpoint directly). This creates
+   * the missing baseline lazily, at the first completion, so the run — claimed at
+   * `cases.checkpoint_revision` (0 for a fresh case) — can advance from it.
+   *
+   * Revision 0 DELIBERATELY, and `cases.checkpoint_revision` is left untouched (stays 0): the run
+   * was claimed at 0, so `apply()`'s `run.checkpoint_revision === checkpoint.revision - 1` guard
+   * only holds if the baseline sits at 0 and the completion advances 0 → 1. Inserted directly (not
+   * via `append`, which starts at 1) with `ON CONFLICT DO NOTHING` — idempotent, and it never bumps
+   * the case revision, so it cannot race the completion's own CAS append.
+   */
+  public async ensureBaseline(
+    tx: Transaction,
+    input: { caseId: string; updatedAt: string },
+  ): Promise<CaseCheckpoint> {
+    const existing = await this.atRevision(tx, input.caseId, 0);
+    if (existing) return existing.checkpoint;
+    const baseline = caseCheckpoint.parse({
+      schema_version: 1,
+      case_id: input.caseId,
+      revision: 0,
+      goal: "Initial case state (system baseline)",
+      current_phase: "intake",
+      summary: { trust: "UNTRUSTED_DATA", value: "" },
+      plan_revision: 0,
+      workspace_state: {},
+      branch_state: {},
+      merge_request_state: {},
+      updated_at: input.updatedAt,
+    });
+    try {
+      await tx.query(
+        `INSERT INTO case_checkpoints (case_id, owner_id, revision, checkpoint, last_event_id, last_run_id)
+         VALUES ($1, (SELECT owner_id FROM cases WHERE case_id = $1), 0, $2::jsonb, NULL, NULL)
+         ON CONFLICT (case_id, revision) DO NOTHING`,
+        [input.caseId, JSON.stringify(baseline)],
+      );
+    } catch (error) {
+      throw translatePgError(error) ?? error;
+    }
+    const row = await this.atRevision(tx, input.caseId, 0);
+    if (!row) throw new PersistenceError(`failed to create baseline checkpoint for ${input.caseId}`);
+    return row.checkpoint;
   }
 
   public async latest(q: Queryable, caseId: string): Promise<CheckpointRow | null> {

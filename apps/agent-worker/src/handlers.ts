@@ -125,14 +125,14 @@ async function persistThroughAuditedPath(
   completion: AgentCompletion,
   runId: string,
 ): Promise<{ replayed: boolean }> {
-  const current = await deps.persistence.latestCheckpoint(completion.case_id);
+  let current = await deps.persistence.latestCheckpoint(completion.case_id);
   if (current === null) {
-    // DIAGNOSTIC, NOT A GUARD — and a mutation removing it stays green, which is the honest
-    // reading. `prepareCompletion` parses `current` against `caseCheckpoint`, so `null` throws
-    // there regardless. What is lost without this line is only the message: a zod parse failure
-    // on `null` reads like a malformed checkpoint, when the actual problem is a case that has
-    // none. Kept for that, not for safety.
-    throw new Error(`case ${completion.case_id} has no checkpoint to advance`);
+    // CTF-020: nothing in production ever wrote a case's FIRST checkpoint, so the first completion
+    // of any run on a fresh case threw here — silently breaking the reply loop (RA-031/032) and the
+    // implementer loop (RA-034). Create the revision-0 baseline lazily and advance from it, rather
+    // than failing the whole pass. Idempotent; leaves `cases.checkpoint_revision` at 0 so the run
+    // (claimed at 0) still satisfies `apply()`'s `run.checkpoint_revision === checkpoint.revision-1`.
+    current = await deps.persistence.ensureBaselineCheckpoint(completion.case_id);
   }
   const prepared = prepareCompletion({
     completion,

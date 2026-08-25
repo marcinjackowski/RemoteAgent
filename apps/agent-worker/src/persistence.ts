@@ -231,6 +231,17 @@ export class WorkerPersistence {
     return row?.checkpoint ?? null;
   }
 
+  /**
+   * CTF-020: create the revision-0 baseline checkpoint a fresh case lacks (nothing in production
+   * writes the first one), so the first completion can advance from it instead of throwing.
+   * Idempotent; leaves `cases.checkpoint_revision` at 0 so the run (claimed at 0) stays aligned.
+   */
+  public async ensureBaselineCheckpoint(caseId: string): Promise<unknown> {
+    return this.#db.withTransaction((tx) =>
+      this.#checkpoints.ensureBaseline(tx, { caseId, updatedAt: this.nowIso() }),
+    );
+  }
+
   public async finalize(input: {
     readonly workUnitId: string;
     readonly runId: string;

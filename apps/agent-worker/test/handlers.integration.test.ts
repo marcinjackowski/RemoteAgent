@@ -459,9 +459,12 @@ describeIntegration(
       expect(completion.rows).toHaveLength(0);
     });
 
-    it("a case with NO checkpoint is refused instead of inventing revision 0", async () => {
-      // Letting a completion define its own baseline would make the model the author of the
-      // case's starting state — and the checkpoint is what every later revision builds on.
+    it("a case with NO checkpoint gets a SYSTEM baseline (revision 0), then advances (CTF-020)", async () => {
+      // Nothing in production ever wrote a case's first checkpoint, so the first completion threw
+      // "has no checkpoint to advance" — silently breaking the reply loop. The fix creates a
+      // revision-0 baseline lazily. The ORIGINAL concern (the MODEL must not author the case's
+      // starting state) still holds: the baseline is SYSTEM-authored, and the model's completion
+      // advances FROM it to revision 1.
       await owners.insert(db, { ownerId: "owner-9", displayName: "owner" });
       await connections.insert(db, {
         connectionId: "connection-9",
@@ -493,12 +496,16 @@ describeIntegration(
           content: [{ type: "json", value: completionJson("case-9", "run-1") }],
         },
       ]);
-      await expect(
-        handlersWith(transport)["case.resume"]!(lease({ caseId: "case-9" }), noop),
-      ).rejects.toThrow(/unit-9/);
-      // Nothing was written: refusing must not half-apply.
-      expect((await db.query("SELECT 1 FROM run_completions")).rows).toHaveLength(0);
-      expect((await db.query("SELECT 1 FROM case_checkpoints")).rows).toHaveLength(0);
+      await handlersWith(transport)["case.resume"]!(lease({ caseId: "case-9" }), noop);
+
+      // The completion persisted and the case advanced from the system baseline (0) to 1.
+      expect((await db.query("SELECT 1 FROM run_completions")).rows).toHaveLength(1);
+      const checkpoints = await db.query<{ revision: number; checkpoint: { goal: string } }>(
+        "SELECT revision, checkpoint FROM case_checkpoints WHERE case_id = 'case-9' ORDER BY revision",
+      );
+      expect(checkpoints.rows.map((r) => r.revision)).toEqual([0, 1]);
+      // The revision-0 baseline is SYSTEM-authored — NOT defined by the model's completion.
+      expect(checkpoints.rows[0]?.checkpoint.goal).toBe("Initial case state (system baseline)");
     });
 
     // ---- idempotency: a retry after a lost lease is safe ----------------------
