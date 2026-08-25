@@ -2216,6 +2216,1259 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
     ],
     "type": "object",
   },
+  "EngineeringContextManifest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "ContextManifest",
+        "type": "string",
+      },
+      "authority": {
+        "const": "SERVER_OWNED",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "sources": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "byte_budget": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+            "digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string",
+            },
+            "freshness": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string",
+            },
+            "full_artifact_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "inclusion_reason": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string",
+            },
+            "kind": {
+              "enum": [
+                "RAW_EVIDENCE",
+                "DURABLE_KNOWLEDGE",
+                "WORKING_PROJECTION",
+              ],
+              "type": "string",
+            },
+            "observed_at": {
+              "type": "string",
+            },
+            "ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer",
+            },
+            "source_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "trust": {
+              "enum": [
+                "TRUSTED",
+                "UNTRUSTED_DATA",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "source_id",
+            "kind",
+            "ref",
+            "revision",
+            "observed_at",
+            "digest",
+            "trust",
+            "freshness",
+            "inclusion_reason",
+            "byte_budget",
+            "full_artifact_ref",
+          ],
+          "type": "object",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "total_byte_budget": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "authority",
+      "sources",
+      "total_byte_budget",
+    ],
+    "type": "object",
+  },
+  "EngineeringDesignDecision": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "artifact_kind": {
+        "const": "DesignDecision",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "decision": {
+        "enum": [
+          "APPROVE",
+          "REJECT",
+          "REQUEST_CHANGES",
+        ],
+        "type": "string",
+      },
+      "decision_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "findings": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "rationale": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "required_changes": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "decision_id",
+      "rationale",
+      "decision",
+      "artifact_digest",
+      "findings",
+      "required_changes",
+    ],
+    "type": "object",
+  },
+  "EngineeringEvidenceBundle": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "EvidenceBundle",
+        "type": "string",
+      },
+      "authority": {
+        "const": "SERVER_OWNED",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "command_receipts": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "config_digests": {
+        "items": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string",
+        },
+        "maxItems": 128,
+        "minItems": 1,
+        "type": "array",
+      },
+      "context_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "decisions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "diff_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "items": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string",
+            },
+            "kind": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "summary": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string",
+            },
+            "trust": {
+              "enum": [
+                "TRUSTED",
+                "UNTRUSTED_DATA",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "kind",
+            "digest",
+            "summary",
+            "trust",
+          ],
+          "type": "object",
+        },
+        "maxItems": 512,
+        "minItems": 1,
+        "type": "array",
+      },
+      "review_findings": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "test_first_evidence": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "baseline_outcome": {
+              "enum": [
+                "FAILED",
+                "INCONCLUSIVE",
+              ],
+              "type": "string",
+            },
+            "baseline_tree_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string",
+            },
+            "current_outcome": {
+              "const": "PASSED",
+              "type": "string",
+            },
+            "current_tree_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string",
+            },
+            "gate_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]*$",
+              "type": "string",
+            },
+            "receipt_ids": {
+              "items": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string",
+              },
+              "maxItems": 64,
+              "minItems": 2,
+              "type": "array",
+            },
+          },
+          "required": [
+            "gate_id",
+            "baseline_tree_digest",
+            "current_tree_digest",
+            "baseline_outcome",
+            "current_outcome",
+            "receipt_ids",
+          ],
+          "type": "object",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "tree_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "authority",
+      "tree_digest",
+      "config_digests",
+      "command_receipts",
+      "diff_digest",
+      "review_findings",
+      "decisions",
+      "items",
+      "context_digest",
+      "test_first_evidence",
+    ],
+    "type": "object",
+  },
+  "EngineeringMemoryUpdate": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "MemoryUpdate",
+        "type": "string",
+      },
+      "authority": {
+        "const": "MODEL_PROJECTION",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "completed_requirements": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 512,
+        "type": "array",
+      },
+      "evidence_digests": {
+        "items": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string",
+        },
+        "maxItems": 128,
+        "minItems": 1,
+        "type": "array",
+      },
+      "open_issues": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 512,
+        "type": "array",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "source_watermark": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "trust": {
+        "const": "UNTRUSTED_DATA",
+        "type": "string",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "source_watermark",
+      "evidence_digests",
+      "trust",
+      "authority",
+      "completed_requirements",
+      "open_issues",
+    ],
+    "type": "object",
+  },
+  "EngineeringOutcomeContract": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "OutcomeContract",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "constraints": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 128,
+        "type": "array",
+      },
+      "non_goals": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 128,
+        "type": "array",
+      },
+      "objective": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "outcome": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "problem": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "process_class": {
+        "enum": [
+          "SMALL",
+          "MEDIUM",
+          "LARGE_OR_HIGH_RISK",
+        ],
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "source_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "success_criteria": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 128,
+        "minItems": 1,
+        "type": "array",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "problem",
+      "outcome",
+      "non_goals",
+      "objective",
+      "success_criteria",
+      "constraints",
+      "process_class",
+      "source_digest",
+    ],
+    "type": "object",
+  },
+  "EngineeringPhase": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "active_slice_id": {
+        "anyOf": [
+          {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          {
+            "type": "null",
+          },
+        ],
+      },
+      "artifact_digests": {
+        "items": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string",
+        },
+        "maxItems": 128,
+        "type": "array",
+      },
+      "artifact_kind": {
+        "const": "EngineeringPhase",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "checkpoint_revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "context_manifest_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "process_class": {
+        "enum": [
+          "SMALL",
+          "MEDIUM",
+          "LARGE_OR_HIGH_RISK",
+        ],
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "stage": {
+        "enum": [
+          "DISCOVERY",
+          "OUTCOME_DEFINITION",
+          "SYSTEM_DESIGN",
+          "PROGRAM_DESIGN",
+          "DESIGN_APPROVAL",
+          "SLICE_PLANNING",
+          "SLICE_IMPLEMENTATION",
+          "GATE_EXECUTION",
+          "SLICE_REVIEW",
+          "MEMORY_PROJECTION",
+          "FINAL_VERIFICATION",
+        ],
+        "type": "string",
+      },
+      "stage_attempt": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "stage",
+      "process_class",
+      "checkpoint_revision",
+      "stage_attempt",
+      "active_slice_id",
+      "context_manifest_digest",
+      "artifact_digests",
+    ],
+    "type": "object",
+  },
+  "EngineeringProgramDesign": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "ProgramDesign",
+        "type": "string",
+      },
+      "call_flow": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "expected_tests": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "file_tree_delta": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 512,
+        "minItems": 1,
+        "type": "array",
+      },
+      "key_types_and_signatures": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 512,
+        "minItems": 1,
+        "type": "array",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "slice_order": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "source_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "uncertainty_review": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "call_flow",
+      "file_tree_delta",
+      "key_types_and_signatures",
+      "uncertainty_review",
+      "expected_tests",
+      "slice_order",
+      "source_digest",
+    ],
+    "type": "object",
+  },
+  "EngineeringReviewDecision": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "ReviewDecision",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "decision": {
+        "enum": [
+          "PASS",
+          "CHANGES_REQUIRED",
+          "BLOCKED",
+        ],
+        "type": "string",
+      },
+      "decision_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "findings": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "rationale": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "reviewed_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "decision_id",
+      "rationale",
+      "decision",
+      "findings",
+      "reviewed_digest",
+    ],
+    "type": "object",
+  },
+  "EngineeringSliceContract": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "allowed_paths": {
+        "items": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "artifact_kind": {
+        "const": "SliceContract",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "gate_ids": {
+        "items": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]*$",
+          "type": "string",
+        },
+        "maxItems": 64,
+        "minItems": 1,
+        "type": "array",
+      },
+      "inspection_method": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "objective": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "observable_result": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "slice_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "stop_condition": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "slice_id",
+      "objective",
+      "observable_result",
+      "allowed_paths",
+      "gate_ids",
+      "inspection_method",
+      "stop_condition",
+    ],
+    "type": "object",
+  },
+  "EngineeringSystemDesign": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "api": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "architecture": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "artifact_kind": {
+        "const": "SystemDesign",
+        "type": "string",
+      },
+      "boundaries": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "components": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "data": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "data_flow": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "integrations": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "interfaces": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "invariants": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "risks": {
+        "items": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 128,
+        "type": "array",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "source_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "boundaries",
+      "data",
+      "api",
+      "integrations",
+      "invariants",
+      "architecture",
+      "components",
+      "interfaces",
+      "data_flow",
+      "risks",
+      "source_digest",
+    ],
+    "type": "object",
+  },
+  "EngineeringTerminalReason": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "TerminalReason",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "detail": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "reason": {
+        "enum": [
+          "COMPLETED",
+          "CANCELLED",
+          "BLOCKED",
+          "FAILED",
+          "AMBIGUOUS",
+          "NEEDS_CLARIFICATION",
+          "EXHAUSTED",
+          "BASELINE_FAILED",
+        ],
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "reason",
+      "detail",
+    ],
+    "type": "object",
+  },
+  "EngineeringVerificationDecision": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "VerificationDecision",
+        "type": "string",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "criterion_outcomes": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "criterion_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "evidence_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string",
+            },
+            "status": {
+              "enum": [
+                "PASSED",
+                "FAILED",
+                "INCONCLUSIVE",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "criterion_id",
+            "status",
+            "evidence_digest",
+          ],
+          "type": "object",
+        },
+        "minItems": 1,
+        "type": "array",
+      },
+      "decision": {
+        "enum": [
+          "VERIFIED",
+          "FAILED",
+          "INCONCLUSIVE",
+        ],
+        "type": "string",
+      },
+      "decision_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "evidence_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "rationale": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "decision_id",
+      "rationale",
+      "decision",
+      "criterion_outcomes",
+      "evidence_digest",
+    ],
+    "type": "object",
+  },
   "EventEnvelope": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,

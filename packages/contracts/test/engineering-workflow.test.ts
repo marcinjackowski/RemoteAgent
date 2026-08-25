@@ -1,0 +1,578 @@
+import { describe, expect, it } from "vitest";
+import {
+  assertEngineeringProcessClassAllowed,
+  engineeringArtifact,
+  engineeringArtifactDigest,
+  engineeringContextManifest,
+  engineeringDesignDecision,
+  engineeringEvidenceBundle,
+  engineeringMemoryUpdate,
+  engineeringMinimumProcessClass,
+  engineeringPhase,
+  engineeringOutcomeContract,
+  engineeringProgramDesign,
+  engineeringReviewDecision,
+  engineeringSliceContract,
+  engineeringSystemDesign,
+  engineeringTerminalReason,
+  engineeringVerificationDecision,
+  type EngineeringProcessRiskFacts,
+} from "../src/engineering-workflow.js";
+
+const digest = "sha256:" + "a".repeat(64);
+const base = {
+  schema_version: 1,
+  artifact_kind: "ProgramDesign",
+  case_id: "case",
+  run_id: "run",
+  revision: 0,
+};
+const program = {
+  ...base,
+  call_flow: ["worker -> runtime"],
+  file_tree_delta: ["add contracts"],
+  key_types_and_signatures: ["ProgramDesign"],
+  uncertainty_review: ["none"],
+  expected_tests: ["strict parsing"],
+  slice_order: ["slice-1"],
+  source_digest: digest,
+};
+const risk = (patch: Partial<EngineeringProcessRiskFacts> = {}): EngineeringProcessRiskFacts => ({
+  authority: "SERVER_OWNED",
+  security_or_policy: false,
+  migration: false,
+  irreversible_side_effect: false,
+  broad_public_contract_change: false,
+  multi_module: false,
+  new_architecture: false,
+  deterministic_oracle: true,
+  user_data: false,
+  concurrency: false,
+  external_side_effect: false,
+  ...patch,
+});
+
+describe("engineering workflow contracts", () => {
+  it("strictly validates every standalone boundary without type coercion", () => {
+    const binding = { schema_version: 1, case_id: "c", run_id: "r", revision: 0 };
+    const source = {
+      source_id: "source",
+      kind: "RAW_EVIDENCE",
+      ref: "source-ref",
+      revision: 1,
+      observed_at: "2026-01-01T00:00:00Z",
+      digest,
+      trust: "TRUSTED",
+      freshness: "current",
+      inclusion_reason: "required by the stage",
+      byte_budget: 32,
+      full_artifact_ref: "artifact-ref",
+    };
+    const decision = { ...binding, decision_id: "decision", rationale: "evidence-bound" };
+    const boundaries: Array<{
+      name: string;
+      schema: { safeParse: (input: unknown) => { success: boolean } };
+      payload: Record<string, unknown>;
+    }> = [
+      {
+        name: "OutcomeContract",
+        schema: engineeringOutcomeContract,
+        payload: {
+          ...binding,
+          artifact_kind: "OutcomeContract",
+          problem: "problem",
+          outcome: "outcome",
+          non_goals: [],
+          objective: "objective",
+          success_criteria: ["observable success"],
+          constraints: [],
+          process_class: "SMALL",
+          source_digest: digest,
+        },
+      },
+      {
+        name: "SystemDesign",
+        schema: engineeringSystemDesign,
+        payload: {
+          ...binding,
+          artifact_kind: "SystemDesign",
+          boundaries: ["contracts"],
+          data: ["versioned JSON"],
+          api: ["strict parser"],
+          integrations: [],
+          invariants: ["one control plane"],
+          architecture: "SupervisorRuntime owns transitions",
+          components: ["contracts"],
+          interfaces: ["schema registry"],
+          data_flow: "model proposal -> deterministic validation",
+          risks: [],
+          source_digest: digest,
+        },
+      },
+      { name: "ProgramDesign", schema: engineeringProgramDesign, payload: program },
+      {
+        name: "SliceContract",
+        schema: engineeringSliceContract,
+        payload: {
+          ...binding,
+          artifact_kind: "SliceContract",
+          slice_id: "slice",
+          objective: "objective",
+          observable_result: "one observable result",
+          allowed_paths: ["src/a.ts"],
+          gate_ids: ["gate.unit"],
+          inspection_method: "inspect the receipt",
+          stop_condition: "receipt is bound to the current tree",
+        },
+      },
+      {
+        name: "ContextManifest",
+        schema: engineeringContextManifest,
+        payload: {
+          ...binding,
+          artifact_kind: "ContextManifest",
+          authority: "SERVER_OWNED",
+          sources: [source],
+          total_byte_budget: 32,
+        },
+      },
+      {
+        name: "EvidenceBundle",
+        schema: engineeringEvidenceBundle,
+        payload: {
+          ...binding,
+          artifact_kind: "EvidenceBundle",
+          authority: "SERVER_OWNED",
+          tree_digest: digest,
+          config_digests: [digest],
+          command_receipts: ["receipt"],
+          diff_digest: digest,
+          review_findings: [],
+          decisions: [],
+          items: [{ kind: "test", digest, summary: "passed", trust: "TRUSTED" }],
+          context_digest: digest,
+          test_first_evidence: [],
+        },
+      },
+      {
+        name: "MemoryUpdate",
+        schema: engineeringMemoryUpdate,
+        payload: {
+          ...binding,
+          artifact_kind: "MemoryUpdate",
+          source_watermark: digest,
+          evidence_digests: [digest],
+          trust: "UNTRUSTED_DATA",
+          authority: "MODEL_PROJECTION",
+          completed_requirements: ["criterion-1"],
+          open_issues: [],
+        },
+      },
+      {
+        name: "DesignDecision",
+        schema: engineeringDesignDecision,
+        payload: {
+          ...decision,
+          artifact_kind: "DesignDecision",
+          decision: "APPROVE",
+          artifact_digest: digest,
+          findings: [],
+          required_changes: [],
+        },
+      },
+      {
+        name: "ReviewDecision",
+        schema: engineeringReviewDecision,
+        payload: {
+          ...decision,
+          artifact_kind: "ReviewDecision",
+          decision: "PASS",
+          findings: [],
+          reviewed_digest: digest,
+        },
+      },
+      {
+        name: "VerificationDecision",
+        schema: engineeringVerificationDecision,
+        payload: {
+          ...decision,
+          artifact_kind: "VerificationDecision",
+          decision: "VERIFIED",
+          criterion_outcomes: [
+            { criterion_id: "criterion-1", status: "PASSED", evidence_digest: digest },
+          ],
+          evidence_digest: digest,
+        },
+      },
+      {
+        name: "TerminalReason",
+        schema: engineeringTerminalReason,
+        payload: {
+          ...binding,
+          artifact_kind: "TerminalReason",
+          reason: "COMPLETED",
+          detail: "all criteria verified",
+        },
+      },
+    ];
+
+    for (const { name, schema, payload } of boundaries) {
+      expect(schema.safeParse(payload).success, `${name} valid fixture`).toBe(true);
+      expect(schema.safeParse({ ...payload, unexpected: true }).success, `${name} strict`).toBe(
+        false,
+      );
+      expect(schema.safeParse({ ...payload, revision: "0" }).success, `${name} no coercion`).toBe(
+        false,
+      );
+      expect(
+        schema.safeParse({ ...payload, artifact_kind: "WrongArtifact" }).success,
+        `${name} literal kind`,
+      ).toBe(false);
+    }
+  });
+
+  it("requires every program-design planning dimension and is strict", () => {
+    expect(engineeringProgramDesign.safeParse(program).success).toBe(true);
+    expect(engineeringProgramDesign.safeParse({ ...program, unexpected: true }).success).toBe(
+      false,
+    );
+    expect(engineeringProgramDesign.safeParse({ ...program, expected_tests: "test" }).success).toBe(
+      false,
+    );
+    expect(engineeringProgramDesign.safeParse({ ...program, uncertainty_review: [] }).success).toBe(
+      false,
+    );
+  });
+
+  it("keeps slices to gates and an observable result, never a raw command", () => {
+    const slice = {
+      schema_version: 1,
+      artifact_kind: "SliceContract",
+      case_id: "c",
+      run_id: "r",
+      revision: 0,
+      slice_id: "s",
+      objective: "o",
+      observable_result: "one result",
+      allowed_paths: ["src/a.ts"],
+      gate_ids: ["RA-037.gate"],
+      inspection_method: "inspect evidence",
+      stop_condition: "when verified",
+    };
+    expect(engineeringSliceContract.safeParse(slice).success).toBe(true);
+    expect(engineeringSliceContract.safeParse({ ...slice, gate_ids: ["pnpm test"] }).success).toBe(
+      false,
+    );
+    expect(
+      engineeringSliceContract.safeParse({ ...slice, inspection_method: "pnpm test" }).success,
+    ).toBe(false);
+  });
+
+  it("enforces server-owned minimum process class", () => {
+    expect(engineeringMinimumProcessClass(risk())).toBe("SMALL");
+    expect(engineeringMinimumProcessClass(risk({ multi_module: true }))).toBe("MEDIUM");
+    expect(engineeringMinimumProcessClass(risk({ migration: true }))).toBe("LARGE_OR_HIGH_RISK");
+    expect(() => assertEngineeringProcessClassAllowed("SMALL", risk({ migration: true }))).toThrow(
+      "below",
+    );
+    expect(
+      assertEngineeringProcessClassAllowed("LARGE_OR_HIGH_RISK", risk({ migration: true })),
+    ).toBe("LARGE_OR_HIGH_RISK");
+    expect(() => engineeringMinimumProcessClass({ ...risk(), authority: "MODEL" })).toThrow();
+    expect(() => assertEngineeringProcessClassAllowed("small", risk())).toThrow();
+  });
+
+  it("promotes every high-risk fact to LARGE and medium facts to MEDIUM", () => {
+    for (const field of [
+      "security_or_policy",
+      "migration",
+      "irreversible_side_effect",
+      "broad_public_contract_change",
+      "user_data",
+      "concurrency",
+      "external_side_effect",
+    ] as const)
+      expect(engineeringMinimumProcessClass(risk({ [field]: true }))).toBe("LARGE_OR_HIGH_RISK");
+    for (const field of ["multi_module", "new_architecture"] as const)
+      expect(engineeringMinimumProcessClass(risk({ [field]: true }))).toBe("MEDIUM");
+    expect(engineeringMinimumProcessClass(risk({ deterministic_oracle: false }))).toBe("MEDIUM");
+  });
+
+  it("defines EngineeringPhase as a strict durable projection boundary", () => {
+    const phase = {
+      schema_version: 1,
+      artifact_kind: "EngineeringPhase",
+      case_id: "c",
+      run_id: "r",
+      revision: 0,
+      stage: "SLICE_PLANNING",
+      process_class: "SMALL",
+      checkpoint_revision: 2,
+      stage_attempt: 1,
+      active_slice_id: null,
+      context_manifest_digest: digest,
+      artifact_digests: [digest],
+    };
+    expect(engineeringPhase.safeParse(phase).success).toBe(true);
+    expect(
+      engineeringPhase.safeParse({ ...phase, artifact_kind: "EngineeringOutcomeContract" }).success,
+    ).toBe(false);
+    expect(engineeringPhase.safeParse({ ...phase, stage_attempt: "1" }).success).toBe(false);
+    expect(engineeringPhase.safeParse({ ...phase, transition: "NEXT" }).success).toBe(false);
+  });
+
+  it("binds context sources, trust and total byte budget", () => {
+    const source = {
+      source_id: "s",
+      kind: "RAW_EVIDENCE",
+      ref: "ref",
+      revision: 1,
+      observed_at: "2026-01-01T00:00:00Z",
+      digest,
+      trust: "TRUSTED",
+      freshness: "current",
+      inclusion_reason: "needed",
+      byte_budget: 5,
+      full_artifact_ref: "artifact",
+    };
+    expect(
+      engineeringContextManifest.safeParse({
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "c",
+        run_id: "r",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        sources: [source],
+        total_byte_budget: 5,
+      }).success,
+    ).toBe(true);
+    expect(
+      engineeringContextManifest.safeParse({
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "c",
+        run_id: "r",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        sources: [source, { ...source, source_id: "s" }],
+        total_byte_budget: 10,
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringContextManifest.safeParse({
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "c",
+        run_id: "r",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        sources: [source],
+        total_byte_budget: 4,
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringContextManifest.safeParse({
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "c",
+        run_id: "r",
+        revision: 0,
+        authority: "MODEL_PROJECTION",
+        sources: [source],
+        total_byte_budget: 5,
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringContextManifest.safeParse({
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "c",
+        run_id: "r",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        sources: [{ ...source, kind: "WORKING_PROJECTION", trust: "TRUSTED" }],
+        total_byte_budget: 5,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps memory projection untrusted and evidence server-owned", () => {
+    const memory = {
+      schema_version: 1,
+      artifact_kind: "MemoryUpdate",
+      case_id: "c",
+      run_id: "r",
+      revision: 0,
+      source_watermark: digest,
+      evidence_digests: [digest],
+      authority: "MODEL_PROJECTION",
+      trust: "UNTRUSTED_DATA",
+      completed_requirements: ["r1"],
+      open_issues: ["none"],
+    };
+    expect(engineeringMemoryUpdate.safeParse(memory).success).toBe(true);
+    expect(engineeringMemoryUpdate.safeParse({ ...memory, operation: "UPSERT" }).success).toBe(
+      false,
+    );
+    expect(
+      engineeringMemoryUpdate.safeParse({ ...memory, authority: "SERVER_OWNED" }).success,
+    ).toBe(false);
+    const evidence = {
+      schema_version: 1,
+      artifact_kind: "EvidenceBundle",
+      case_id: "c",
+      run_id: "r",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      tree_digest: digest,
+      config_digests: [digest],
+      command_receipts: ["receipt"],
+      diff_digest: digest,
+      review_findings: [],
+      decisions: [],
+      items: [{ kind: "test", digest, summary: "ok", trust: "TRUSTED" }],
+      context_digest: digest,
+      test_first_evidence: [],
+    };
+    expect(engineeringEvidenceBundle.safeParse(evidence).success).toBe(true);
+    expect(engineeringEvidenceBundle.safeParse({ ...evidence, complete: true }).success).toBe(
+      false,
+    );
+    expect(
+      engineeringEvidenceBundle.safeParse({
+        ...evidence,
+        test_first_evidence: [
+          {
+            gate_id: "gate",
+            baseline_tree_digest: digest,
+            current_tree_digest: digest,
+            baseline_outcome: "FAILED",
+            current_outcome: "PASSED",
+            receipt_ids: ["r1"],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringEvidenceBundle.safeParse({
+        ...evidence,
+        test_first_evidence: [
+          {
+            gate_id: "gate",
+            baseline_tree_digest: digest,
+            current_tree_digest: digest,
+            baseline_outcome: "FAILED",
+            current_outcome: "PASSED",
+            receipt_ids: ["r1", "r2"],
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("enforces decision semantics and terminal vocabulary", () => {
+    const common = {
+      schema_version: 1,
+      case_id: "c",
+      run_id: "r",
+      revision: 0,
+      decision_id: "d",
+      rationale: "why",
+    };
+    expect(
+      engineeringDesignDecision.safeParse({
+        ...common,
+        artifact_kind: "DesignDecision",
+        artifact_digest: digest,
+        decision: "APPROVE",
+        findings: [],
+        required_changes: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      engineeringDesignDecision.safeParse({
+        ...common,
+        artifact_kind: "DesignDecision",
+        artifact_digest: digest,
+        decision: "REQUEST_CHANGES",
+        findings: ["f"],
+        required_changes: ["fix"],
+      }).success,
+    ).toBe(true);
+    expect(
+      engineeringDesignDecision.safeParse({
+        ...common,
+        artifact_kind: "DesignDecision",
+        artifact_digest: digest,
+        decision: "APPROVE",
+        findings: ["f"],
+        required_changes: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringReviewDecision.safeParse({
+        ...common,
+        artifact_kind: "ReviewDecision",
+        decision: "PASS",
+        findings: [],
+        reviewed_digest: digest,
+      }).success,
+    ).toBe(true);
+    const criteria = [{ criterion_id: "c1", status: "PASSED", evidence_digest: digest }];
+    expect(
+      engineeringVerificationDecision.safeParse({
+        ...common,
+        artifact_kind: "VerificationDecision",
+        decision: "VERIFIED",
+        criterion_outcomes: criteria,
+        evidence_digest: digest,
+      }).success,
+    ).toBe(true);
+    expect(
+      engineeringVerificationDecision.safeParse({
+        ...common,
+        artifact_kind: "VerificationDecision",
+        decision: "VERIFIED",
+        criterion_outcomes: [{ ...criteria[0], status: "FAILED" }],
+        evidence_digest: digest,
+      }).success,
+    ).toBe(false);
+    for (const reason of [
+      "COMPLETED",
+      "CANCELLED",
+      "BLOCKED",
+      "FAILED",
+      "AMBIGUOUS",
+      "NEEDS_CLARIFICATION",
+      "EXHAUSTED",
+      "BASELINE_FAILED",
+    ])
+      expect(
+        engineeringTerminalReason.safeParse({
+          schema_version: 1,
+          artifact_kind: "TerminalReason",
+          case_id: "c",
+          run_id: "r",
+          revision: 0,
+          reason,
+          detail: "detail",
+        }).success,
+      ).toBe(true);
+  });
+
+  it("strict-parses artifact before digesting and binds schema version", () => {
+    expect(engineeringArtifact.parse(program).artifact_kind).toBe("ProgramDesign");
+    expect(engineeringArtifactDigest(program)).toBe(
+      engineeringArtifactDigest({ ...program, source_digest: digest }),
+    );
+    expect(() => engineeringArtifactDigest({ ...program, schema_version: 2 })).toThrow();
+    expect(() => engineeringArtifactDigest({ ...program, unknown: true })).toThrow();
+    expect(() =>
+      engineeringArtifact.parse({ ...program, artifact_kind: "SystemDesign" }),
+    ).toThrow();
+    expect(engineeringProgramDesign.safeParse({ ...program, revision: "0" }).success).toBe(false);
+    const reordered = Object.fromEntries(Object.entries(program).reverse());
+    expect(engineeringArtifactDigest(program)).toBe(engineeringArtifactDigest(reordered));
+  });
+});

@@ -31,6 +31,7 @@ export * from "./external-action.js";
 export * from "./repository-profile.js";
 export * from "./implementation-plan.js";
 export * from "./planner-port.js";
+export * from "./engineering-workflow.js";
 
 // Runtime JSON Schema.
 export * from "./schema.js";

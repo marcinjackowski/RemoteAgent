@@ -19,6 +19,20 @@ import { externalEntityRef } from "./external-entity.js";
 import { approval, externalAction, externalReceipt } from "./external-action.js";
 import { resolvedToolIntent, toolIntent, toolResult } from "./tool.js";
 import { workUnit } from "./work-unit.js";
+import {
+  engineeringContextManifest,
+  engineeringDesignDecision,
+  engineeringEvidenceBundle,
+  engineeringMemoryUpdate,
+  engineeringOutcomeContract,
+  engineeringProgramDesign,
+  engineeringPhase,
+  engineeringReviewDecision,
+  engineeringSliceContract,
+  engineeringSystemDesign,
+  engineeringTerminalReason,
+  engineeringVerificationDecision,
+} from "./engineering-workflow.js";
 
 /**
  * Every standalone boundary contract keyed by a stable name.
@@ -46,6 +60,18 @@ export const contractSchemas = {
   ExternalAction: externalAction,
   ExternalReceipt: externalReceipt,
   Approval: approval,
+  EngineeringOutcomeContract: engineeringOutcomeContract,
+  EngineeringSystemDesign: engineeringSystemDesign,
+  EngineeringProgramDesign: engineeringProgramDesign,
+  EngineeringPhase: engineeringPhase,
+  EngineeringSliceContract: engineeringSliceContract,
+  EngineeringContextManifest: engineeringContextManifest,
+  EngineeringEvidenceBundle: engineeringEvidenceBundle,
+  EngineeringMemoryUpdate: engineeringMemoryUpdate,
+  EngineeringDesignDecision: engineeringDesignDecision,
+  EngineeringReviewDecision: engineeringReviewDecision,
+  EngineeringVerificationDecision: engineeringVerificationDecision,
+  EngineeringTerminalReason: engineeringTerminalReason,
 } as const;
 
 export type ContractName = keyof typeof contractSchemas;
