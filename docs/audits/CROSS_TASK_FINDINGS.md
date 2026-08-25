@@ -46,6 +46,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-018` | LOW | **ZAMKNIĘTY** — potwierdzony `AUDIT-01` RA-028 | `cases.active_run_id` nie ustawiał ŻADEN kod produkcyjny; luka od RA-003 |
 | `CTF-019` | HIGH | **ZAMKNIĘTY** `2026-08-24` — Node 24.19.0 postawiony, `env.sh` fixnięty | Node v25 na maszynie vs przypięty `24.19.0`; 22 faile w podsystemie procesów/timeoutów, reprodukcja na bazie |
 | `CTF-020` | HIGH | **ZAMKNIĘTY** `2026-08-25` — fix zacommitowany `3a0c5ed`, mutacja RED→GREEN | Żaden kod produkcyjny nie tworzył bazowego checkpointu case'a; PIERWSZY completion każdego runu rzucał „has no checkpoint to advance". Naprawione leniwym baseline'em (revision-0, bez bumpu `cases.checkpoint_revision`) w ścieżce completion (`CheckpointRepository.ensureBaseline` → `handlers.ts`). Odblokowało pętlę odpowiedzi RA-031/032 i RA-034. |
+| `CTF-021` | LOW | **ZAMKNIĘTY** `2026-08-25` — fix w `roles.ts` | Worker `createRole` (`apps/agent-worker/src/roles.ts`) NIE używa `RoleRegistry`/`ROLE_PROMPTS` (RA-009), a transport nie ma kanału `system` (`RuntimeMessage` = user/assistant/tool). SUPERVISOR system-prompt nigdy nie docierał do modelu → `summary` wychodziło trzecioosobowe („Owner asked… I provided…"). Fix: dyrektywa konwersacyjna wstrzyknięta w pierwszy user-turn `createRole`. |
 
 ---
 
@@ -1615,3 +1616,27 @@ pusty/początkowy stan case'a) w jednej tx, idempotentne, wywoływane przy tworz
 Jiry) — co odblokowuje ZARÓWNO pętlę odpowiedzi (RA-031/032), JAK I RA-034. Reprodukcja z tego wpisu
 staje się testem regresyjnym (odwrócenie oczekiwania po fixie). Dotyka kontraktu RA-008; zakres i
 miejsce baseline'u do potwierdzenia przy implementacji.
+
+## `CTF-021` — worker omija RoleRegistry; system-prompt nigdy nie dociera do modelu
+
+- Severity: **LOW** (kosmetyka stylu odpowiedzi; brak wpływu na poprawność/bezpieczeństwo)
+- Wykryty: `2026-08-25` podczas live-testu pętli odpowiedzi (odpowiedzi trzecioosobowe)
+- Dotyczy: `RA-032` (conversational reply), `RA-009` (RoleRegistry/ROLE_PROMPTS)
+- Status: **ZAMKNIĘTY** `2026-08-25` — fix w `apps/agent-worker/src/roles.ts`
+
+### Dowód i wpływ
+
+`createRole` w workerze (`apps/agent-worker/src/roles.ts`) buduje `messages` = [objective, historia
+case'a] i woła `runStructuredCompletion(transport, config, { messages })`. NIE korzysta z
+`RoleRegistry`/`ROLE_PROMPTS` (agent-orchestrator, RA-009), a `RuntimeMessage.role` to tylko
+`user|assistant|tool` — transport nie wysyła bloku `system` (Bedrock Converse `system`). Więc
+system-prompt SUPERVISORa NIGDY nie docierał do modelu. Skutek: model wypełniał `AgentCompletion.summary`
+trzecioosobowym raportem („Owner asked… I provided…") zamiast bezpośredniej odpowiedzi. Wcześniejsza
+próba naprawy przez edycję `prompts.ts` (commit `1d7138b`) była martwa dla tej ścieżki.
+
+### Zmiana
+
+Dyrektywa konwersacyjna (first-person, `summary` = dosłowna wiadomość do właściciela) wstrzyknięta w
+PIERWSZY user-turn `createRole`, obok `bindingContext`. Guard w `role-context.test.ts` (asercja, że
+dyrektywa dociera do modelu). Pełne wpięcie RoleRegistry w worker (zamiast duplikatu `createRole`) to
+osobny, większy refactor — poza zakresem tego fixa.

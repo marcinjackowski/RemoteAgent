@@ -40,6 +40,10 @@ it("sends the objective plus the UNTRUSTED case conversation as a separate turn"
   // The run/case binding is prepended so the model echoes matching ids in its completion.
   expect(text).toContain("case-1");
   expect(text).toContain("run-1");
+  // The conversational directive must reach the model (no system-prompt channel exists), or the
+  // model writes third-person reports into `summary` instead of a direct reply.
+  expect(text).toContain("summary");
+  expect(text.toLowerCase()).toContain("first-person");
 });
 
 it("sends only the objective when there is no conversation (or no reader)", async () => {

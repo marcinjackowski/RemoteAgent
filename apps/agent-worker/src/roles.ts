@@ -59,7 +59,17 @@ export function createRole(options: RoleBindingOptions): {
 } {
   return {
     invoke: async (input) => {
-      // The objective is the TRUSTED, supervisor-authored directive.
+      // The worker's model call has NO system-prompt channel: `RuntimeMessage` is user/assistant/
+      // tool only and the transport sends no Bedrock `system` block, so the RoleRegistry prompt
+      // (agent-orchestrator) never reaches this path. The conversational directive therefore has to
+      // ride in the first user turn. Without it the model fills the AgentCompletion `summary` with a
+      // third-person report ("Owner asked… I provided…") instead of a direct chat reply — observed
+      // live 2026-08-25.
+      const replyStyle =
+        "You are a helpful assistant talking WITH the owner in a chat thread. Reply DIRECTLY to " +
+        "their latest message in a natural, first-person, conversational tone. The `summary` field " +
+        "of your JSON response is the EXACT text delivered to the owner — write it as a chat reply, " +
+        'never a third-person report of what you did (no "Owner asked…", no "I provided…").\n\n';
       // Prepend case_id and run_id so the model can echo them back in its completion JSON;
       // without these it has no way to know the values and will hallucinate them, causing a
       // "role completion binding mismatch" in the runtime (found in live test 2026-08-25).
@@ -70,7 +80,9 @@ export function createRole(options: RoleBindingOptions): {
       const messages: RuntimeMessage[] = [
         {
           role: "user",
-          content: [{ type: "text", text: bindingContext + input.unit.workUnit.objective }],
+          content: [
+            { type: "text", text: replyStyle + bindingContext + input.unit.workUnit.objective },
+          ],
         },
       ];
       // The case conversation is UNTRUSTED external content. It is sent as a SEPARATE, explicitly
