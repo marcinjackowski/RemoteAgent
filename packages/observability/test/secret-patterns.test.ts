@@ -31,6 +31,8 @@ const PREEXISTING_COVERAGE: readonly (readonly [string, string])[] = [
 
 /** Shapes added in RA-024 that no previous table knew about. */
 const NEWLY_COVERED: readonly (readonly [string, string])[] = [
+  ["email PII", "contact owner@example.test now"],
+  ["international phone PII", "call +48 501 234 567 now"],
   ["google refresh token", "refresh=1//0eXaMpLeToKeNvAlUe123"],
   ["google access token", "ya29.a0AfB_byC-example-token-value"],
   ["github fine-grained PAT", "github_pat_11ABCDEFG0abcdefghij"],

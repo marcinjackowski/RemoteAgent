@@ -95,6 +95,68 @@ describe("context builder", () => {
       "\uFFFF",
     ]);
   });
+  it("orders closed engineering selection classes and protects latest owner steering", () => {
+    const selected = buildContext({
+      scope,
+      budgetBytes: 10_000,
+      fragments: [
+        make("plan", "priority", "priority", {
+          selection: { class: "PRIORITY", observedAt: "2026-08-26T04:00:00.000Z" },
+        }),
+        scoped("thread_excerpt", "recent", {
+          selection: { class: "RECENCY", observedAt: "2026-08-26T05:00:00.000Z" },
+        }),
+        make("checkpoint", "checkpoint", "checkpoint", {
+          selection: { class: "MANDATORY", observedAt: "2026-08-26T00:00:00.000Z" },
+        }),
+        scoped("thread_excerpt", "relevant", {
+          selection: {
+            class: "LEXICAL_RELEVANCE",
+            observedAt: "2026-08-26T02:00:00.000Z",
+          },
+        }),
+        scoped("thread_excerpt", "latest-owner", {
+          selection: { class: "LATEST_OWNER", observedAt: "2026-08-26T03:00:00.000Z" },
+        }),
+        make("task", "task", "task", {
+          selection: { class: "MANDATORY", observedAt: "2026-08-26T01:00:00.000Z" },
+        }),
+      ],
+    });
+    expect(selected.fragments.map(({ fragment }) => fragment.provenance.reference)).toEqual([
+      "task",
+      "checkpoint",
+      "latest-owner",
+      "relevant",
+      "priority",
+      "recent",
+    ]);
+
+    expectCode(
+      () =>
+        buildContext({
+          scope,
+          budgetBytes: 7,
+          fragments: [
+            make("task", "task", "aa", {
+              selection: { class: "MANDATORY", observedAt: "2026-08-26T00:00:00.000Z" },
+            }),
+            make("checkpoint", "checkpoint", "bb", {
+              selection: { class: "MANDATORY", observedAt: "2026-08-26T00:00:00.000Z" },
+            }),
+            scoped("thread_excerpt", "latest-owner", {
+              content: "cccc",
+              selection: {
+                class: "LATEST_OWNER",
+                observedAt: "2026-08-26T00:00:00.000Z",
+              },
+            }),
+          ],
+        }),
+      MandatoryContextFragmentError,
+      "MANDATORY_CONTEXT_FRAGMENT",
+    );
+  });
   it("allows exact UTF-8 fit and omits whole fragments without truncation", () => {
     const result = buildContext({
       scope,

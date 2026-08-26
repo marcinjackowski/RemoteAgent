@@ -57,7 +57,10 @@ exit "$status"
   );
   chmodSync(probe, 0o755);
 
-  const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+  };
   for (const name of databaseVariables) {
     delete env[name];
   }

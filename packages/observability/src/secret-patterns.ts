@@ -1,5 +1,6 @@
 /**
- * The ONE set of secret shapes this system recognises (`CTF-006`, RA-024-WU-01).
+ * The ONE set of secret, PII and host-topology shapes this system recognises
+ * (`CTF-006`, RA-024-WU-01, RA-040).
  *
  * Before this module there were three, each with a different idea of what a secret
  * looks like:
@@ -43,7 +44,7 @@
 export const SECRET_PLACEHOLDER = "[REDACTED]";
 
 /**
- * Secret and host-topology shapes, as `g`-flagged patterns with a group-1 prefix.
+ * Secret, PII and host-topology shapes, as `g`-flagged patterns with a group-1 prefix.
  *
  * Ordering is deliberate: the PEM block runs first because its body would
  * otherwise be shredded by the base64-ish patterns below into something no longer
@@ -76,6 +77,9 @@ export const SECRET_PATTERNS: readonly RegExp[] = Object.freeze([
   /(\bBasic\s+)[A-Za-z0-9+/=]+/giu,
   // Credentials embedded in a URL's userinfo.
   /(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu,
+  // Conservative PII shapes: conventional mailbox syntax and explicitly international phones.
+  /()\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b/giu,
+  /(^|[\s"'`=([<{,;:])\+[1-9]\d{0,2}(?:[ .-]?\d{2,4}){2,4}\b/gu,
   // `key=value` / `key: value` credential assignments.
   /(\b(?:password|passphrase|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|credential|private[_-]?key)\s*[:=]\s*)[^\s,;]+/giu,
   // Credentials in a query string.

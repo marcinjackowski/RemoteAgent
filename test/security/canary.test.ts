@@ -47,6 +47,8 @@ const CANARIES = {
   urlUserinfo: "https://marcin:CANARY7d77c1e9@gitlab.example.test/group/repo.git",
   queryToken: "https://api.example.test/v1/x?access_token=CANARY7d77c1e9",
   assignment: "client_secret=CANARY7d77c1e9",
+  emailPii: "owner-canary@example.test",
+  phonePii: "+48 501 234 567",
 } as const;
 
 /**
@@ -62,6 +64,8 @@ const FORBIDDEN_SUBSTRINGS: readonly string[] = [
   "marcinjackowski",
   "runner/work",
   "AppData",
+  "owner-canary@example.test",
+  "501 234 567",
 ];
 
 /** A literal secret matching no shape at all: only registration can catch it. */

@@ -20,6 +20,14 @@ const priority: Record<ContextFragmentKind, number> = {
   tool: 8,
 };
 
+const selectionPriority = {
+  MANDATORY: 0,
+  LATEST_OWNER: 1,
+  LEXICAL_RELEVANCE: 2,
+  PRIORITY: 3,
+  RECENCY: 4,
+} as const;
+
 export class ContextBuilderError extends Error {
   constructor(
     message: string,
@@ -70,14 +78,21 @@ function validateFragment(fragment: ContextFragment, input: ContextBuildInput): 
     if (fragment.scope.caseId !== scope.caseId || fragment.scope.ownerId !== scope.ownerId) {
       scopeError(`${fragment.kind} is outside case/owner scope`);
     }
-    if (
-      !scope.connections.some(
+    const hasProvider = fragment.scope.provider !== undefined;
+    const hasConnection = fragment.scope.connectionId !== undefined;
+    if (fragment.kind !== "thread_excerpt" && (!hasProvider || !hasConnection)) {
+      scopeError(`${fragment.kind} requires provider/connection scope`);
+    }
+    if (hasProvider !== hasConnection) {
+      scopeError(`${fragment.kind} has an incomplete provider/connection scope`);
+    }
+    if (hasProvider && hasConnection) {
+      const permitted = scope.connections.some(
         (binding) =>
           binding.provider === fragment.scope?.provider &&
           binding.connectionId === fragment.scope?.connectionId,
-      )
-    ) {
-      scopeError(`${fragment.kind} is outside provider/connection scope`);
+      );
+      if (!permitted) scopeError(`${fragment.kind} is outside provider/connection scope`);
     }
   }
   if (fragment.kind === "tool") {
@@ -126,13 +141,10 @@ export function buildContext(input: ContextBuildInput): BuiltContext {
   let usedBytes = 0;
   for (const fragment of ordered) {
     const bytes = utf8ByteLength(fragment.content);
-    if (
-      (fragment.kind === "task" ||
-        fragment.kind === "checkpoint" ||
-        fragment.kind === "decision") &&
-      usedBytes + bytes > input.budgetBytes
-    ) {
-      throw new MandatoryContextFragmentError(`Budget is too small for mandatory ${fragment.kind}`);
+    if (usedBytes + bytes > input.budgetBytes && isProtectedSelection(fragment)) {
+      throw new MandatoryContextFragmentError(
+        `Budget is too small for protected ${fragment.kind} context`,
+      );
     }
     if (usedBytes + bytes <= input.budgetBytes) {
       fragments.push({ fragment, bytes });
@@ -166,11 +178,37 @@ function compareFragments(
   a: { fragment: ContextFragment },
   b: { fragment: ContextFragment },
 ): number {
+  if (a.fragment.selection !== undefined && b.fragment.selection !== undefined) {
+    const bySelection =
+      selectionPriority[a.fragment.selection.class] - selectionPriority[b.fragment.selection.class];
+    if (bySelection !== 0) return bySelection;
+    if (a.fragment.selection.class === "MANDATORY" || a.fragment.selection.class === "PRIORITY") {
+      const bySelectedKind = priority[a.fragment.kind] - priority[b.fragment.kind];
+      if (bySelectedKind !== 0) return bySelectedKind;
+    }
+    if (a.fragment.selection.observedAt !== b.fragment.selection.observedAt) {
+      return a.fragment.selection.observedAt > b.fragment.selection.observedAt ? -1 : 1;
+    }
+    return compareReferences(a.fragment, b.fragment);
+  }
   const byKind = priority[a.fragment.kind] - priority[b.fragment.kind];
   if (byKind !== 0) return byKind;
-  return a.fragment.provenance.reference < b.fragment.provenance.reference
+  return compareReferences(a.fragment, b.fragment);
+}
+
+function compareReferences(left: ContextFragment, right: ContextFragment): number {
+  return left.provenance.reference < right.provenance.reference
     ? -1
-    : a.fragment.provenance.reference > b.fragment.provenance.reference
+    : left.provenance.reference > right.provenance.reference
       ? 1
       : 0;
+}
+
+function isProtectedSelection(fragment: ContextFragment): boolean {
+  return (
+    fragment.kind === "task" ||
+    fragment.kind === "checkpoint" ||
+    fragment.kind === "decision" ||
+    fragment.selection?.class === "LATEST_OWNER"
+  );
 }

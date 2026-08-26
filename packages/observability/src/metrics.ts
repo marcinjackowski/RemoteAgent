@@ -1,3 +1,5 @@
+import { SecretRedactor } from "./redaction.js";
+
 /**
  * Metrics, and the four alert classes AC4 names (RA-024-WU-06).
  *
@@ -52,6 +54,16 @@ export const MetricName = {
   MODEL_OUTPUT_TOKENS: "model.output_tokens",
   /** Model invocations. */
   MODEL_INVOCATIONS: "model.invocations",
+  /** UTF-8 bytes in a compiled, model-bound context packet. */
+  CONTEXT_PACKET_BYTES: "context.packet_bytes",
+  /** UTF-8 bytes selected from one three-layer context class. */
+  CONTEXT_SOURCE_BYTES: "context.source_bytes",
+  /** Token estimate used for budgeting only; never presented as provider usage. */
+  CONTEXT_ESTIMATED_INPUT_TOKENS: "context.estimated_input_tokens",
+  /** Durable sources omitted while fitting a packet to its byte budget. */
+  CONTEXT_COMPACTIONS: "context.compactions",
+  /** Prompt-cache observations, including an explicit absence of provider signal. */
+  CONTEXT_CACHE_OBSERVATIONS: "context.cache_observations",
   /** External writes that produced a confirmed receipt. */
   ACTIONS_SUCCEEDED: "actions.succeeded",
   /** External writes whose outcome could not be established. */
@@ -65,6 +77,15 @@ export const MetricName = {
 } as const;
 
 export type MetricName = (typeof MetricName)[keyof typeof MetricName];
+
+/** A missing transport cache signal is observable state, not an inferred miss. */
+export const ContextCacheState = {
+  HIT: "HIT",
+  MISS: "MISS",
+  NOT_OBSERVED: "NOT_OBSERVED",
+} as const;
+
+export type ContextCacheState = (typeof ContextCacheState)[keyof typeof ContextCacheState];
 
 /** Gauges: a current level, not a total. */
 export const GaugeName = {
@@ -126,17 +147,33 @@ export interface MetricSample {
 export class MetricRegistry {
   readonly #counters = new Map<string, MetricSample>();
   readonly #gauges = new Map<string, MetricSample>();
+  readonly #redactor: SecretRedactor;
+
+  constructor(knownSecrets: readonly string[] = []) {
+    this.#redactor = new SecretRedactor({ knownSecrets });
+  }
+
+  #safeLabels(labels: MetricLabels): MetricLabels {
+    const safe: Record<string, string> = {};
+    for (const [key, value] of Object.entries(labels)) {
+      if (value !== undefined) {
+        safe[this.#redactor.redactString(key)] = this.#redactor.redactString(value);
+      }
+    }
+    return Object.freeze(safe) as MetricLabels;
+  }
 
   /** Add to a counter. Rejects a negative delta: a counter that can go down is a gauge. */
   public increment(name: MetricName, delta = 1, labels: MetricLabels = {}): void {
     if (!Number.isFinite(delta) || delta < 0) {
       throw new RangeError(`counter ${name} cannot move by ${String(delta)}`);
     }
-    const key = `${name}|${labelKey(labels)}`;
+    const safeLabels = this.#safeLabels(labels);
+    const key = `${name}|${labelKey(safeLabels)}`;
     const existing = this.#counters.get(key);
     this.#counters.set(key, {
       name,
-      labels,
+      labels: safeLabels,
       value: (existing?.value ?? 0) + delta,
     });
   }
@@ -146,13 +183,14 @@ export class MetricRegistry {
     if (!Number.isFinite(value)) {
       throw new RangeError(`gauge ${name} cannot be set to ${String(value)}`);
     }
-    this.#gauges.set(`${name}|${labelKey(labels)}`, { name, labels, value });
+    const safeLabels = this.#safeLabels(labels);
+    this.#gauges.set(`${name}|${labelKey(safeLabels)}`, { name, labels: safeLabels, value });
   }
 
   /** Sum of every series of one counter, across labels. */
   public counter(name: MetricName, labels?: MetricLabels): number {
     if (labels !== undefined) {
-      return this.#counters.get(`${name}|${labelKey(labels)}`)?.value ?? 0;
+      return this.#counters.get(`${name}|${labelKey(this.#safeLabels(labels))}`)?.value ?? 0;
     }
     let total = 0;
     for (const sample of this.#counters.values()) {
@@ -164,7 +202,7 @@ export class MetricRegistry {
   /** Highest value of a gauge across labels — the level an alert must react to. */
   public gauge(name: GaugeName, labels?: MetricLabels): number {
     if (labels !== undefined) {
-      return this.#gauges.get(`${name}|${labelKey(labels)}`)?.value ?? 0;
+      return this.#gauges.get(`${name}|${labelKey(this.#safeLabels(labels))}`)?.value ?? 0;
     }
     let highest = 0;
     for (const sample of this.#gauges.values()) {

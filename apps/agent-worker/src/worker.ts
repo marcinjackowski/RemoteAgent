@@ -23,7 +23,6 @@ import {
   Database,
   JobStore,
   JobType,
-  CaseMessageRepository,
   OutboxRepository,
   Scheduler,
   createJobDispatch,
@@ -35,6 +34,7 @@ import {
   type OutboxSink,
 } from "@remoteagent/database";
 import {
+  MetricRegistry,
   ProcessRuntime,
   StructuredLogger,
   type ProcessDefinition,
@@ -48,6 +48,7 @@ import { basicAuthTransport, jiraReconcileConfigFromEnv } from "./jira-auth.js";
 import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.js";
 import { WorkerPersistence } from "./persistence.js";
 import { createRoles, roleConfigFromEnv } from "./roles.js";
+import { createEngineeringRoleContextReader } from "./context.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -280,11 +281,15 @@ export async function jiraReconcileHandlers(input: {
 
 export async function main(): Promise<void> {
   const config = workerConfigFromEnv();
+  const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
+  const knownSecrets = bearerToken === undefined || bearerToken === "" ? [] : [bearerToken];
   const logger = new StructuredLogger({
+    knownSecrets,
     sink: { log: (record) => console.log(JSON.stringify(record)) },
   });
   const db = Database.fromEnv();
   const runtime = productionRuntime();
+  const metrics = new MetricRegistry(knownSecrets);
   const extra = await jiraReconcileHandlers({
     db,
     runtime,
@@ -294,11 +299,11 @@ export async function main(): Promise<void> {
   // Model id is server-owned config resolved at startup (RA-032): DB `agent_config` wins, then env
   // (BEDROCK_MODEL_ID/RA_MODEL_ID), then the built-in default — not a hardcoded env var.
   const modelId = await resolveModelId(db);
-  const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
   const awsRegion = process.env.AWS_REGION?.trim();
+  const persistence = new WorkerPersistence(db, runtime);
   const handlers = createWorkerHandlers(
     {
-      persistence: new WorkerPersistence(db, runtime),
+      persistence,
       roles: createRoles(WORKER_ROLES, {
         // Bedrock API key (bearer) auth when set — no IAM keys; else the SDK's default chain.
         transport: new AwsBedrockTransport({
@@ -306,12 +311,15 @@ export async function main(): Promise<void> {
           ...(awsRegion !== undefined && awsRegion !== "" ? { region: awsRegion } : {}),
         }),
         config: roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId }),
-        // RA-032: feed the case conversation to the model as UNTRUSTED context, so the agent sees
-        // what the owner said (RA-031 recorded it).
-        readCaseMessages: (caseId) =>
-          new CaseMessageRepository()
-            .listRecent(db, caseId)
-            .then((rows) => rows.map((m) => ({ role: m.role, body: m.body }))),
+        readContext: createEngineeringRoleContextReader({
+          db,
+          metrics,
+          knownSecrets,
+          beforeRead: async (caseId) => {
+            await persistence.ensureBaselineCheckpoint(caseId);
+          },
+        }),
+        metrics,
       }),
       logger,
       db,

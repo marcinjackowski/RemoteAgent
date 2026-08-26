@@ -1,14 +1,24 @@
-/**
- * RA-032 WU-04: createRole feeds the case conversation to the model as UNTRUSTED context, as a
- * separate turn from the trusted objective. FakeTransport captures the request before it errors on
- * an exhausted script, so we assert exactly what reaches the model without a live call.
- */
 import { expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import { FakeTransport } from "@remoteagent/bedrock-runtime";
+import { ContextCacheState, MetricName, MetricRegistry } from "@remoteagent/observability";
 
+import type { CompiledRoleContext } from "../src/context.js";
 import { createRole, roleConfigFromEnv } from "../src/roles.js";
 
 const config = roleConfigFromEnv({ RA_MODEL_ID: "test-model" } as NodeJS.ProcessEnv);
+
+const invocation = {
+  unit: {
+    workUnit: {
+      objective: "Reply to the owner",
+      role: "SUPERVISOR",
+      case_id: "case-1",
+      work_unit_id: "unit-1",
+    },
+  },
+  run: { runId: "run-1" },
+} as const;
 
 function textOf(transport: FakeTransport): string {
   return transport.requests[0]!.messages.flatMap((m) => m.content)
@@ -16,54 +26,91 @@ function textOf(transport: FakeTransport): string {
     .join("\n");
 }
 
-it("sends the objective plus the UNTRUSTED case conversation as a separate turn", async () => {
-  const transport = new FakeTransport([]); // empty script: converse captures, then throws
+function context(packet: string): CompiledRoleContext {
+  return {
+    packet,
+    packetBytes: new TextEncoder().encode(packet).byteLength,
+    estimatedInputTokens: Math.ceil(packet.length / 4),
+    cacheState: ContextCacheState.NOT_OBSERVED,
+    snapshotDigest: `sha256:${"a".repeat(64)}`,
+    compiled: {} as CompiledRoleContext["compiled"],
+  };
+}
+
+it("requests exact durable identity and sends the compiled packet as a separate turn", async () => {
+  const transport = new FakeTransport([]);
+  const requests: unknown[] = [];
   const role = createRole({
     transport,
     config,
-    readCaseMessages: async () => [{ role: "OWNER", body: "please retry the failing test" }],
+    readContext: async (request) => {
+      requests.push(request);
+      return context("ENGINEERING CONTEXT PACKET\nold relevant memoryleak evidence");
+    },
   });
-  await role
-    .invoke({
-      unit: {
-        workUnit: { objective: "Reply to the owner", role: "SUPERVISOR", case_id: "case-1" },
-      },
-      run: { runId: "run-1" },
-    })
-    .catch(() => undefined);
+  await role.invoke(invocation).catch(() => undefined);
 
-  expect(transport.requests[0]!.messages).toHaveLength(2); // objective + untrusted context
+  expect(requests).toEqual([{ caseId: "case-1", runId: "run-1", workUnitId: "unit-1" }]);
+  expect(transport.requests[0]!.messages).toHaveLength(2);
   const text = textOf(transport);
-  expect(text).toContain("Reply to the owner"); // trusted objective
-  expect(text).toContain("please retry the failing test"); // untrusted owner message
-  expect(text).toContain("UNTRUSTED"); // explicitly delimited as data, not instructions
-  // The run/case binding is prepended so the model echoes matching ids in its completion.
+  expect(text).toContain("Reply to the owner");
+  expect(text).toContain("old relevant memoryleak evidence");
   expect(text).toContain("case-1");
   expect(text).toContain("run-1");
-  // The conversational directive must reach the model (no system-prompt channel exists), or the
-  // model writes third-person reports into `summary` instead of a direct reply.
   expect(text).toContain("summary");
   expect(text.toLowerCase()).toContain("first-person");
 });
 
-it("sends only the objective when there is no conversation (or no reader)", async () => {
-  const withEmpty = new FakeTransport([]);
-  const role = createRole({ transport: withEmpty, config, readCaseMessages: async () => [] });
-  await role
-    .invoke({
-      unit: { workUnit: { objective: "X", role: "SUPERVISOR", case_id: "c" } },
-      run: { runId: "run-1" },
-    })
-    .catch(() => undefined);
-  expect(withEmpty.requests[0]!.messages).toHaveLength(1);
+it("records provider input usage only when returned and never substitutes the estimate", async () => {
+  const completion = {
+    schema_version: 1,
+    run_id: "run-1",
+    case_id: "case-1",
+    status: "COMPLETED",
+    summary: "done",
+    completed_steps: [],
+    evidence: [],
+    checkpoint_patch: {},
+    next_actions: [],
+  } as const;
+  const metrics = new MetricRegistry();
+  const withUsage = new FakeTransport([
+    {
+      model: config.model,
+      content: [{ type: "json", value: completion }],
+      usage: { inputTokens: 37 },
+    },
+  ]);
+  await createRole({
+    transport: withUsage,
+    config,
+    metrics,
+    readContext: async () => context("x".repeat(400)), // estimate is 100, deliberately not 37
+  }).invoke(invocation);
+  expect(metrics.counter(MetricName.MODEL_INPUT_TOKENS)).toBe(37);
 
-  const noReader = new FakeTransport([]);
-  const role2 = createRole({ transport: noReader, config });
-  await role2
-    .invoke({
-      unit: { workUnit: { objective: "Y", role: "SUPERVISOR", case_id: "c" } },
-      run: { runId: "run-1" },
-    })
-    .catch(() => undefined);
-  expect(noReader.requests[0]!.messages).toHaveLength(1);
+  const withoutUsage = new FakeTransport([
+    { model: config.model, content: [{ type: "json", value: completion }] },
+  ]);
+  await createRole({
+    transport: withoutUsage,
+    config,
+    metrics,
+    readContext: async () => context("y".repeat(800)),
+  }).invoke(invocation);
+  expect(metrics.counter(MetricName.MODEL_INPUT_TOKENS)).toBe(37);
+});
+
+it("sends only the objective when no context reader is bound", async () => {
+  const transport = new FakeTransport([]);
+  const role = createRole({ transport, config });
+  await role.invoke(invocation).catch(() => undefined);
+  expect(transport.requests[0]!.messages).toHaveLength(1);
+});
+
+it("production composition cannot silently restore fixed-count case history replay", async () => {
+  const source = await readFile(new URL("../src/worker.ts", import.meta.url), "utf8");
+  expect(source).toContain("createEngineeringRoleContextReader({");
+  expect(source).toContain("persistence.ensureBaselineCheckpoint(caseId)");
+  expect(source).not.toMatch(/CaseMessageRepository|\.listRecent\s*\(/u);
 });
