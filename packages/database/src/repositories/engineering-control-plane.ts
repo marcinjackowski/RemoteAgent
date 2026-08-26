@@ -192,6 +192,18 @@ export interface EngineeringControlOperationRecovery {
   readonly artifact: EngineeringControlArtifactRevisionRow | null;
 }
 
+export interface EngineeringControlOperationCompletion {
+  readonly operation: EngineeringControlOperationRow;
+  readonly descriptor: Record<string, unknown>;
+  readonly started: boolean;
+  readonly completion: Readonly<{
+    completion_id: string;
+    outcome: "SUCCEEDED" | "FAILED" | "AMBIGUOUS";
+    receipt: unknown;
+  }> | null;
+  readonly completion_observed: boolean;
+}
+
 interface EngineeringControlRecoverySourceRow extends EngineeringControlOperationRow {
   intent_fencing_token: string;
   current_fencing_token: string;
@@ -219,6 +231,31 @@ const OPERATION_COLUMNS_O = `
   o.owner_id, o.run_id, o.stage, o.stage_attempt, o.checkpoint_revision,
   o.operation_kind, o.effect_class, o.integration_scope_digest, o.input_digest,
   o.config_digest, o.schema_digest, o.deadline_at, o.recorded_at`;
+
+function projectEngineeringControlOperationRow(
+  row: EngineeringControlOperationRow,
+): EngineeringControlOperationRow {
+  return {
+    operation_id: row.operation_id,
+    intent_id: row.intent_id,
+    idempotency_key: row.idempotency_key,
+    job_id: row.job_id,
+    case_id: row.case_id,
+    owner_id: row.owner_id,
+    run_id: row.run_id,
+    stage: row.stage,
+    stage_attempt: row.stage_attempt,
+    checkpoint_revision: row.checkpoint_revision,
+    operation_kind: row.operation_kind,
+    effect_class: row.effect_class,
+    integration_scope_digest: row.integration_scope_digest,
+    input_digest: row.input_digest,
+    config_digest: row.config_digest,
+    schema_digest: row.schema_digest,
+    deadline_at: row.deadline_at,
+    recorded_at: row.recorded_at,
+  };
+}
 
 const EVENT_COLUMNS = `
   event_id, event_sequence, event_type, operation_id, intent_id, job_id, case_id,
@@ -572,6 +609,114 @@ export class EngineeringControlPlaneRepository {
       started: state.rows[0]?.started ?? false,
       completion_outcome: state.rows[0]?.completion_outcome ?? null,
       artifact,
+    };
+  }
+
+  /**
+   * Read the exact queue completion for one operation and prove whether that
+   * same completion was observed by the engineering event stream. No run-wide
+   * latest-row inference is used: both joins retain the operation's intent/job
+   * identity and the observation retains operation/intent/job/completion.
+   */
+  public async readOperationCompletion(
+    q: Queryable,
+    rawInput: unknown,
+  ): Promise<EngineeringControlOperationCompletion | null> {
+    const input = parseInput(operationIdentity, rawInput, "engineering operation identity");
+    const result = await q.query<
+      EngineeringControlOperationRow & {
+        descriptor: Record<string, unknown>;
+        started: boolean;
+        completion_id: string | null;
+        completion_outcome: "SUCCEEDED" | "FAILED" | "AMBIGUOUS" | null;
+        completion_receipt: unknown;
+        completion_observed: boolean;
+        completion_observation_payload_digest: string | null;
+      }
+    >(
+      `SELECT ${OPERATION_COLUMNS_O}, i.descriptor,
+              EXISTS (
+                SELECT 1
+                  FROM engineering_stage_events started
+                 WHERE started.operation_id = o.operation_id
+                   AND started.intent_id = o.intent_id
+                   AND started.job_id = o.job_id
+                   AND started.event_type = 'STARTED'
+              ) AS started,
+              completion.completion_id,
+              completion.outcome AS completion_outcome,
+              completion.receipt AS completion_receipt,
+              CASE WHEN completion.completion_id IS NULL THEN false ELSE EXISTS (
+                SELECT 1
+                  FROM engineering_stage_events observed
+                 WHERE observed.operation_id = o.operation_id
+                   AND observed.intent_id = o.intent_id
+                   AND observed.job_id = o.job_id
+                   AND observed.event_type = 'COMPLETION_OBSERVED'
+                   AND observed.completion_id = completion.completion_id
+                   AND observed.payload IS NOT DISTINCT FROM
+                       jsonb_build_object(
+                         'completion_id', completion.completion_id,
+                         'outcome', completion.outcome
+                       )
+              ) END AS completion_observed,
+              (
+                SELECT observed.payload_digest
+                  FROM engineering_stage_events observed
+                 WHERE observed.operation_id = o.operation_id
+                   AND observed.intent_id = o.intent_id
+                   AND observed.job_id = o.job_id
+                   AND observed.event_type = 'COMPLETION_OBSERVED'
+                   AND observed.completion_id = completion.completion_id
+                   AND observed.payload IS NOT DISTINCT FROM
+                       jsonb_build_object(
+                         'completion_id', completion.completion_id,
+                         'outcome', completion.outcome
+                       )
+                 LIMIT 1
+              ) AS completion_observation_payload_digest
+         FROM engineering_operations o
+         JOIN job_intents i
+           ON i.intent_id = o.intent_id AND i.job_id = o.job_id
+         LEFT JOIN job_completions completion
+           ON completion.intent_id = o.intent_id AND completion.job_id = o.job_id
+        WHERE o.operation_id = $1`,
+      [input.operationId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return null;
+    if (
+      (row.completion_id === null) !== (row.completion_outcome === null) ||
+      (row.completion_id === null && row.completion_receipt !== null) ||
+      (row.completion_id === null && row.completion_observed)
+    ) {
+      throw new EngineeringControlStateError("engineering completion relationship is inconsistent");
+    }
+    if (
+      row.completion_observed &&
+      row.completion_id !== null &&
+      row.completion_outcome !== null &&
+      row.completion_observation_payload_digest !==
+        canonicalDigest({
+          completion_id: row.completion_id,
+          outcome: row.completion_outcome,
+        })
+    ) {
+      throw new EngineeringControlStateError("engineering completion observation is corrupted");
+    }
+    return {
+      operation: projectEngineeringControlOperationRow(row),
+      descriptor: row.descriptor,
+      started: row.started,
+      completion:
+        row.completion_id === null || row.completion_outcome === null
+          ? null
+          : {
+              completion_id: row.completion_id,
+              outcome: row.completion_outcome,
+              receipt: row.completion_receipt,
+            },
+      completion_observed: row.completion_observed,
     };
   }
 

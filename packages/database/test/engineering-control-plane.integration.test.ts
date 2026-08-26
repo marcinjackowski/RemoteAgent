@@ -761,6 +761,68 @@ describeIntegration(
       ).rejects.toThrow();
     });
 
+    it("reads the exact operation completion receipt and exact observation boundary", async () => {
+      await bind();
+      await controlPlane.commitOperationStarted(db, lease, { operationId: "operation-1" });
+      await db.query(
+        `INSERT INTO job_completions (completion_id, intent_id, job_id, outcome, receipt)
+         SELECT 'completion-exact', intent_id, job_id, 'SUCCEEDED',
+                '{"gate_id":"gate-1","durable":true}'::jsonb
+           FROM engineering_operations WHERE operation_id = 'operation-1'`,
+      );
+
+      const before = await controlPlane.readOperationCompletion(db, {
+        operationId: "operation-1",
+      });
+      expect(before).toMatchObject({
+        started: true,
+        completion_observed: false,
+        completion: {
+          completion_id: "completion-exact",
+          outcome: "SUCCEEDED",
+          receipt: { gate_id: "gate-1", durable: true },
+        },
+      });
+      expect(before?.descriptor).toEqual({ prompt: "bounded" });
+      expect(Object.keys(before!.operation).sort()).toEqual(
+        [
+          "operation_id",
+          "intent_id",
+          "idempotency_key",
+          "job_id",
+          "case_id",
+          "owner_id",
+          "run_id",
+          "stage",
+          "stage_attempt",
+          "checkpoint_revision",
+          "operation_kind",
+          "effect_class",
+          "integration_scope_digest",
+          "input_digest",
+          "config_digest",
+          "schema_digest",
+          "deadline_at",
+          "recorded_at",
+        ].sort(),
+      );
+      expect(before!.operation).not.toHaveProperty("descriptor");
+      expect(before!.operation).not.toHaveProperty("completion_receipt");
+      expect(before!.operation).not.toHaveProperty("completion_id");
+
+      await controlPlane.observeOperationCompletion(db, {
+        operationId: "operation-1",
+        completionId: "completion-exact",
+      });
+      const after = await controlPlane.readOperationCompletion(db, {
+        operationId: "operation-1",
+      });
+      expect(after?.completion_observed).toBe(true);
+      expect(
+        await controlPlane.readOperationCompletion(db, { operationId: "operation-foreign" }),
+      ).toBeNull();
+    });
+
     it("classifies intent-bound and retry-safe STARTED operations as DIRTY", async () => {
       await bind();
       expect((await prepare()).classification).toBe("DIRTY");

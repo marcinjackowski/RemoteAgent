@@ -21,3 +21,5 @@ export * from "./artifact-store.js";
 export * from "./runner.js";
 export * from "./snapshot.js";
 export * from "./verification.js";
+export * from "./engineering-gates.js";
+export * from "./disposable-workspace.js";

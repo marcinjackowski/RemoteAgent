@@ -18,6 +18,7 @@ export type ProcessRunInput = Readonly<{
   env?: Readonly<Record<string, string>>;
   network?: NetworkMode;
   limits: ProcessLimits;
+  signal?: AbortSignal;
 }>;
 
 export type ProcessRunResult = Readonly<{
@@ -26,6 +27,7 @@ export type ProcessRunResult = Readonly<{
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  cancelled: boolean;
   outputTruncated: boolean;
 }>;
 
@@ -115,12 +117,25 @@ export async function runProcess(input: ProcessRunInput): Promise<ProcessRunResu
   const environment: Record<string, string> = { PATH: SAFE_PATH, HOME: policy.root };
   Object.assign(environment, input.env ?? {});
 
+  if (input.signal?.aborted === true) {
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      cancelled: true,
+      outputTruncated: false,
+    };
+  }
+
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     let outputSize = 0;
     let outputTruncated = false;
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
     const child = spawn(launch.executable, [...launch.args], {
       cwd,
@@ -142,24 +157,46 @@ export async function runProcess(input: ProcessRunInput): Promise<ProcessRunResu
       if (chunk.length > remaining) outputTruncated = true;
       if (outputTruncated) killTree(child);
     };
+    const removeAbortListener = (): void => input.signal?.removeEventListener("abort", onAbort);
+    const finish = (): void => {
+      clearTimeout(timer);
+      removeAbortListener();
+    };
+    const terminate = (reason: "timeout" | "cancel"): void => {
+      if (
+        settled ||
+        timedOut ||
+        cancelled ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+      ) {
+        return;
+      }
+      if (reason === "timeout") timedOut = true;
+      else cancelled = true;
+      killTree(child);
+    };
+    function onAbort(): void {
+      terminate("cancel");
+    }
     child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
     child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      finish();
       reject(new ProcessRunnerError("SPAWN_FAILED", error.message));
     });
     child.once("close", (exitCode, signal) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      resolve({ exitCode, signal, stdout, stderr, timedOut, outputTruncated });
+      finish();
+      resolve({ exitCode, signal, stdout, stderr, timedOut, cancelled, outputTruncated });
     });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killTree(child);
-    }, input.limits.timeoutMs);
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+    // Close the gap between the pre-spawn check and listener registration.
+    if (input.signal?.aborted === true) onAbort();
+    const timer = setTimeout(() => terminate("timeout"), input.limits.timeoutMs);
     timer.unref();
   });
 }

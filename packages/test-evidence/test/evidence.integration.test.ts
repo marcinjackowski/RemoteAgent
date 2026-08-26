@@ -312,6 +312,23 @@ describe("test evidence layer", () => {
       expect(deriveVerdict(runs, built.requiredCommands).verdict).toBe(EvidenceVerdict.PASSED);
     });
 
+    it("maps a green exit without a durable log artifact to INFRASTRUCTURE", async () => {
+      const unavailableStore = {
+        put: async () => Promise.reject(new Error("store unavailable")),
+        get: async () => Promise.reject(new Error("store unavailable")),
+        has: async () => false,
+      };
+      const built = await runner([entry("green", "process.exit(0)")], {
+        store: unavailableStore,
+      });
+      const run = await built.run({ command_name: "green" });
+
+      expect(run.exit_code).toBe(0);
+      expect(run.artifact).toBeNull();
+      expect(run.outcome).toBe(TestOutcome.INFRASTRUCTURE);
+      expect(deriveVerdict([run], new Set(["green"])).verdict).toBe(EvidenceVerdict.INCONCLUSIVE);
+    });
+
     it("refuses a command that is not in the server-owned manifest", async () => {
       const built = await runner([entry("green", "process.exit(0)")]);
       // No receipt at all, rather than a fabricated INFRASTRUCTURE one.
@@ -378,6 +395,18 @@ describe("test evidence layer", () => {
       const run = await built.run({ command_name: "green", signal: controller.signal });
       expect(run.outcome).toBe(TestOutcome.CANCELED);
       expect(deriveVerdict([run], new Set(["green"])).verdict).toBe(EvidenceVerdict.INCONCLUSIVE);
+    });
+
+    it("forwards an active cancel to the process runner and records CANCELED", async () => {
+      const built = await runner([entry("hang", "setTimeout(()=>{},5000)")]);
+      const controller = new AbortController();
+      const pending = built.run({ command_name: "hang", signal: controller.signal });
+      setTimeout(() => controller.abort(), 100);
+
+      const run = await pending;
+      expect(run.outcome).toBe(TestOutcome.CANCELED);
+      expect(run.outcome).not.toBe(TestOutcome.TIMED_OUT);
+      expect(run.exit_code).toBeNull();
     });
 
     it("classifies a missing executable as INFRASTRUCTURE, never FAILED", async () => {

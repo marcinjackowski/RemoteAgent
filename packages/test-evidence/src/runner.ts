@@ -253,13 +253,14 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
           env,
           ...(options.network === undefined ? {} : { network: options.network }),
           limits: { timeoutMs: entry.timeout_ms },
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
         });
         observation = {
           launched: true,
           exitCode: result.exitCode,
           signal: result.signal,
           timedOut: result.timedOut,
-          canceled: false,
+          canceled: result.cancelled,
           output: `${result.stdout}${result.stderr.length > 0 ? `\n${result.stderr}` : ""}`,
         };
       } catch (error) {
@@ -278,7 +279,7 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
     }
 
     const durationMs = Math.max(0, now() - started);
-    const outcome = classify(observation);
+    let outcome = classify(observation);
 
     // Redact ONCE, on the raw stream. Both the excerpt and the artifact are fed
     // from this, so no raw byte reaches either.
@@ -294,6 +295,13 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
         content: redacted,
       })
       .catch(() => null);
+
+    // A green exit without a durable log is not durable evidence. Preserve the
+    // observed process facts, but classify the run as infrastructure failure so
+    // neither this layer nor an engineering-gate adapter can turn it into PASS.
+    if (artifact === null && outcome === TestOutcome.PASSED) {
+      outcome = TestOutcome.INFRASTRUCTURE;
+    }
 
     const clipped = clipToBytes(redacted, MAX_EXCERPT_BYTES);
     const excerpt: EvidenceExcerpt = {

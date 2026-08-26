@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { getEventListeners } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +9,31 @@ import { ProcessRunnerError, runProcess } from "../src/index.js";
 
 const roots: string[] = [];
 const execFileAsync = promisify(execFile);
+
+async function waitForPidFile(root: string): Promise<number> {
+  let recorded = "";
+  for (let attempt = 0; attempt < 100 && recorded === ""; attempt += 1) {
+    recorded = await readFile(join(root, "child.pid"), "utf8").catch(() => "");
+    if (recorded === "") await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(recorded, "grandchild never recorded its pid").not.toBe("");
+  const childPid = Number(recorded);
+  expect(Number.isInteger(childPid)).toBe(true);
+  return childPid;
+}
+
+async function expectPidToDisappear(childPid: number): Promise<void> {
+  let alive = true;
+  for (let attempt = 0; attempt < 100 && alive; attempt += 1) {
+    try {
+      process.kill(childPid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } catch {
+      alive = false;
+    }
+  }
+  expect(alive, `grandchild ${String(childPid)} survived the process-tree kill`).toBe(false);
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -39,6 +65,7 @@ describe("confined process runner", () => {
       network: "ALLOW",
     });
     expect(result.timedOut).toBe(true);
+    expect(result.cancelled).toBe(false);
     expect(result.exitCode).not.toBe(0);
   });
 
@@ -65,15 +92,7 @@ describe("confined process runner", () => {
 
     // Poll rather than read once: the file's existence is a precondition of the
     // real assertion, so a missing file must not be reported as a kill failure.
-    let recorded = "";
-    for (let attempt = 0; attempt < 50 && recorded === ""; attempt += 1) {
-      recorded = await readFile(join(root, "child.pid"), "utf8").catch(() => "");
-      if (recorded === "") await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    expect(recorded, "grandchild never recorded its pid").not.toBe("");
-
-    const childPid = Number(recorded);
-    expect(Number.isInteger(childPid)).toBe(true);
+    const childPid = await waitForPidFile(root);
     // The load-bearing assertion: the grandchild is gone, so the kill reached the
     // whole tree and not merely the process we spawned.
     //
@@ -87,16 +106,62 @@ describe("confined process runner", () => {
     // Same fix shape as the pid-file poll above: a precondition that is merely SLOW
     // must not be reported as the mechanism failing. The assertion still fails if the
     // grandchild survives — it just allows the kernel a bounded moment to finish.
-    let alive = true;
-    for (let attempt = 0; attempt < 100 && alive; attempt += 1) {
-      try {
-        process.kill(childPid, 0);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      } catch {
-        alive = false;
-      }
-    }
-    expect(alive, `grandchild ${String(childPid)} survived the process-tree kill`).toBe(false);
+    await expectPidToDisappear(childPid);
+  });
+
+  it("actively cancels the whole process group and removes its abort listener", async () => {
+    const root = await mkdtemp(join(tmpdir(), "workspace-process-"));
+    roots.push(root);
+    const controller = new AbortController();
+    const script = [
+      "const fs = require('node:fs');",
+      "const { spawn } = require('node:child_process');",
+      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "fs.writeFileSync('child.pid', String(child.pid));",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+
+    const running = runProcess({
+      executable: process.execPath,
+      args: ["-e", script],
+      workspaceRoot: root,
+      limits: { timeoutMs: 10_000, outputBytes: 1024 },
+      network: "ALLOW",
+      signal: controller.signal,
+    });
+    const childPid = await waitForPidFile(root);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
+    controller.abort();
+
+    const result = await running;
+    expect(result.cancelled).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    await expectPidToDisappear(childPid);
+  });
+
+  it("does not launch when cancellation was already requested", async () => {
+    const root = await mkdtemp(join(tmpdir(), "workspace-process-"));
+    roots.push(root);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runProcess({
+      executable: process.execPath,
+      args: ["-e", "require('node:fs').writeFileSync('should-not-exist', 'bad')"],
+      workspaceRoot: root,
+      limits: { timeoutMs: 1_000 },
+      network: "ALLOW",
+      signal: controller.signal,
+    });
+
+    expect(result).toMatchObject({
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      cancelled: true,
+    });
+    await expect(readFile(join(root, "should-not-exist"))).rejects.toThrow();
   });
 
   it("fails closed before spawn when CPU or memory enforcement is requested", async () => {
