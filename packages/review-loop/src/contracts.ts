@@ -243,6 +243,46 @@ export const reviewReport = versionedContract({
 
 export type ReviewReport = z.infer<typeof reviewReport>;
 
+/**
+ * Model-authored finding used only at the pre-commit boundary.
+ *
+ * There is intentionally no `finding_id`: identity is derived by the server from
+ * the stable location after validation, never accepted from model prose.
+ */
+export const preCommitModelFinding = valueObject({
+  severity: reviewSeverity,
+  summary: z.string().min(8).max(2048),
+  location: reviewLocation,
+  evidence: z.string().max(4096),
+  required_fix: z.string().max(2048),
+}).superRefine((finding, ctx) => {
+  if (!isBlockingSeverity(finding.severity)) return;
+  if (finding.evidence.trim().length < MIN_EVIDENCE_LENGTH) {
+    ctx.addIssue({
+      code: "custom",
+      message: "a blocking pre-commit finding must quote evidence from the diff",
+      path: ["evidence"],
+    });
+  }
+  if (finding.required_fix.trim().length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      message: "a blocking pre-commit finding must state the required fix",
+      path: ["required_fix"],
+    });
+  }
+});
+
+export type PreCommitModelFinding = z.infer<typeof preCommitModelFinding>;
+
+/** Strict structured output of one fresh, tools-disabled pre-commit reviewer. */
+export const preCommitReviewOutput = versionedContract({
+  findings: z.array(preCommitModelFinding).max(MAX_FINDINGS),
+  lines_examined: z.int().nonnegative(),
+});
+
+export type PreCommitReviewOutput = z.infer<typeof preCommitReviewOutput>;
+
 /** Whether the change is ready to publish. */
 export const ReviewReadiness = {
   READY: "READY",

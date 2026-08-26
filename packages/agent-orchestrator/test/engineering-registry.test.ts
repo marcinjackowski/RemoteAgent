@@ -36,11 +36,14 @@ describe("engineering stage registry", () => {
 
     for (const graph of Object.values(engineeringProcessGraphs)) {
       expect(graph.slice_loop_stages).toEqual(mandatorySliceStages);
-      expect(graph.completion_stages).toEqual([EngineeringStage.FINAL_VERIFICATION]);
+      expect(graph.completion_stages).toEqual([
+        EngineeringStage.FINAL_VERIFICATION,
+        EngineeringStage.LOCAL_COMMIT,
+      ]);
     }
   });
 
-  it("assigns workspace writes only to the implementer stage", () => {
+  it("assigns workspace writes only to explicit implementer-owned system stages", () => {
     const writers = Object.entries(engineeringStageRegistry).filter(
       ([, definition]) => definition.workspace_access === "WRITE",
     );
@@ -49,6 +52,10 @@ describe("engineering stage registry", () => {
       [
         EngineeringStage.SLICE_IMPLEMENTATION,
         expect.objectContaining({ role: AgentRole.IMPLEMENTER }),
+      ],
+      [
+        EngineeringStage.LOCAL_COMMIT,
+        expect.objectContaining({ role: AgentRole.IMPLEMENTER, completion_contract: null }),
       ],
     ]);
     expect(

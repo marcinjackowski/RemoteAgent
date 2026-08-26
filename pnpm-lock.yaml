@@ -113,9 +113,27 @@ importers:
       '@remoteagent/discord':
         specifier: workspace:*
         version: link:../../packages/discord
+      '@remoteagent/git-lifecycle':
+        specifier: workspace:*
+        version: link:../../packages/git-lifecycle
+      '@remoteagent/implementation-tools':
+        specifier: workspace:*
+        version: link:../../packages/implementation-tools
       '@remoteagent/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@remoteagent/review-loop':
+        specifier: workspace:*
+        version: link:../../packages/review-loop
+      '@remoteagent/test-evidence':
+        specifier: workspace:*
+        version: link:../../packages/test-evidence
+      '@remoteagent/workspace-runner':
+        specifier: workspace:*
+        version: link:../../packages/workspace-runner
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   apps/discord-bot:
     dependencies:

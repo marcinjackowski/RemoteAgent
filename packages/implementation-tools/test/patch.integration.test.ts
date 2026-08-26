@@ -181,6 +181,65 @@ describeIntegration(
     });
 
     describe("criterion 1: the intent is journalled BEFORE the first write", () => {
+      it("awaits the server writer fence immediately before every file syscall", async () => {
+        let checks = 0;
+        const guarded = await createImplementationWriteTools({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          beforeMutation: async () => {
+            checks += 1;
+            if (checks === 2) throw new Error("stale fence");
+          },
+        });
+        const result = await guarded.patch({
+          operation_id: "op-per-file-fence",
+          files: files(["a.ts", "docs/b.md"]),
+        });
+
+        expect(checks).toBe(2);
+        expect(result.outcome).toBe(ToolOutcome.AMBIGUOUS);
+        expect(await onDisk("a.ts")).toBe(newContent("a.ts"));
+        expect(await onDisk("docs/b.md")).toBe(oldContent("docs/b.md"));
+
+        const denied = await createImplementationWriteTools({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          beforeMutation: async () => {
+            throw new Error("stale fence");
+          },
+        });
+        const write = await denied.write({
+          operation_id: "op-write-fence",
+          relative_path: "src/c.ts",
+          content: "must-not-land\n",
+        });
+        expect(write.outcome).toBe(ToolOutcome.FAILED);
+        expect(await onDisk("src/c.ts")).toBe(oldContent("src/c.ts"));
+
+        let replayChecks = 0;
+        const replayed = await createImplementationWriteTools({
+          root,
+          identity,
+          ledger: new OperationLedgerRepository(),
+          runTransaction: inTx,
+          beforeMutation: async () => {
+            replayChecks += 1;
+          },
+        });
+        const replay = await replayed.write({
+          operation_id: "op-write-fence",
+          relative_path: "src/c.ts",
+          content: "must-still-not-land\n",
+        });
+        expect(replay.outcome).toBe(ToolOutcome.FAILED);
+        expect(replayChecks).toBe(0);
+        expect(await onDisk("src/c.ts")).toBe(oldContent("src/c.ts"));
+      });
+
       it("commits the intent, with the pre-digest, before any file is touched", async () => {
         const beforeFirst: Record<string, unknown>[] = [];
         const digestBefore = await computeTreeDigest(root);

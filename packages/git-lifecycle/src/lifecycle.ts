@@ -52,6 +52,9 @@
  * too large is a legible fact, not a stack trace.
  */
 import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { canonicalDigest } from "@remoteagent/contracts";
@@ -65,6 +68,7 @@ import {
   gitBranchRecord,
   gitCommitReceipt,
   gitCommitSha,
+  gitEvidenceBoundCommitDescriptor,
   gitRebaseReport,
   isProtectedBranch,
 } from "./contracts.js";
@@ -72,6 +76,7 @@ import type {
   GitBranchRecord,
   GitCommitReceipt,
   GitCommitVerification,
+  GitEvidenceBoundCommitDescriptor,
   GitRebaseReport,
   GitScope,
   GitWorkingTreeState as WorkingTreeState,
@@ -122,6 +127,8 @@ const PERMITTED_SUBCOMMANDS: readonly string[] = Object.freeze([
   "rev-parse",
   "merge-base",
   "branch",
+  "log",
+  "check-attr",
 ]);
 
 /**
@@ -200,6 +207,24 @@ export function assertPermitted(args: readonly string[]): void {
   if (subcommand === "checkout" && !args.includes("--") && !args.includes("-b")) {
     throw new GitLifecycleError(GIT_OPERATION_FORBIDDEN, "checkout requires an explicit pathspec");
   }
+  if (
+    subcommand === "log" &&
+    (args.length !== 4 || args[1] !== "-1" || args[2] !== "--format=%B" || args[3] !== "HEAD")
+  ) {
+    throw new GitLifecycleError(
+      GIT_OPERATION_FORBIDDEN,
+      "only exact commit-message observation is permitted",
+    );
+  }
+  if (
+    subcommand === "check-attr" &&
+    (args[1] !== "-z" || args[2] !== "filter" || args[3] !== "--" || args.length < 5)
+  ) {
+    throw new GitLifecycleError(
+      GIT_OPERATION_FORBIDDEN,
+      "only exact filter attribute observation is permitted",
+    );
+  }
 }
 
 type GitResult = Readonly<{ stdout: string; truncated: boolean }>;
@@ -210,18 +235,50 @@ type GitResult = Readonly<{ stdout: string; truncated: boolean }>;
  * Argument array, never a shell. Output is bounded and an overflow is reported as
  * `truncated` rather than thrown, because a huge diff is an expected condition.
  */
-async function git(args: readonly string[], cwd?: string): Promise<GitResult> {
+type GitConfigOverride = readonly [key: string, value: string];
+
+async function git(
+  args: readonly string[],
+  cwd?: string,
+  extraConfig: readonly GitConfigOverride[] = [],
+): Promise<GitResult> {
   assertPermitted(args);
+  // Never point HOME at the target repository. Git treats `$HOME/.gitconfig`
+  // as executable policy (aliases, filters, hooks and external diff drivers),
+  // so a target-controlled file must not become process configuration. A fresh
+  // empty directory also avoids inheriting configuration from the worker host.
+  const isolatedHome = await mkdtemp(join(tmpdir(), "remoteagent-git-home-"));
   try {
+    const safeConfig: readonly GitConfigOverride[] = [
+      ["core.hooksPath", isolatedHome],
+      ["core.fsmonitor", "false"],
+      ["commit.gpgSign", "false"],
+      ["tag.gpgSign", "false"],
+      ...extraConfig,
+    ];
+    const commandConfig = Object.fromEntries(
+      safeConfig.flatMap(([key, value], index) => [
+        [`GIT_CONFIG_KEY_${String(index)}`, key],
+        [`GIT_CONFIG_VALUE_${String(index)}`, value],
+      ]),
+    );
     const result = await execFileAsync("git", [...args], {
       ...(cwd === undefined ? {} : { cwd }),
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
       // A deterministic, minimal environment: no user config, no pager, no prompts.
       env: {
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        HOME: cwd ?? "/nonexistent",
+        HOME: isolatedHome,
         GIT_TERMINAL_PROMPT: "0",
+        GIT_PAGER: "cat",
+        PAGER: "cat",
+        GIT_EDITOR: "true",
+        GIT_SEQUENCE_EDITOR: "true",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_COUNT: String(safeConfig.length),
+        ...commandConfig,
         GIT_AUTHOR_NAME: "RemoteAgent",
         GIT_AUTHOR_EMAIL: "agent@remoteagent.invalid",
         GIT_COMMITTER_NAME: "RemoteAgent",
@@ -240,7 +297,25 @@ async function git(args: readonly string[], cwd?: string): Promise<GitResult> {
     }
     // Git messages embed absolute host paths, so only the stable code travels.
     throw new GitLifecycleError(GIT_COMMAND_FAILED);
+  } finally {
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+function parseFilterAttributes(stdout: string): readonly string[] {
+  const records = stdout.split("\0");
+  const drivers = new Set<string>();
+  for (let index = 0; index + 2 < records.length; index += 3) {
+    const attribute = records[index + 1] ?? "";
+    const value = records[index + 2] ?? "";
+    if (attribute === "filter" && !["", "unspecified", "unset", "set"].includes(value)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value)) {
+        throw new GitLifecycleError(GIT_COMMAND_FAILED, "unsupported filter driver identity");
+      }
+      drivers.add(value);
+    }
+  }
+  return Object.freeze([...drivers].sort());
 }
 
 /** Parse `--porcelain=v1 -z` status output into (code, path) pairs. */
@@ -287,6 +362,14 @@ export type GitDiffReport = Readonly<{
   /** Unified diff text; empty when truncated. */
   patch: string;
   truncated: boolean;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}>;
+
+type GitCachedSnapshot = Readonly<{
+  paths: readonly string[];
+  patch: string;
   filesChanged: number;
   insertions: number;
   deletions: number;
@@ -435,8 +518,17 @@ export class GitLifecycle {
 
   /** Bounded diff of the working tree, with an explicit truncation flag. */
   public async diff(): Promise<GitDiffReport> {
-    const patch = await git(["diff", "--no-color", "HEAD"], this.#worktree);
-    const stat = await git(["diff", "--numstat", "-z", "HEAD"], this.#worktree);
+    const filterConfig = await this.#safeFilterConfig(this.#declared);
+    const patch = await git(
+      ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD"],
+      this.#worktree,
+      filterConfig,
+    );
+    const stat = await git(
+      ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "HEAD"],
+      this.#worktree,
+      filterConfig,
+    );
 
     let filesChanged = 0;
     let insertions = 0;
@@ -490,7 +582,8 @@ export class GitLifecycle {
       staged.push(path);
     }
     // `--literal-pathspecs` so a magic pathspec (`:(glob)`, `:/`) cannot widen this.
-    await git(["--literal-pathspecs", "add", "--", ...staged], this.#worktree);
+    const filterConfig = await this.#safeFilterConfig(staged);
+    await git(["--literal-pathspecs", "add", "--", ...staged], this.#worktree, filterConfig);
     return Object.freeze([...staged].sort());
   }
 
@@ -520,7 +613,10 @@ export class GitLifecycle {
     }
 
     const staged = await this.stage(input.paths);
-    const cached = await git(["diff", "--cached", "--numstat", "-z"], this.#worktree);
+    const cached = await git(
+      ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--numstat", "-z"],
+      this.#worktree,
+    );
     if (cached.stdout.trim().length === 0) {
       throw new GitLifecycleError(GIT_NOTHING_STAGED, "nothing was staged");
     }
@@ -538,7 +634,12 @@ export class GitLifecycle {
 
     const parent = await this.#revParse("HEAD");
     // The message is passed as an argument, never interpolated into a shell.
-    await git(["commit", "--no-verify", "--no-gpg-sign", "-m", input.message], this.#worktree);
+    const filterConfig = await this.#safeFilterConfig(staged);
+    await git(
+      ["commit", "--no-verify", "--no-gpg-sign", "-m", input.message],
+      this.#worktree,
+      filterConfig,
+    );
     const commitSha = await this.#revParse("HEAD");
 
     return gitCommitReceipt.parse({
@@ -552,6 +653,254 @@ export class GitLifecycle {
       insertions,
       deletions,
       verification: input.verification,
+    });
+  }
+
+  async #assertEvidenceBoundIdentity(descriptor: GitEvidenceBoundCommitDescriptor): Promise<void> {
+    if (
+      descriptor.case_id !== this.#scope.case_id ||
+      descriptor.workspace_id !== this.#scope.workspace_id ||
+      descriptor.repository_id !== this.#repositoryId
+    ) {
+      throw new GitLifecycleError(GIT_PATH_OUT_OF_SCOPE, "commit descriptor crosses Git scope");
+    }
+    const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], this.#worktree)).stdout.trim();
+    const parent = await this.#revParse("HEAD");
+    if (branch !== descriptor.branch_name || parent !== descriptor.expected_parent_sha) {
+      throw new GitLifecycleError(GIT_COMMAND_FAILED, "commit branch or parent changed");
+    }
+    if (isProtectedBranch(branch)) {
+      throw new GitLifecycleError(GIT_BRANCH_PROTECTED, "refusing to commit to a protected branch");
+    }
+  }
+
+  async #cachedSnapshot(base: string): Promise<GitCachedSnapshot> {
+    const names = await git(
+      ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--name-only", "-z", base],
+      this.#worktree,
+    );
+    const patch = await git(
+      ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", base],
+      this.#worktree,
+    );
+    const stat = await git(
+      ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--numstat", "-z", base],
+      this.#worktree,
+    );
+    if (names.truncated || patch.truncated || stat.truncated) {
+      throw new GitLifecycleError(GIT_COMMAND_FAILED, "cached evidence exceeded its bound");
+    }
+    let filesChanged = 0;
+    let insertions = 0;
+    let deletions = 0;
+    for (const record of stat.stdout.split("\0")) {
+      const parts = record.split("\t");
+      if (parts.length < 3) continue;
+      filesChanged += 1;
+      insertions += Number.parseInt(parts[0] ?? "0", 10) || 0;
+      deletions += Number.parseInt(parts[1] ?? "0", 10) || 0;
+    }
+    return Object.freeze({
+      paths: Object.freeze(names.stdout.split("\0").filter(Boolean).sort()),
+      patch: patch.stdout,
+      filesChanged,
+      insertions,
+      deletions,
+    });
+  }
+
+  async #safeFilterConfig(paths: readonly string[]): Promise<readonly GitConfigOverride[]> {
+    const attributes = await git(["check-attr", "-z", "filter", "--", ...paths], this.#worktree);
+    if (attributes.truncated) {
+      throw new GitLifecycleError(GIT_COMMAND_FAILED, "filter attributes exceeded their bound");
+    }
+    return Object.freeze(
+      parseFilterAttributes(attributes.stdout).flatMap((driver) => [
+        [`filter.${driver}.process`, ""] as const,
+        [`filter.${driver}.clean`, "cat"] as const,
+        [`filter.${driver}.smudge`, "cat"] as const,
+        [`filter.${driver}.required`, "false"] as const,
+      ]),
+    );
+  }
+
+  #assertCachedDescriptor(
+    descriptor: GitEvidenceBoundCommitDescriptor,
+    cached: GitCachedSnapshot,
+  ): void {
+    if (
+      cached.paths.length !== descriptor.exact_paths.length ||
+      cached.paths.some((path, index) => path !== descriptor.exact_paths[index]) ||
+      canonicalDigest(cached.patch) !== descriptor.raw_patch_digest
+    ) {
+      throw new GitLifecycleError(
+        GIT_COMMAND_FAILED,
+        "cached patch does not match commit descriptor",
+      );
+    }
+  }
+
+  /**
+   * Create the one evidence-bound local commit. Both callbacks are mandatory
+   * writer-fence checks and are placed directly before their respective Git
+   * mutation syscalls.
+   */
+  public async commitEvidenceBound(input: {
+    readonly descriptor: GitEvidenceBoundCommitDescriptor;
+    readonly beforeStage: () => Promise<void>;
+    readonly beforeCommit: () => Promise<void>;
+  }): Promise<GitCommitReceipt> {
+    const descriptor = gitEvidenceBoundCommitDescriptor.parse(input.descriptor);
+    await this.#assertEvidenceBoundIdentity(descriptor);
+    const before = await this.status();
+    if (
+      before.state === GitWorkingTreeState.DIRTY_FOREIGN ||
+      before.agentPaths.length !== descriptor.exact_paths.length ||
+      before.agentPaths.some((path, index) => path !== descriptor.exact_paths[index])
+    ) {
+      throw new GitLifecycleError(
+        GIT_DIRTY_FOREIGN,
+        "working tree does not match exact commit paths",
+      );
+    }
+
+    const declared = new Set(this.#declared);
+    if (descriptor.exact_paths.some((path) => !declared.has(path))) {
+      throw new GitLifecycleError(GIT_PATH_OUT_OF_SCOPE, "commit descriptor widens declared paths");
+    }
+    const filterConfig = await this.#safeFilterConfig(descriptor.exact_paths);
+    await input.beforeStage();
+    await git(
+      ["--literal-pathspecs", "add", "--", ...descriptor.exact_paths],
+      this.#worktree,
+      filterConfig,
+    );
+    const cached = await this.#cachedSnapshot("HEAD");
+    this.#assertCachedDescriptor(descriptor, cached);
+    // This MUST remain the final awaited operation before the commit syscall.
+    await input.beforeCommit();
+    await git(
+      ["commit", "--no-verify", "--no-gpg-sign", "-m", descriptor.message],
+      this.#worktree,
+      filterConfig,
+    );
+    const commitSha = await this.#revParse("HEAD");
+    return gitCommitReceipt.parse({
+      schema_version: 1,
+      scope: this.#scope,
+      branch_name: descriptor.branch_name,
+      commit_sha: commitSha,
+      parent_sha: descriptor.expected_parent_sha,
+      staged_paths: descriptor.exact_paths,
+      files_changed: cached.filesChanged,
+      insertions: cached.insertions,
+      deletions: cached.deletions,
+      verification: {
+        kind: "VERIFIED",
+        run_receipts: descriptor.accepted.map((pair) => pair.evidence_digest),
+        verdict: "PASSED",
+        evidence_tree_digest: descriptor.tree_digest,
+      },
+    });
+  }
+
+  /**
+   * Observe a candidate commit after STARTED. Never mutates Git. A null result is
+   * intentionally ambiguous: callers must not turn it into a retry.
+   */
+  public async observeEvidenceBoundCommit(
+    rawDescriptor: GitEvidenceBoundCommitDescriptor,
+  ): Promise<GitCommitReceipt | null> {
+    const descriptor = gitEvidenceBoundCommitDescriptor.parse(rawDescriptor);
+    if (
+      descriptor.case_id !== this.#scope.case_id ||
+      descriptor.workspace_id !== this.#scope.workspace_id ||
+      descriptor.repository_id !== this.#repositoryId
+    ) {
+      return null;
+    }
+    const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], this.#worktree)).stdout.trim();
+    const head = await this.#revParse("HEAD");
+    if (branch !== descriptor.branch_name || head === descriptor.expected_parent_sha) return null;
+    const parent = await this.#revParse("HEAD^");
+    if (parent !== descriptor.expected_parent_sha) return null;
+    const message = (
+      await git(["log", "-1", "--format=%B", "HEAD"], this.#worktree)
+    ).stdout.trimEnd();
+    if (message !== descriptor.message || !message.includes(descriptor.operation_marker))
+      return null;
+
+    // The recovered commit is not in the index by definition. Observe its exact
+    // parent delta using a temporary read-only query with the same representation.
+    const names = await git(
+      [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--name-only",
+        "-z",
+        descriptor.expected_parent_sha,
+        "HEAD",
+      ],
+      this.#worktree,
+    );
+    const patch = await git(
+      [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        descriptor.expected_parent_sha,
+        "HEAD",
+      ],
+      this.#worktree,
+    );
+    const stat = await git(
+      [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--numstat",
+        "-z",
+        descriptor.expected_parent_sha,
+        "HEAD",
+      ],
+      this.#worktree,
+    );
+    if (names.truncated || patch.truncated || stat.truncated) return null;
+    const paths = names.stdout.split("\0").filter(Boolean).sort();
+    if (
+      paths.length !== descriptor.exact_paths.length ||
+      paths.some((path, index) => path !== descriptor.exact_paths[index]) ||
+      canonicalDigest(patch.stdout) !== descriptor.raw_patch_digest
+    )
+      return null;
+    let filesChanged = 0;
+    let insertions = 0;
+    let deletions = 0;
+    for (const record of stat.stdout.split("\0")) {
+      const parts = record.split("\t");
+      if (parts.length < 3) continue;
+      filesChanged += 1;
+      insertions += Number.parseInt(parts[0] ?? "0", 10) || 0;
+      deletions += Number.parseInt(parts[1] ?? "0", 10) || 0;
+    }
+    return gitCommitReceipt.parse({
+      schema_version: 1,
+      scope: this.#scope,
+      branch_name: branch,
+      commit_sha: head,
+      parent_sha: parent,
+      staged_paths: descriptor.exact_paths,
+      files_changed: filesChanged,
+      insertions,
+      deletions,
+      verification: {
+        kind: "VERIFIED",
+        run_receipts: descriptor.accepted.map((pair) => pair.evidence_digest),
+        verdict: "PASSED",
+        evidence_tree_digest: descriptor.tree_digest,
+      },
     });
   }
 
@@ -608,7 +957,10 @@ export class GitLifecycle {
       await git(["rebase", newBaseSha], this.#worktree);
     } catch {
       // Collect the conflicts, then ABORT. No resolution is attempted here.
-      const conflicts = await git(["diff", "--name-only", "--diff-filter=U", "-z"], this.#worktree)
+      const conflicts = await git(
+        ["diff", "--no-ext-diff", "--no-textconv", "--name-only", "--diff-filter=U", "-z"],
+        this.#worktree,
+      )
         .then((result) => result.stdout.split("\0").filter((path) => path.length > 0))
         .catch(() => []);
       await git(["rebase", "--abort"], this.#worktree).catch(() => undefined);

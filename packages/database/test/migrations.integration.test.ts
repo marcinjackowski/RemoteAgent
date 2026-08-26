@@ -32,6 +32,16 @@ describeIntegration(
       expect(result.applied.length).toBeGreaterThan(0);
       const status = await migrationStatus(db);
       expect(status.every((s) => s.applied)).toBe(true);
+      const stageChecks = await db.query<{ definition: string }>(
+        `SELECT pg_get_constraintdef(oid) AS definition
+           FROM pg_constraint
+          WHERE conname IN (
+            'engineering_operations_stage_check',
+            'engineering_run_projections_current_stage_check')
+          ORDER BY conname`,
+      );
+      expect(stageChecks.rows).toHaveLength(2);
+      expect(stageChecks.rows.every((row) => row.definition.includes("LOCAL_COMMIT"))).toBe(true);
     });
 
     it("supports up/down/up returning to a fully-migrated state", async () => {

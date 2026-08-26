@@ -31,15 +31,17 @@
  *      try.
  */
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { canonicalDigest } from "@remoteagent/contracts";
 
 import {
   GIT_BRANCH_PROTECTED,
+  GIT_COMMAND_FAILED,
   GIT_DIRTY_FOREIGN,
   GIT_NOTHING_STAGED,
   GIT_OPERATION_FORBIDDEN,
@@ -50,6 +52,7 @@ import {
   GitRebaseOutcome,
   GitWorkingTreeState,
   assertPermitted,
+  gitEvidenceBoundCommitDescriptor,
   gitCommitReceipt,
   isProtectedBranch,
 } from "../src/index.js";
@@ -59,6 +62,7 @@ const execFileAsync = promisify(execFile);
 const scope: GitScope = { case_id: "case-git", workspace_id: "ws-git" };
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
+const DIGEST_ROLLUP = canonicalDigest([DIGEST]);
 
 /** Run git in a directory, for fixture setup and for reading state back. */
 async function raw(args: readonly string[], cwd: string): Promise<string> {
@@ -319,6 +323,203 @@ describe("git lifecycle", () => {
         gitCommitReceipt.parse({ ...base, verification: { kind: "SKIPPED" } }),
       ).toThrow();
     });
+
+    it("creates and read-only reconciles one exact evidence-bound commit", async () => {
+      const git = lifecycle(["src/app.ts"]);
+      const branch = await git.ensureBranch("work", baseSha);
+      await writeFile(join(worktree, "src", "app.ts"), "export const a = 77;\n");
+      const actual = await git.diff();
+      const descriptor = gitEvidenceBoundCommitDescriptor.parse({
+        schema_version: 1,
+        operation_id: "eng-op-commit-1",
+        case_id: scope.case_id,
+        work_unit_id: "unit-1",
+        workspace_id: scope.workspace_id,
+        repository_id: "repo-1",
+        run_id: "run-1",
+        checkpoint_revision: 0,
+        branch_name: branch.branch_name,
+        expected_parent_sha: baseSha,
+        exact_paths: ["src/app.ts"],
+        message: "feat: exact change\n\n[remoteagent-operation:eng-op-commit-1]",
+        operation_marker: "[remoteagent-operation:eng-op-commit-1]",
+        tree_digest: DIGEST,
+        actual_diff_digest: DIGEST,
+        raw_patch_digest: canonicalDigest(actual.patch),
+        accepted: [
+          { slice_id: "slice-1", attempt: 1, evidence_digest: DIGEST, review_digest: DIGEST },
+        ],
+        evidence_digest: DIGEST_ROLLUP,
+        review_digest: DIGEST_ROLLUP,
+        final_verification_digest: DIGEST,
+      });
+      const fences: string[] = [];
+      const receipt = await git.commitEvidenceBound({
+        descriptor,
+        beforeStage: async () => void fences.push("add"),
+        beforeCommit: async () => void fences.push("commit"),
+      });
+      expect(fences).toEqual(["add", "commit"]);
+      expect(receipt.parent_sha).toBe(baseSha);
+      expect(receipt.staged_paths).toEqual(["src/app.ts"]);
+      expect(await raw(["log", "-1", "--format=%B"], worktree)).toContain(
+        descriptor.operation_marker,
+      );
+      expect(await git.observeEvidenceBoundCommit(descriptor)).toEqual(receipt);
+      expect(await raw(["rev-list", "--count", `${baseSha}..HEAD`], worktree)).toBe("1");
+    });
+
+    it("stops on stale fences and refuses extra staged paths", async () => {
+      const git = lifecycle(["src/app.ts", "docs/readme.md"]);
+      const branch = await git.ensureBranch("work", baseSha);
+      await writeFile(join(worktree, "src", "app.ts"), "export const a = 88;\n");
+      const actual = await git.diff();
+      const descriptor = gitEvidenceBoundCommitDescriptor.parse({
+        schema_version: 1,
+        operation_id: "eng-op-commit-2",
+        case_id: scope.case_id,
+        work_unit_id: "unit-1",
+        workspace_id: scope.workspace_id,
+        repository_id: "repo-1",
+        run_id: "run-1",
+        checkpoint_revision: 0,
+        branch_name: branch.branch_name,
+        expected_parent_sha: baseSha,
+        exact_paths: ["src/app.ts"],
+        message: "feat: exact change\n\n[remoteagent-operation:eng-op-commit-2]",
+        operation_marker: "[remoteagent-operation:eng-op-commit-2]",
+        tree_digest: DIGEST,
+        actual_diff_digest: DIGEST,
+        raw_patch_digest: canonicalDigest(actual.patch),
+        accepted: [
+          { slice_id: "slice-1", attempt: 1, evidence_digest: DIGEST, review_digest: DIGEST },
+        ],
+        evidence_digest: DIGEST_ROLLUP,
+        review_digest: DIGEST_ROLLUP,
+        final_verification_digest: DIGEST,
+      });
+      await expect(
+        git.commitEvidenceBound({
+          descriptor,
+          beforeStage: async () => {
+            throw new Error("stale add fence");
+          },
+          beforeCommit: async () => undefined,
+        }),
+      ).rejects.toThrow(/stale add fence/);
+      expect(await raw(["diff", "--cached", "--name-only"], worktree)).toBe("");
+
+      await expect(
+        git.commitEvidenceBound({
+          descriptor,
+          beforeStage: async () => undefined,
+          beforeCommit: async () => {
+            throw new Error("stale commit fence");
+          },
+        }),
+      ).rejects.toThrow(/stale commit fence/);
+      expect(await raw(["rev-parse", "HEAD"], worktree)).toBe(baseSha);
+      await raw(["reset", "HEAD", "--", "src/app.ts"], worktree);
+
+      await writeFile(join(worktree, "docs", "readme.md"), "foreign staged\n");
+      await raw(["add", "docs/readme.md"], worktree);
+      await expectCodeAsync(
+        () =>
+          git.commitEvidenceBound({
+            descriptor,
+            beforeStage: async () => undefined,
+            beforeCommit: async () => undefined,
+          }),
+        GIT_DIRTY_FOREIGN,
+      );
+      expect(await raw(["rev-parse", "HEAD"], worktree)).toBe(baseSha);
+    });
+
+    it("ignores repository-controlled hooks, fsmonitor, filters, signing and diff executables", async () => {
+      const git = lifecycle(["src/app.ts"]);
+      const branch = await git.ensureBranch("work", baseSha);
+      const executableConfig = await mkdtemp(join(tmpdir(), "git-executable-config-"));
+      dirs.push(executableConfig);
+      const canary = join(executableConfig, "git-executable-config-ran");
+      const driver = join(executableConfig, "evil-driver.sh");
+      await writeFile(
+        driver,
+        `#!/bin/sh\ntouch '${canary}'\nif [ "$#" -gt 0 ]; then cat "$1"; else cat; fi\n`,
+      );
+      await chmod(driver, 0o700);
+      const hooks = join(executableConfig, "evil-hooks");
+      await mkdir(hooks);
+      await writeFile(join(hooks, "post-commit"), `#!/bin/sh\ntouch '${canary}'\n`);
+      await chmod(join(hooks, "post-commit"), 0o700);
+      await writeFile(
+        join(worktree, ".git", "info", "attributes"),
+        "src/app.ts filter=evil diff=evil\n",
+      );
+      await raw(["config", "core.hooksPath", hooks], worktree);
+      await raw(["config", "core.fsmonitor", driver], worktree);
+      await raw(["config", "filter.evil.clean", driver], worktree);
+      await raw(["config", "filter.evil.smudge", driver], worktree);
+      await raw(["config", "filter.evil.process", driver], worktree);
+      await raw(["config", "filter.evil.required", "true"], worktree);
+      await raw(["config", "commit.gpgSign", "true"], worktree);
+      await raw(["config", "diff.external", driver], worktree);
+      await raw(["config", "diff.evil.textconv", driver], worktree);
+      await writeFile(join(worktree, "src", "app.ts"), "export const a = 99;\n");
+      const actual = await git.diff();
+      const descriptor = gitEvidenceBoundCommitDescriptor.parse({
+        schema_version: 1,
+        operation_id: "eng-op-commit-config",
+        case_id: scope.case_id,
+        work_unit_id: "unit-1",
+        workspace_id: scope.workspace_id,
+        repository_id: "repo-1",
+        run_id: "run-1",
+        checkpoint_revision: 0,
+        branch_name: branch.branch_name,
+        expected_parent_sha: baseSha,
+        exact_paths: ["src/app.ts"],
+        message: "feat: safe config\n\n[remoteagent-operation:eng-op-commit-config]",
+        operation_marker: "[remoteagent-operation:eng-op-commit-config]",
+        tree_digest: DIGEST,
+        actual_diff_digest: DIGEST,
+        raw_patch_digest: canonicalDigest(actual.patch),
+        accepted: [
+          { slice_id: "slice-1", attempt: 1, evidence_digest: DIGEST, review_digest: DIGEST },
+        ],
+        evidence_digest: DIGEST_ROLLUP,
+        review_digest: DIGEST_ROLLUP,
+        final_verification_digest: DIGEST,
+      });
+      const receipt = await git.commitEvidenceBound({
+        descriptor,
+        beforeStage: async () => undefined,
+        beforeCommit: async () => undefined,
+      });
+      expect(await git.observeEvidenceBoundCommit(descriptor)).toEqual(receipt);
+      await expect(access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("fails closed on an unsupported target-controlled filter driver identity", async () => {
+      const git = lifecycle(["src/app.ts"]);
+      await git.ensureBranch("work", baseSha);
+      const executableConfig = await mkdtemp(join(tmpdir(), "git-weird-filter-"));
+      dirs.push(executableConfig);
+      const canary = join(executableConfig, "weird-filter-ran");
+      const driver = join(executableConfig, "weird-filter.sh");
+      await writeFile(driver, `#!/bin/sh\ntouch '${canary}'\ncat\n`);
+      await chmod(driver, 0o700);
+      await writeFile(
+        join(worktree, ".git", "info", "attributes"),
+        "src/app.ts filter=evil/slash\n",
+      );
+      await raw(["config", "filter.evil/slash.clean", driver], worktree);
+      await raw(["config", "filter.evil/slash.process", driver], worktree);
+      await writeFile(join(worktree, "src", "app.ts"), "export const a = 100;\n");
+      await expectCodeAsync(() => git.diff(), GIT_COMMAND_FAILED);
+      expect(await raw(["rev-parse", "HEAD"], worktree)).toBe(baseSha);
+      expect(await raw(["diff", "--cached", "--name-only"], worktree)).toBe("");
+      await expect(access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   describe("AC5: dirty user changes are detected and never silently overwritten", () => {
@@ -507,6 +708,8 @@ describe("git lifecycle", () => {
         ["fetch", "origin"],
         ["cherry-pick", "abc"],
         ["revert", "abc"],
+        ["log", "--ext-diff", "HEAD"],
+        ["check-attr", "-a", "--", "src/app.ts"],
       ]) {
         try {
           assertPermitted(argv);
@@ -578,6 +781,30 @@ describe("git lifecycle", () => {
       expect(report.filesChanged).toBe(1);
       expect(report.insertions).toBeGreaterThan(0);
       expect(report.patch).toContain("export const b");
+    });
+
+    it("ignores target-controlled home config and external diff drivers", async () => {
+      const homeCanary = join(worktree, "home-config-ran");
+      const localCanary = join(worktree, "local-diff-ran");
+      const homeDriver = join(worktree, "home-driver.sh");
+      const localDriver = join(worktree, "local-driver.sh");
+      await writeFile(homeDriver, `#!/bin/sh\ntouch '${homeCanary}'\nexit 0\n`);
+      await writeFile(localDriver, `#!/bin/sh\ntouch '${localCanary}'\nexit 0\n`);
+      await chmod(homeDriver, 0o700);
+      await chmod(localDriver, 0o700);
+      await writeFile(join(worktree, ".gitconfig"), `[diff]\n\texternal = ${homeDriver}\n`);
+      await raw(["config", "diff.external", localDriver], worktree);
+      await writeFile(join(worktree, "src", "app.ts"), "export const a = 99;\n");
+
+      const report = await lifecycle([
+        "src/app.ts",
+        ".gitconfig",
+        "home-driver.sh",
+        "local-driver.sh",
+      ]).diff();
+      expect(report.patch).toContain("export const a = 99");
+      await expect(access(homeCanary)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(localCanary)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
     it("shares no exported name with the packages it builds on", async () => {

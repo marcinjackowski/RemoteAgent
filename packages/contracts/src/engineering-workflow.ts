@@ -29,6 +29,7 @@ export const EngineeringStage = {
   SLICE_REVIEW: "SLICE_REVIEW",
   MEMORY_PROJECTION: "MEMORY_PROJECTION",
   FINAL_VERIFICATION: "FINAL_VERIFICATION",
+  LOCAL_COMMIT: "LOCAL_COMMIT",
 } as const;
 export type EngineeringStage = (typeof EngineeringStage)[keyof typeof EngineeringStage];
 export const engineeringStage = z.enum([
@@ -43,6 +44,7 @@ export const engineeringStage = z.enum([
   EngineeringStage.SLICE_REVIEW,
   EngineeringStage.MEMORY_PROJECTION,
   EngineeringStage.FINAL_VERIFICATION,
+  EngineeringStage.LOCAL_COMMIT,
 ]);
 
 const binding = { case_id: idString, run_id: idString, revision: z.int().nonnegative() };
@@ -90,7 +92,16 @@ const programDesignShape = {
   slice_order: z.array(idString).min(1).max(256),
   source_digest: sha256Digest,
 };
-export const engineeringProgramDesign = versionedContract(programDesignShape);
+export const engineeringProgramDesign = versionedContract(programDesignShape).superRefine(
+  (design, ctx) => {
+    if (new Set(design.slice_order).size !== design.slice_order.length)
+      ctx.addIssue({
+        code: "custom",
+        path: ["slice_order"],
+        message: "slice_order must contain unique slice identities",
+      });
+  },
+);
 
 const gateId = z
   .string()
@@ -191,6 +202,79 @@ export const engineeringEvidenceBundle = versionedContract({
       }),
     )
     .max(256),
+});
+
+const baselineWorkspaceReference = valueObject({
+  baseline_id: z.string().regex(/^slice-baseline-[0-9a-f]{64}$/u),
+  tree_digest: sha256Digest,
+});
+
+/**
+ * The only durable handoff from a model-driven implementation attempt.
+ *
+ * Host paths, patch bytes and the model-authored report are deliberately absent.
+ * Every field is reconstructed and observed by server code after the model has
+ * returned and before a later gate/review/commit stage may consume it.
+ */
+export const engineeringSliceImplementationReceipt = versionedContract({
+  artifact_kind: z.literal("SliceImplementationReceipt"),
+  ...artifactBase,
+  authority: z.literal("SERVER_OWNED"),
+  receipt_id: idString,
+  work_unit_id: idString,
+  slice_id: idString,
+  attempt: z.int().positive(),
+  workspace_id: idString,
+  repository_id: idString,
+  base_sha: z.string().regex(/^[0-9a-f]{40}$/u),
+  branch: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u)
+    .refine(
+      (value) =>
+        !value.includes("..") &&
+        !value.includes("//") &&
+        !value.endsWith("/") &&
+        !value.endsWith(".lock"),
+      "must be a canonical bounded branch name",
+    ),
+  baseline: baselineWorkspaceReference,
+  tree_digest: sha256Digest,
+  diff_digest: sha256Digest,
+  raw_patch_digest: sha256Digest,
+  changed_paths: z.array(relativeRepositoryPath).max(512),
+  cumulative_paths: z.array(relativeRepositoryPath).max(512),
+  files_changed: z.int().nonnegative(),
+  insertions: z.int().nonnegative(),
+  deletions: z.int().nonnegative(),
+  tool_receipt_digests: digestList.min(1),
+}).superRefine((receipt, ctx) => {
+  const uniqueSorted = (values: readonly string[]) =>
+    new Set(values).size === values.length &&
+    values.every((value, index) => index === 0 || values[index - 1]! < value);
+  if (!uniqueSorted(receipt.changed_paths))
+    ctx.addIssue({ code: "custom", path: ["changed_paths"], message: "must be unique and sorted" });
+  if (!uniqueSorted(receipt.cumulative_paths))
+    ctx.addIssue({
+      code: "custom",
+      path: ["cumulative_paths"],
+      message: "must be unique and sorted",
+    });
+  const cumulative = new Set(receipt.cumulative_paths);
+  if (receipt.changed_paths.some((path) => !cumulative.has(path)))
+    ctx.addIssue({
+      code: "custom",
+      path: ["changed_paths"],
+      message: "changed paths must be included in cumulative paths",
+    });
+  if (receipt.files_changed !== receipt.cumulative_paths.length)
+    ctx.addIssue({
+      code: "custom",
+      path: ["files_changed"],
+      message: "must equal the cumulative observed Git diff file count",
+    });
 });
 
 export const engineeringPhase = versionedContract({
@@ -299,6 +383,32 @@ export const engineeringVerificationDecision = versionedContract({
       message: "INCONCLUSIVE requires an inconclusive criterion and no failed criterion",
     });
 });
+export const engineeringLocalCommitReceipt = versionedContract({
+  artifact_kind: z.literal("LocalCommitReceipt"),
+  ...artifactBase,
+  authority: z.literal("SERVER_OWNED"),
+  receipt_id: idString,
+  branch: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
+    .refine(
+      (value) =>
+        !value.includes("..") &&
+        !value.includes("//") &&
+        !value.endsWith("/") &&
+        !value.endsWith(".lock"),
+      "must be a canonical bounded branch name",
+    ),
+  commit_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  parent_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  tree_digest: sha256Digest,
+  diff_digest: sha256Digest,
+  evidence_digest: sha256Digest,
+  review_digest: sha256Digest,
+  verification_decision_digest: sha256Digest,
+});
 export const engineeringTerminalReason = versionedContract({
   artifact_kind: z.literal("TerminalReason"),
   ...artifactBase,
@@ -321,10 +431,14 @@ export type EngineeringProgramDesign = z.infer<typeof engineeringProgramDesign>;
 export type EngineeringSliceContract = z.infer<typeof engineeringSliceContract>;
 export type EngineeringContextManifest = z.infer<typeof engineeringContextManifest>;
 export type EngineeringEvidenceBundle = z.infer<typeof engineeringEvidenceBundle>;
+export type EngineeringSliceImplementationReceipt = z.infer<
+  typeof engineeringSliceImplementationReceipt
+>;
 export type EngineeringMemoryUpdate = z.infer<typeof engineeringMemoryUpdate>;
 export type EngineeringDesignDecision = z.infer<typeof engineeringDesignDecision>;
 export type EngineeringReviewDecision = z.infer<typeof engineeringReviewDecision>;
 export type EngineeringVerificationDecision = z.infer<typeof engineeringVerificationDecision>;
+export type EngineeringLocalCommitReceipt = z.infer<typeof engineeringLocalCommitReceipt>;
 export type EngineeringTerminalReason = z.infer<typeof engineeringTerminalReason>;
 
 export const engineeringArtifact = z.discriminatedUnion("artifact_kind", [
@@ -334,11 +448,13 @@ export const engineeringArtifact = z.discriminatedUnion("artifact_kind", [
   engineeringProgramDesign,
   engineeringSliceContract,
   engineeringContextManifest,
+  engineeringSliceImplementationReceipt,
   engineeringEvidenceBundle,
   engineeringMemoryUpdate,
   engineeringDesignDecision,
   engineeringReviewDecision,
   engineeringVerificationDecision,
+  engineeringLocalCommitReceipt,
   engineeringTerminalReason,
 ]);
 export type EngineeringArtifact = z.infer<typeof engineeringArtifact>;

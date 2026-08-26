@@ -144,6 +144,17 @@ export const engineeringContextSourcePolicy: Readonly<
     "DIFF_EXCERPT",
     "LOG_EXCERPT",
   ),
+  [EngineeringStage.LOCAL_COMMIT]: sourceTypes(
+    ...baseSources,
+    "PROGRAM_DESIGN",
+    "SLICE_CONTRACT",
+    "EVIDENCE_BUNDLE",
+    "REVIEW_DECISION",
+    "VERIFICATION_DECISION",
+    "REPOSITORY_STATE",
+    "DIFF_EXCERPT",
+    "TOOL_RECEIPT",
+  ),
 });
 
 /** Compatibility mapping into the existing packet renderer/selector. */

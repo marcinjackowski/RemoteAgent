@@ -51,9 +51,13 @@ import { createRoles, roleConfigFromEnv } from "./roles.js";
 import { createEngineeringRoleContextReader } from "./context.js";
 import {
   createBedrockEngineeringStageExecutor,
-  createPostgresEngineeringRuntimePort,
+  createBedrockPreCommitReviewSessionFactory,
   engineeringAuthorizationFromLease,
 } from "./engineering-workflow.js";
+import {
+  createProductionEngineeringRuntimePort,
+  engineeringExecutionConfigFromEnv,
+} from "./engineering-execution.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -324,6 +328,11 @@ export async function main(): Promise<void> {
     transport,
     config: modelConfig,
   });
+  const engineeringExecutionConfig = await engineeringExecutionConfigFromEnv();
+  const preCommitReview = createBedrockPreCommitReviewSessionFactory({
+    transport,
+    config: modelConfig,
+  });
   const handlers = createWorkerHandlers(
     {
       persistence,
@@ -338,13 +347,22 @@ export async function main(): Promise<void> {
       db,
       jobs,
       engineering: (lease) => {
+        if (engineeringExecutionConfig === null) {
+          throw new Error(
+            "engineering execution is not configured: RA_ENGINEERING_CONFIG_PATH is required",
+          );
+        }
         const authorization = engineeringAuthorizationFromLease(lease);
-        return createPostgresEngineeringRuntimePort({
+        return createProductionEngineeringRuntimePort({
           db,
           lease,
           jobs,
+          config: engineeringExecutionConfig,
+          transport,
+          modelConfig,
           readContext,
-          executor: engineeringExecutor,
+          stageExecutor: engineeringExecutor,
+          reviewSessionFactory: preCommitReview.createSession,
           metrics,
           policy: {
             // Conservative deployment default. No model output can downgrade this class, and the

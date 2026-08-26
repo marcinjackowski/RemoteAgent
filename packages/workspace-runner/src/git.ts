@@ -11,8 +11,47 @@ export type GitRepository = Readonly<{
 }>;
 
 async function runGit(args: readonly string[], cwd?: string): Promise<string> {
-  const result = await execFileAsync("git", [...args], { cwd, maxBuffer: 1024 * 1024 });
+  const result = await execFileAsync("git", [...args], {
+    cwd,
+    maxBuffer: 1024 * 1024,
+    env: {
+      PATH: process.env.PATH,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  });
   return result.stdout.trim();
+}
+
+const canonicalBranch = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/u;
+
+/** Resolve server-owned branch config once to an immutable commit before workspace creation. */
+export async function resolveBaseBranch(
+  repository: GitRepository,
+  baseBranch: string,
+): Promise<string> {
+  if (
+    !canonicalBranch.test(baseBranch) ||
+    baseBranch.includes("..") ||
+    baseBranch.includes("//") ||
+    baseBranch.endsWith("/") ||
+    baseBranch.endsWith(".lock")
+  ) {
+    throw new Error("baseBranch must be a canonical bounded branch name");
+  }
+  const resolved = await runGit([
+    "-C",
+    repository.sourcePath,
+    "rev-parse",
+    "--verify",
+    `refs/heads/${baseBranch}^{commit}`,
+  ]);
+  if (!/^[0-9a-f]{40}$/u.test(resolved)) {
+    throw new Error("baseBranch did not resolve to an exact commit SHA");
+  }
+  return resolved;
 }
 
 export async function ensureMirror(repository: GitRepository): Promise<void> {

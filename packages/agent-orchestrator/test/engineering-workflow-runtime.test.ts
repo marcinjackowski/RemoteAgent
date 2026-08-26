@@ -134,6 +134,7 @@ class MemoryRuntimeStore implements RuntimePersistence {
 
 class MemoryStagePort implements EngineeringRuntimePort {
   public readonly calls: string[] = [];
+  public readonly bindings: EngineeringStageBinding[] = [];
   public readonly started: string[] = [];
   public readonly recovered = new Map<string, EngineeringRecoveredStage>();
   public terminalStage: string | null = null;
@@ -178,6 +179,7 @@ class MemoryStagePort implements EngineeringRuntimePort {
     binding: EngineeringStageBinding;
   }): Promise<EngineeringStageCallResult> {
     this.calls.push(input.binding.stage);
+    this.bindings.push(input.binding);
     if (this.terminalStage === input.binding.stage) {
       return this.terminalStatus === "WAITING_FOR_USER"
         ? {
@@ -213,6 +215,28 @@ function stageEvidence(stage: string) {
       sliceRevision: index,
       failedGateIds: [],
       unresolvedFindingIds: [],
+    },
+    slice: {
+      activeSliceId:
+        Object.values(EngineeringStage).indexOf(stage as never) >=
+        Object.values(EngineeringStage).indexOf(EngineeringStage.SLICE_PLANNING)
+          ? "slice-1"
+          : null,
+      expectedSliceId: "slice-1",
+      completedSliceIds:
+        stage === EngineeringStage.SLICE_REVIEW ||
+        stage === EngineeringStage.MEMORY_PROJECTION ||
+        stage === EngineeringStage.FINAL_VERIFICATION ||
+        stage === EngineeringStage.LOCAL_COMMIT
+          ? ["slice-1"]
+          : [],
+      directive:
+        stage === EngineeringStage.SLICE_REVIEW ||
+        stage === EngineeringStage.MEMORY_PROJECTION ||
+        stage === EngineeringStage.FINAL_VERIFICATION ||
+        stage === EngineeringStage.LOCAL_COMMIT
+          ? ("COMPLETE" as const)
+          : ("CONTINUE" as const),
     },
     ...(stage === EngineeringStage.DESIGN_APPROVAL
       ? {
@@ -382,6 +406,187 @@ describe("SupervisorRuntime engineering stage driver", () => {
     await runtime(modelStore, modelPort).pumpOnce();
     expect(modelPort.calls).toEqual([EngineeringStage.DISCOVERY]);
     expect(modelStore.state.completion?.summary).toContain("CALL_LIMIT_EXHAUSTED");
+  });
+
+  it("executes two slices in ProgramDesign order before verification and local commit", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("MEDIUM");
+    const original = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await original(input);
+      if (result.status !== "COMPLETED") return result;
+      const second = input.binding.attempt === 2;
+      const activeSliceId = second ? "slice-2" : "slice-1";
+      const afterReview =
+        input.binding.stage === EngineeringStage.SLICE_REVIEW ||
+        input.binding.stage === EngineeringStage.MEMORY_PROJECTION ||
+        input.binding.stage === EngineeringStage.FINAL_VERIFICATION ||
+        input.binding.stage === EngineeringStage.LOCAL_COMMIT;
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          slice: {
+            activeSliceId,
+            expectedSliceId: afterReview && !second ? "slice-2" : activeSliceId,
+            completedSliceIds: afterReview
+              ? second
+                ? ["slice-1", "slice-2"]
+                : ["slice-1"]
+              : second
+                ? ["slice-1"]
+                : [],
+            directive: afterReview ? (second ? "COMPLETE" : "NEXT_SLICE") : "CONTINUE",
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+    expect(
+      port.bindings
+        .filter((binding) => binding.stage === EngineeringStage.SLICE_PLANNING)
+        .map((binding) => binding.attempt),
+    ).toEqual([1, 2]);
+    expect(port.calls.slice(-2)).toEqual([
+      EngineeringStage.FINAL_VERIFICATION,
+      EngineeringStage.LOCAL_COMMIT,
+    ]);
+    expect(store.state.completion?.status).toBe("COMPLETED");
+  });
+
+  it("corrects the same slice at attempt >1 without replaying slice planning", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const original = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await original(input);
+      if (result.status !== "COMPLETED") return result;
+      const reviewBoundary =
+        input.binding.stage === EngineeringStage.SLICE_REVIEW ||
+        input.binding.stage === EngineeringStage.MEMORY_PROJECTION ||
+        input.binding.stage === EngineeringStage.FINAL_VERIFICATION ||
+        input.binding.stage === EngineeringStage.LOCAL_COMMIT;
+      const correction =
+        input.binding.stage === EngineeringStage.SLICE_REVIEW && input.binding.attempt === 1;
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: reviewBoundary && !correction ? ["slice-1"] : [],
+            directive: correction ? "CORRECT_SLICE" : reviewBoundary ? "COMPLETE" : "CONTINUE",
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+    expect(
+      port.bindings
+        .filter((binding) => binding.stage === EngineeringStage.SLICE_PLANNING)
+        .map((binding) => binding.attempt),
+    ).toEqual([1]);
+    expect(
+      port.bindings
+        .filter((binding) => binding.stage === EngineeringStage.SLICE_IMPLEMENTATION)
+        .map((binding) => binding.attempt),
+    ).toEqual([1, 2]);
+    expect(store.state.completion?.status).toBe("COMPLETED");
+  });
+
+  it("stops a correction before another write stage can change slice identity", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const original = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await original(input);
+      if (result.status !== "COMPLETED") return result;
+      if (input.binding.stage === EngineeringStage.SLICE_REVIEW && input.binding.attempt === 1) {
+        return {
+          ...result,
+          evidence: {
+            ...result.evidence,
+            slice: {
+              activeSliceId: "slice-1",
+              expectedSliceId: "slice-1",
+              completedSliceIds: [],
+              directive: "CORRECT_SLICE",
+            },
+          },
+        };
+      }
+      if (
+        input.binding.stage === EngineeringStage.SLICE_IMPLEMENTATION &&
+        input.binding.attempt === 2
+      ) {
+        return {
+          ...result,
+          evidence: {
+            ...result.evidence,
+            slice: {
+              activeSliceId: "slice-2",
+              expectedSliceId: "slice-2",
+              completedSliceIds: [],
+              directive: "CONTINUE",
+            },
+          },
+        };
+      }
+      return result;
+    };
+
+    await runtime(store, port).pumpOnce();
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      summary: expect.stringContaining("SLICE_BLOCKED"),
+    });
+    expect(
+      port.bindings.some(
+        (binding) => binding.stage === EngineeringStage.GATE_EXECUTION && binding.attempt === 2,
+      ),
+    ).toBe(false);
+    expect(port.calls).not.toContain(EngineeringStage.LOCAL_COMMIT);
+  });
+
+  it("stops a server-derived BLOCKED review before memory, verification or commit", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const original = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await original(input);
+      if (result.status !== "COMPLETED" || input.binding.stage !== EngineeringStage.SLICE_REVIEW)
+        return result;
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: [],
+            directive: "STOP",
+          },
+        },
+      };
+    };
+    await runtime(store, port).pumpOnce();
+    expect(store.state.completion).toMatchObject({ status: "BLOCKED" });
+    expect(port.calls).not.toContain(EngineeringStage.MEMORY_PROJECTION);
+    expect(port.calls).not.toContain(EngineeringStage.LOCAL_COMMIT);
+  });
+
+  it("never reaches local commit when final verification is terminal", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    port.terminalStage = EngineeringStage.FINAL_VERIFICATION;
+    port.terminalStatus = "TERMINAL";
+    await runtime(store, port).pumpOnce();
+    expect(port.calls).toContain(EngineeringStage.FINAL_VERIFICATION);
+    expect(port.calls).not.toContain(EngineeringStage.LOCAL_COMMIT);
+    expect(store.state.completion?.status).toBe("BLOCKED");
   });
 });
 

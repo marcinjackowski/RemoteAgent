@@ -19,3 +19,4 @@
 export * from "./contracts.js";
 export * from "./reviewer.js";
 export * from "./loop.js";
+export * from "./pre-commit.js";

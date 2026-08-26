@@ -3,14 +3,19 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { LocalWorkspaceAdapter } from "../src/index.js";
+import { LocalWorkspaceAdapter, resolveBaseBranch } from "../src/index.js";
 import { InMemoryWorkspaceRegistry } from "../src/index.js";
 
 const run = promisify(execFile);
 const roots: string[] = [];
 const fenceValidator = { assertCurrent: async () => undefined };
 
-async function fixtureRepo(): Promise<{ parent: string; source: string; baseSha: string }> {
+async function fixtureRepo(): Promise<{
+  parent: string;
+  source: string;
+  baseSha: string;
+  baseBranch: string;
+}> {
   const parent = await mkdtemp(join("/tmp", "workspace-runner-git-"));
   const source = join(parent, "source");
   const sandbox = join(parent, "sandbox");
@@ -23,8 +28,9 @@ async function fixtureRepo(): Promise<{ parent: string; source: string; baseSha:
   await run("git", ["-C", source, "add", "README.md"]);
   await run("git", ["-C", source, "commit", "--quiet", "-m", "base"]);
   const { stdout } = await run("git", ["-C", source, "rev-parse", "HEAD"]);
+  const branch = await run("git", ["-C", source, "symbolic-ref", "--short", "HEAD"]);
   roots.push(parent);
-  return { parent, source, baseSha: stdout.trim() };
+  return { parent, source, baseSha: stdout.trim(), baseBranch: branch.stdout.trim() };
 }
 
 afterEach(async () => {
@@ -32,6 +38,18 @@ afterEach(async () => {
 });
 
 describe("local worktree adapter", () => {
+  it("pins a server-owned base branch to one exact source commit without creating a mirror", async () => {
+    const { parent, source, baseSha, baseBranch } = await fixtureRepo();
+    const mirrorPath = join(parent, "not-created-by-resolution.git");
+    await expect(resolveBaseBranch({ sourcePath: source, mirrorPath }, baseBranch)).resolves.toBe(
+      baseSha,
+    );
+    await expect(readFile(mirrorPath)).rejects.toThrow();
+    await expect(
+      resolveBaseBranch({ sourcePath: source, mirrorPath }, "../hostile"),
+    ).rejects.toThrow(/canonical bounded branch/);
+  });
+
   it("creates two isolated worktrees at the explicit base SHA", async () => {
     const { parent, source, baseSha } = await fixtureRepo();
     const adapter = new LocalWorkspaceAdapter({

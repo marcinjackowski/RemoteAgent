@@ -7,12 +7,14 @@ import {
   engineeringDesignDecision,
   engineeringEvidenceBundle,
   engineeringMemoryUpdate,
+  engineeringLocalCommitReceipt,
   engineeringMinimumProcessClass,
   engineeringPhase,
   engineeringOutcomeContract,
   engineeringProgramDesign,
   engineeringReviewDecision,
   engineeringSliceContract,
+  engineeringSliceImplementationReceipt,
   engineeringSystemDesign,
   engineeringTerminalReason,
   engineeringVerificationDecision,
@@ -155,6 +157,36 @@ describe("engineering workflow contracts", () => {
         },
       },
       {
+        name: "SliceImplementationReceipt",
+        schema: engineeringSliceImplementationReceipt,
+        payload: {
+          ...binding,
+          artifact_kind: "SliceImplementationReceipt",
+          authority: "SERVER_OWNED",
+          receipt_id: "implementation-receipt",
+          work_unit_id: "work-unit",
+          slice_id: "slice",
+          attempt: 1,
+          workspace_id: "workspace",
+          repository_id: "repo",
+          base_sha: "a".repeat(40),
+          branch: "remoteagent/workspace",
+          baseline: {
+            baseline_id: `slice-baseline-${"b".repeat(64)}`,
+            tree_digest: digest,
+          },
+          tree_digest: digest,
+          diff_digest: digest,
+          raw_patch_digest: digest,
+          changed_paths: ["src/a.ts"],
+          cumulative_paths: ["src/a.ts"],
+          files_changed: 1,
+          insertions: 1,
+          deletions: 0,
+          tool_receipt_digests: [digest],
+        },
+      },
+      {
         name: "MemoryUpdate",
         schema: engineeringMemoryUpdate,
         payload: {
@@ -205,6 +237,24 @@ describe("engineering workflow contracts", () => {
         },
       },
       {
+        name: "LocalCommitReceipt",
+        schema: engineeringLocalCommitReceipt,
+        payload: {
+          ...binding,
+          artifact_kind: "LocalCommitReceipt",
+          authority: "SERVER_OWNED",
+          receipt_id: "commit-receipt",
+          branch: "remoteagent/case-1",
+          commit_sha: "a".repeat(40),
+          parent_sha: "b".repeat(40),
+          tree_digest: digest,
+          diff_digest: digest,
+          evidence_digest: digest,
+          review_digest: digest,
+          verification_decision_digest: digest,
+        },
+      },
+      {
         name: "TerminalReason",
         schema: engineeringTerminalReason,
         payload: {
@@ -231,6 +281,42 @@ describe("engineering workflow contracts", () => {
     }
   });
 
+  it("keeps local commit evidence strict and server-owned", () => {
+    const receipt = {
+      schema_version: 1,
+      artifact_kind: "LocalCommitReceipt",
+      case_id: "c",
+      run_id: "r",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      receipt_id: "receipt-1",
+      branch: "remoteagent/case-1",
+      commit_sha: "a".repeat(40),
+      parent_sha: "b".repeat(40),
+      tree_digest: digest,
+      diff_digest: digest,
+      evidence_digest: digest,
+      review_digest: digest,
+      verification_decision_digest: digest,
+    };
+    expect(engineeringLocalCommitReceipt.safeParse(receipt).success).toBe(true);
+    const withoutReviewDigest: Partial<typeof receipt> = { ...receipt };
+    delete withoutReviewDigest.review_digest;
+    expect(engineeringLocalCommitReceipt.safeParse(withoutReviewDigest).success).toBe(false);
+    expect(
+      engineeringLocalCommitReceipt.safeParse({ ...receipt, authority: "MODEL" }).success,
+    ).toBe(false);
+    expect(
+      engineeringLocalCommitReceipt.safeParse({ ...receipt, commit_sha: "not-a-sha" }).success,
+    ).toBe(false);
+    expect(
+      engineeringLocalCommitReceipt.safeParse({ ...receipt, commit_sha: "a".repeat(64) }).success,
+    ).toBe(false);
+    expect(
+      engineeringLocalCommitReceipt.safeParse({ ...receipt, branch: "../escape" }).success,
+    ).toBe(false);
+  });
+
   it("requires every program-design planning dimension and is strict", () => {
     expect(engineeringProgramDesign.safeParse(program).success).toBe(true);
     expect(engineeringProgramDesign.safeParse({ ...program, unexpected: true }).success).toBe(
@@ -242,6 +328,10 @@ describe("engineering workflow contracts", () => {
     expect(engineeringProgramDesign.safeParse({ ...program, uncertainty_review: [] }).success).toBe(
       false,
     );
+    expect(
+      engineeringProgramDesign.safeParse({ ...program, slice_order: ["slice-1", "slice-1"] })
+        .success,
+    ).toBe(false);
   });
 
   it("keeps slices to gates and an observable result, never a raw command", () => {

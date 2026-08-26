@@ -60,9 +60,13 @@ import type { ImplementationWriteTools } from "./patch.js";
 import { createImplementationReadTools } from "./read-tools.js";
 import type { ImplementationReadTools } from "./read-tools.js";
 import type { OperationLedgerRepository } from "./ledger.js";
+import * as z from "zod";
+import { workspaceRelativePath } from "./contracts.js";
 
 /** The path is protected by toolset policy; no lower layer was consulted. */
 export const TOOLSET_PATH_PROTECTED = "PATH_PROTECTED";
+/** The requested mutation is outside the server-owned SliceContract roots. */
+export const TOOLSET_PATH_OUTSIDE_ALLOWED = "PATH_OUTSIDE_ALLOWED";
 
 /**
  * Path segments that are protected wherever they appear in the tree.
@@ -449,5 +453,273 @@ export async function createImplementationToolset(
           ? { operation_id: input.operation_id, command: input.command }
           : { operation_id: input.operation_id, command: input.command, signal: input.signal },
       ),
+  });
+}
+
+/** Model-visible implementation surface for one accepted vertical slice. */
+export type BoundedImplementationToolset = Readonly<{
+  read(input: Readonly<{ relative_path: string }>): Promise<ImplementationToolResult>;
+  search(input: Readonly<{ query: string }>): Promise<ImplementationToolResult>;
+  tree(input: Readonly<{ relative_path?: string }>): Promise<ImplementationToolResult>;
+  config(input: Readonly<{ relative_path: string }>): Promise<ImplementationToolResult>;
+  write(
+    input: Readonly<{
+      relative_path: string;
+      content: string;
+      expected_before_digest?: string | null;
+    }>,
+  ): Promise<ImplementationToolResult>;
+  patch(
+    input: Readonly<{
+      files: readonly Readonly<{ relative_path: string; content: string }>[];
+      expected_before_digest?: string | null;
+    }>,
+  ): Promise<ImplementationToolResult>;
+  mkdir(
+    input: Readonly<{ relative_path: string; recursive?: boolean }>,
+  ): Promise<ImplementationToolResult>;
+}>;
+
+export type BoundedImplementationToolName =
+  "read" | "search" | "tree" | "config" | "write" | "patch" | "mkdir";
+
+export type BoundedImplementationToolsetOptions = Omit<
+  ImplementationToolsetOptions,
+  "artifactRoot" | "catalogue" | "knownSecrets" | "log" | "network"
+> &
+  Readonly<{
+    allowedPaths: readonly string[];
+    /** Required server authority, awaited immediately before every mutation syscall. */
+    beforeMutation(): Promise<void>;
+    operationIdFor(tool: BoundedImplementationToolName, sequence: number): string;
+    onResult?: (result: ImplementationToolResult) => void;
+  }>;
+
+const boundedRead = z.strictObject({ relative_path: workspaceRelativePath });
+const boundedSearch = z.strictObject({ query: z.string().max(4096) });
+const boundedTree = z.strictObject({ relative_path: workspaceRelativePath.optional() });
+const boundedWrite = z.strictObject({
+  relative_path: workspaceRelativePath,
+  content: z.string(),
+  expected_before_digest: z.string().nullable().optional(),
+});
+const boundedPatch = z.strictObject({
+  files: z
+    .array(z.strictObject({ relative_path: workspaceRelativePath, content: z.string() }))
+    .min(1),
+  expected_before_digest: z.string().nullable().optional(),
+});
+const boundedMkdir = z.strictObject({
+  relative_path: workspaceRelativePath,
+  recursive: z.boolean().optional(),
+});
+
+/**
+ * Narrow the general implementation toolset to one SliceContract. The caller
+ * never supplies an operation id, scope, root, command name or fence. Mutation
+ * paths match an allowed root exactly or as its slash-delimited descendant.
+ */
+export async function createBoundedImplementationToolset(
+  options: BoundedImplementationToolsetOptions,
+): Promise<BoundedImplementationToolset> {
+  const allowed = Object.freeze(
+    [...new Set(options.allowedPaths.map((path) => workspaceRelativePath.parse(path)))].sort(),
+  );
+  if (allowed.length === 0) throw new Error("at least one server-owned allowed path is required");
+
+  const reads = await createImplementationReadTools({
+    root: options.root,
+    identity: options.identity,
+  });
+  const writes = await createImplementationWriteTools({
+    root: options.root,
+    identity: options.identity,
+    ledger: options.ledger,
+    runTransaction: options.runTransaction,
+    beforeMutation: async () => options.beforeMutation(),
+  });
+  const mkdir = await createImplementationMkdirTool({
+    root: options.root,
+    identity: options.identity,
+    ledger: options.ledger,
+    runTransaction: options.runTransaction,
+    beforeMutation: options.beforeMutation,
+  });
+  let sequence = 0;
+  let ambiguous = false;
+
+  const nextId = (tool: BoundedImplementationToolName): string => {
+    if (ambiguous) throw new Error("AMBIGUOUS implementation operation requires reconciliation");
+    const id = options.operationIdFor(tool, sequence);
+    sequence += 1;
+    if (typeof id !== "string" || id.trim().length === 0 || id.length > 512) {
+      throw new Error("server-owned operation id is invalid");
+    }
+    return id;
+  };
+  const observe = (result: ImplementationToolResult): ImplementationToolResult => {
+    options.onResult?.(result);
+    if (result.outcome === ToolOutcome.AMBIGUOUS) ambiguous = true;
+    return result;
+  };
+  const isAllowed = (path: string): boolean =>
+    allowed.some((root) => path === root || path.startsWith(`${root}/`));
+  const protectedResult = (
+    tool: string,
+    kind: ToolKind,
+    operationId: string,
+    paths: readonly string[],
+  ): ImplementationToolResult | null =>
+    paths.some((path) => isProtectedPath(path))
+      ? refuseProtected(tool, kind, options.identity, operationId)
+      : null;
+  const refuseOutside = (
+    tool: string,
+    kind: ToolKind,
+    operationId: string,
+  ): ImplementationToolResult => {
+    const value = canonicalJsonStringify({
+      tool,
+      refused: true,
+      failure_code: TOOLSET_PATH_OUTSIDE_ALLOWED,
+    });
+    return implementationToolResult.parse({
+      schema_version: 1,
+      operation_id: operationId,
+      identity: options.identity,
+      kind,
+      outcome: ToolOutcome.FAILED,
+      before_digest: null,
+      after_digest: null,
+      changed_files: [],
+      failure_code: TOOLSET_PATH_OUTSIDE_ALLOWED,
+      output: {
+        trust: TrustLevel.UNTRUSTED_DATA,
+        value,
+        truncated: false,
+        original_byte_length: encoder.encode(value).length,
+      },
+    });
+  };
+
+  return Object.freeze({
+    read: async (raw) => {
+      const input = boundedRead.parse(raw);
+      const operationId = nextId("read");
+      return observe(
+        protectedResult("read", ToolKind.READ_FILE, operationId, [input.relative_path]) ??
+          (await reads.read({ operation_id: operationId, relative_path: input.relative_path })),
+      );
+    },
+    search: async (raw) => {
+      const input = boundedSearch.parse(raw);
+      return observe(
+        filterResultPaths(
+          await reads.search({ operation_id: nextId("search"), query: input.query }),
+        ),
+      );
+    },
+    tree: async (raw) => {
+      const input = boundedTree.parse(raw);
+      const operation_id = nextId("tree");
+      const denied = protectedResult(
+        "tree",
+        ToolKind.LIST_FILES,
+        operation_id,
+        input.relative_path === undefined ? [] : [input.relative_path],
+      );
+      if (denied !== null) return observe(denied);
+      return observe(
+        filterResultPaths(
+          await reads.tree(
+            input.relative_path === undefined
+              ? { operation_id }
+              : { operation_id, relative_path: input.relative_path },
+          ),
+        ),
+      );
+    },
+    config: async (raw) => {
+      const input = boundedRead.parse(raw);
+      const operationId = nextId("config");
+      return observe(
+        protectedResult("config", ToolKind.READ_FILE, operationId, [input.relative_path]) ??
+          (await reads.config({ operation_id: operationId, relative_path: input.relative_path })),
+      );
+    },
+    write: async (raw) => {
+      const input = boundedWrite.parse(raw);
+      const operationId = nextId("write");
+      if (!isAllowed(input.relative_path)) {
+        return observe(refuseOutside("write", ToolKind.WRITE_FILE, operationId));
+      }
+      const denied = protectedResult("write", ToolKind.WRITE_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (denied !== null) return observe(denied);
+      return observe(
+        await writes.write(
+          input.expected_before_digest === undefined
+            ? {
+                operation_id: operationId,
+                relative_path: input.relative_path,
+                content: input.content,
+              }
+            : {
+                operation_id: operationId,
+                relative_path: input.relative_path,
+                content: input.content,
+                expected_before_digest: input.expected_before_digest,
+              },
+        ),
+      );
+    },
+    patch: async (raw) => {
+      const input = boundedPatch.parse(raw);
+      const operationId = nextId("patch");
+      if (input.files.some((file) => !isAllowed(file.relative_path))) {
+        return observe(refuseOutside("patch", ToolKind.APPLY_PATCH, operationId));
+      }
+      const denied = protectedResult(
+        "patch",
+        ToolKind.APPLY_PATCH,
+        operationId,
+        input.files.map((file) => file.relative_path),
+      );
+      if (denied !== null) return observe(denied);
+      return observe(
+        await writes.patch(
+          input.expected_before_digest === undefined
+            ? { operation_id: operationId, files: input.files }
+            : {
+                operation_id: operationId,
+                files: input.files,
+                expected_before_digest: input.expected_before_digest,
+              },
+        ),
+      );
+    },
+    mkdir: async (raw) => {
+      const input = boundedMkdir.parse(raw);
+      const operationId = nextId("mkdir");
+      if (!isAllowed(input.relative_path)) {
+        return observe(refuseOutside("mkdir", ToolKind.WRITE_FILE, operationId));
+      }
+      const denied = protectedResult("mkdir", ToolKind.WRITE_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (denied !== null) return observe(denied);
+      return observe(
+        await mkdir.run(
+          input.recursive === undefined
+            ? { operation_id: operationId, relative_path: input.relative_path }
+            : {
+                operation_id: operationId,
+                relative_path: input.relative_path,
+                recursive: input.recursive,
+              },
+        ),
+      );
+    },
   });
 }

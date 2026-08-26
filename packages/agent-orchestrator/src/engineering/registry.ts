@@ -75,20 +75,24 @@ export const engineeringStageRegistry = Object.freeze({
   [EngineeringStage.SLICE_IMPLEMENTATION]: Object.freeze({
     role: AgentRole.IMPLEMENTER,
     input_artifacts: artifacts("EngineeringContextManifest", "EngineeringSliceContract"),
-    output_artifacts: artifacts(),
+    output_artifacts: artifacts("EngineeringSliceImplementationReceipt"),
     completion_contract: null,
     workspace_access: "WRITE",
   }),
   [EngineeringStage.GATE_EXECUTION]: Object.freeze({
     role: AgentRole.VERIFICATION,
-    input_artifacts: artifacts("EngineeringSliceContract"),
+    input_artifacts: artifacts("EngineeringSliceContract", "EngineeringSliceImplementationReceipt"),
     output_artifacts: artifacts("EngineeringEvidenceBundle"),
     completion_contract: null,
     workspace_access: readOnly,
   }),
   [EngineeringStage.SLICE_REVIEW]: Object.freeze({
     role: AgentRole.REVIEWER,
-    input_artifacts: artifacts("EngineeringSliceContract", "EngineeringEvidenceBundle"),
+    input_artifacts: artifacts(
+      "EngineeringSliceContract",
+      "EngineeringSliceImplementationReceipt",
+      "EngineeringEvidenceBundle",
+    ),
     output_artifacts: artifacts("EngineeringReviewDecision"),
     completion_contract: "EngineeringReviewDecision",
     workspace_access: readOnly,
@@ -107,6 +111,17 @@ export const engineeringStageRegistry = Object.freeze({
     completion_contract: "EngineeringVerificationDecision",
     workspace_access: readOnly,
   }),
+  [EngineeringStage.LOCAL_COMMIT]: Object.freeze({
+    role: AgentRole.IMPLEMENTER,
+    input_artifacts: artifacts(
+      "EngineeringEvidenceBundle",
+      "EngineeringReviewDecision",
+      "EngineeringVerificationDecision",
+    ),
+    output_artifacts: artifacts("EngineeringLocalCommitReceipt"),
+    completion_contract: null,
+    workspace_access: "WRITE",
+  }),
 } satisfies Record<EngineeringStage, EngineeringStageDefinition>);
 
 export type EngineeringProcessGraph = Readonly<{
@@ -123,7 +138,10 @@ const sliceLoopStages = Object.freeze([
   EngineeringStage.MEMORY_PROJECTION,
 ]);
 
-const completionStages = Object.freeze([EngineeringStage.FINAL_VERIFICATION]);
+const completionStages = Object.freeze([
+  EngineeringStage.FINAL_VERIFICATION,
+  EngineeringStage.LOCAL_COMMIT,
+]);
 
 /** Risk-proportional blueprints interpreted by the existing SupervisorRuntime. */
 export const engineeringProcessGraphs: Readonly<

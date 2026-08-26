@@ -142,6 +142,28 @@ describeIntegration(
     });
 
     describe("criterion 1: creation is confined to the workspace scope", () => {
+      it("awaits the server writer fence immediately before mkdir", async () => {
+        let checks = 0;
+        const guarded = await createImplementationMkdirTool({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          beforeMutation: async () => {
+            checks += 1;
+            throw new Error("stale fence");
+          },
+        });
+        const result = await guarded.run({
+          operation_id: "op-mkdir-fence",
+          relative_path: "guarded",
+        });
+
+        expect(checks).toBe(1);
+        expect(result.outcome).toBe(ToolOutcome.FAILED);
+        expect(await exists(join(root, "guarded"))).toBe(false);
+      });
+
       it("creates a directory inside the scope and reports it", async () => {
         const created = await (await tool()).run({ operation_id: "op-ok", relative_path: "build" });
 

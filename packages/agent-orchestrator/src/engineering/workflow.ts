@@ -310,7 +310,19 @@ export type EngineeringStageBinding = Readonly<{
 
 export type EngineeringStageEvidence = Readonly<{
   structuralState: EngineeringStructuralState;
+  slice: EngineeringSliceLoopState;
   approval?: Parameters<typeof evaluateEngineeringApproval>[0];
+}>;
+
+export type EngineeringSliceDirective =
+  "CONTINUE" | "NEXT_SLICE" | "CORRECT_SLICE" | "COMPLETE" | "STOP";
+
+/** Server-derived projection of ordered durable artifacts; model text never selects a transition. */
+export type EngineeringSliceLoopState = Readonly<{
+  activeSliceId: string | null;
+  expectedSliceId: string | null;
+  completedSliceIds: readonly string[];
+  directive: EngineeringSliceDirective;
 }>;
 
 export type EngineeringRecoveredStage =
@@ -331,7 +343,8 @@ export type EngineeringRuntimeStopCode =
   | "CALL_LIMIT_EXHAUSTED"
   | "NO_PROGRESS"
   | "OSCILLATION"
-  | "APPROVAL_BLOCKED";
+  | "APPROVAL_BLOCKED"
+  | "SLICE_BLOCKED";
 
 export type EngineeringRuntimeSession = Readonly<{
   plan: EngineeringWorkflowPlan;

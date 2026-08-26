@@ -22,6 +22,12 @@
     "@remoteagent/contracts": "workspace:*",
     "@remoteagent/database": "workspace:*",
     "@remoteagent/discord": "workspace:*",
-    "@remoteagent/observability": "workspace:*"
+    "@remoteagent/implementation-tools": "workspace:*",
+    "@remoteagent/git-lifecycle": "workspace:*",
+    "@remoteagent/observability": "workspace:*",
+    "@remoteagent/review-loop": "workspace:*",
+    "@remoteagent/test-evidence": "workspace:*",
+    "@remoteagent/workspace-runner": "workspace:*",
+    "zod": "4.4.3"
   }
 }

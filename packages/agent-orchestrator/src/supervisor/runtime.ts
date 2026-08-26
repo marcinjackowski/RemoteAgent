@@ -683,9 +683,16 @@ export class SupervisorRuntime {
       if (disposition === "CONTINUE") return undefined;
       return stop(disposition, `engineering workflow stopped: ${disposition}`);
     };
+    let loopState: EngineeringStageEvidence["slice"] = {
+      activeSliceId: null,
+      expectedSliceId: null,
+      completedSliceIds: [],
+      directive: "CONTINUE",
+    };
     const acceptEvidence = async (
       stage: import("@remoteagent/contracts").EngineeringStage,
       evidence: EngineeringStageEvidence,
+      alreadyCounted: boolean,
     ): Promise<unknown | undefined> => {
       if (stage === EngineeringStage.DESIGN_APPROVAL) {
         if (evidence.approval === undefined)
@@ -694,27 +701,36 @@ export class SupervisorRuntime {
         if (approval.disposition !== "APPROVED")
           return stop("APPROVAL_BLOCKED", approval.reasons.join(","));
       }
-      fingerprints.push(engineeringStructuralFingerprint(evidence.structuralState));
+      loopState = evidence.slice;
+      if (!alreadyCounted)
+        fingerprints.push(engineeringStructuralFingerprint(evidence.structuralState));
       return undefined;
     };
 
-    for (const stage of session.plan.stages) {
+    type StageResult =
+      | Readonly<{ kind: "COMPLETED"; evidence: EngineeringStageEvidence }>
+      | Readonly<{ kind: "RETURN"; completion: unknown }>
+      | Readonly<{ kind: "AMBIGUOUS" }>;
+    const runStage = async (
+      stage: import("@remoteagent/contracts").EngineeringStage,
+      attempt: number,
+    ): Promise<StageResult> => {
       const stopped = await stopForProgress();
-      if (stopped !== undefined) return stopped;
+      if (stopped !== undefined) return { kind: "RETURN", completion: stopped };
       const binding = {
         caseId: state.workUnit.case_id,
         workUnitId: state.workUnit.work_unit_id,
         runId: state.run.runId,
         checkpointRevision: state.run.checkpointRevision,
         stage,
-        attempt: 1,
+        attempt,
       } as const;
       const recovered = await port.recoverStage(binding);
-      if (recovered.status === "AMBIGUOUS") return null;
+      if (recovered.status === "AMBIGUOUS") return { kind: "AMBIGUOUS" };
       if (recovered.status === "RECOVERED") {
-        const terminal = await acceptEvidence(stage, recovered.evidence);
-        if (terminal !== undefined) return terminal;
-        continue;
+        const terminal = await acceptEvidence(stage, recovered.evidence, true);
+        if (terminal !== undefined) return { kind: "RETURN", completion: terminal };
+        return { kind: "COMPLETED", evidence: recovered.evidence };
       }
       await writerFence.assertCurrent();
       const context = await port.prepareContext(binding);
@@ -732,14 +748,80 @@ export class SupervisorRuntime {
         modelCalls += result.modelCalls;
         await writerFence.assertCurrent();
         if (result.status === "WAITING_FOR_USER" || result.status === "TERMINAL")
-          return result.completion;
-        const terminal = await acceptEvidence(stage, result.evidence);
-        if (terminal !== undefined) return terminal;
+          return { kind: "RETURN", completion: result.completion };
+        const terminal = await acceptEvidence(stage, result.evidence, false);
+        if (terminal !== undefined) return { kind: "RETURN", completion: terminal };
+        return { kind: "COMPLETED", evidence: result.evidence };
       } catch {
         // commitStarted may have committed even when the caller observed an error. Recovery must
         // inspect the durable operation instead of replaying a possibly mutating/model effect.
-        return null;
+        return { kind: "AMBIGUOUS" };
       }
+    };
+    const unwrap = (result: StageResult): unknown | null | undefined =>
+      result.kind === "RETURN" ? result.completion : result.kind === "AMBIGUOUS" ? null : undefined;
+
+    for (const stage of session.plan.graph.design_stages) {
+      const result = await runStage(stage, 1);
+      const terminal = unwrap(result);
+      if (terminal !== undefined) return terminal;
+    }
+
+    let cycleAttempt = 1;
+    let correcting = false;
+    let activeSliceId: string | null = null;
+    while (true) {
+      if (!correcting) {
+        const planned = await runStage(EngineeringStage.SLICE_PLANNING, cycleAttempt);
+        const terminal = unwrap(planned);
+        if (terminal !== undefined) return terminal;
+        if (loopState.directive === "STOP" || loopState.activeSliceId === null)
+          return stop("SLICE_BLOCKED", "slice planning did not yield an allowed active slice");
+        if (
+          loopState.expectedSliceId !== null &&
+          loopState.activeSliceId !== loopState.expectedSliceId
+        )
+          return stop("SLICE_BLOCKED", "slice planning changed the server-selected slice identity");
+        activeSliceId = loopState.activeSliceId;
+      }
+
+      for (const stage of [
+        EngineeringStage.SLICE_IMPLEMENTATION,
+        EngineeringStage.GATE_EXECUTION,
+        EngineeringStage.SLICE_REVIEW,
+      ] as const) {
+        const result = await runStage(stage, cycleAttempt);
+        const terminal = unwrap(result);
+        if (terminal !== undefined) return terminal;
+        if (loopState.activeSliceId !== activeSliceId)
+          return stop("SLICE_BLOCKED", "slice identity changed during an active slice attempt");
+      }
+
+      if (loopState.directive === "STOP")
+        return stop("SLICE_BLOCKED", "slice review blocked the workflow");
+      if (loopState.directive === "CORRECT_SLICE") {
+        cycleAttempt += 1;
+        correcting = true;
+        continue;
+      }
+      if (loopState.directive !== "NEXT_SLICE" && loopState.directive !== "COMPLETE")
+        return stop("SLICE_BLOCKED", "slice review did not yield a terminal server directive");
+
+      const memory = await runStage(EngineeringStage.MEMORY_PROJECTION, cycleAttempt);
+      const memoryTerminal = unwrap(memory);
+      if (memoryTerminal !== undefined) return memoryTerminal;
+      if (loopState.directive === "NEXT_SLICE") {
+        cycleAttempt += 1;
+        correcting = false;
+        continue;
+      }
+      break;
+    }
+
+    for (const stage of session.plan.graph.completion_stages) {
+      const result = await runStage(stage, 1);
+      const terminal = unwrap(result);
+      if (terminal !== undefined) return terminal;
     }
     return stop("COMPLETED", "all required engineering stages completed");
   }

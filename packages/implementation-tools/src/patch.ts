@@ -212,6 +212,12 @@ export type ImplementationWriteToolsOptions = Readonly<{
    * run while a pooled connection is held open.
    */
   runTransaction: <T>(fn: (tx: Transaction) => Promise<T>) => Promise<T>;
+  /**
+   * Server-owned writer fence, re-checked after all preflight/observer work and
+   * immediately before every filesystem mutation. A rejection before the first
+   * syscall is a clean FAILED; a rejection between files is AMBIGUOUS.
+   */
+  beforeMutation?: (event: ImplementationWriteProgress) => Promise<void>;
   observer?: ImplementationWriteObserver;
 }>;
 
@@ -377,6 +383,7 @@ async function digestOrNull(root: VerifiedWorkspacePath): Promise<string | null>
 async function performWrites(
   root: VerifiedWorkspacePath,
   plan: WritePlan,
+  beforeMutation: ImplementationWriteToolsOptions["beforeMutation"],
   observer: ImplementationWriteObserver | undefined,
   diagnostics: Diagnostics,
 ): Promise<OperationReceipt> {
@@ -389,6 +396,7 @@ async function performWrites(
         relative_path: file.relativePath,
       };
       await observer?.beforeFile?.(event);
+      await beforeMutation?.(event);
       // Pessimistic by construction: the path counts as possibly-changed BEFORE
       // the syscall that could change it, never after it returns.
       touched.push(file.relativePath);
@@ -602,7 +610,7 @@ export async function createImplementationWriteTools(
 ): Promise<ImplementationWriteTools> {
   const policy = await createWorkspacePathPolicy(options.root);
   const root = policy.root;
-  const { identity, ledger, runTransaction, observer } = options;
+  const { identity, ledger, runTransaction, beforeMutation, observer } = options;
 
   const apply = async (
     tool: ImplementationWriteToolName,
@@ -657,7 +665,7 @@ export async function createImplementationWriteTools(
         beforeDigest: plan.beforeDigest,
         changedFiles: plan.paths,
       },
-      async () => performWrites(root, plan, observer, diagnostics),
+      async () => performWrites(root, plan, beforeMutation, observer, diagnostics),
     );
     return envelope(
       tool,

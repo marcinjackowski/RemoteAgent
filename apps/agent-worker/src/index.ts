@@ -5,3 +5,7 @@
  * Domain logic is intentionally out of scope and arrives in later tasks.
  */
 export const appName = "agent-worker" as const;
+
+export * from "./workspace-config.js";
+export * from "./vertical-slice-executor.js";
+export * from "./engineering-execution.js";

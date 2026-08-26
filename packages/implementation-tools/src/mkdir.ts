@@ -132,6 +132,8 @@ export type ImplementationMkdirToolOptions = Readonly<{
   identity: ToolIdentity;
   ledger: OperationLedgerRepository;
   runTransaction: <T>(fn: (tx: Transaction) => Promise<T>) => Promise<T>;
+  /** Server-owned writer fence, awaited immediately before the mkdir syscall. */
+  beforeMutation?: () => Promise<void>;
 }>;
 
 export type ImplementationMkdirInput = Readonly<{
@@ -392,6 +394,7 @@ async function performMkdir(
   recursive: boolean,
   beforeDigest: string,
   diagnostics: { errorCode: string | null },
+  beforeMutation: ImplementationMkdirToolOptions["beforeMutation"],
 ): Promise<OperationReceipt> {
   if (missing.length === 0) {
     // Already present. Nothing is written, so the pre-state IS the post-state
@@ -401,6 +404,7 @@ async function performMkdir(
   }
 
   try {
+    await beforeMutation?.();
     await fsMkdir(target, { recursive, mode: 0o700 });
   } catch (error) {
     diagnostics.errorCode = failureCode(error);
@@ -535,7 +539,16 @@ export async function createImplementationMkdirTool(
         beforeDigest,
         changedFiles: missing,
       },
-      async () => performMkdir(root, target, missing, recursive, beforeDigest, diagnostics),
+      async () =>
+        performMkdir(
+          root,
+          target,
+          missing,
+          recursive,
+          beforeDigest,
+          diagnostics,
+          options.beforeMutation,
+        ),
     );
     return envelope(
       identity,

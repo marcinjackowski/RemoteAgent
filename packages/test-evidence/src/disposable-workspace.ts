@@ -70,9 +70,16 @@ function slash(path: string): string {
   return path.split(sep).join("/");
 }
 
-async function assertSafeTreeSymlinks(root: string, current = root): Promise<void> {
+/** Internal copy-boundary primitive shared by durable pre-slice baselines. */
+export async function assertSafeVerificationTree(root: string, current = root): Promise<void> {
   for (const entry of await readdir(current, { withFileTypes: true })) {
-    if (entry.name === ".git") continue;
+    if (entry.name === ".git") {
+      if (current === root) continue;
+      throw new DisposableWorkspaceError(
+        DisposableWorkspaceErrorCode.UNSAFE_TREE_SYMLINK,
+        `Nested repository control edge is forbidden: ${slash(relative(root, join(current, entry.name)))}`,
+      );
+    }
     const entryPath = join(current, entry.name);
     const stat = await lstat(entryPath);
     if (stat.isSymbolicLink()) {
@@ -91,12 +98,16 @@ async function assertSafeTreeSymlinks(root: string, current = root): Promise<voi
         );
       }
     } else if (stat.isDirectory()) {
-      await assertSafeTreeSymlinks(root, entryPath);
+      await assertSafeVerificationTree(root, entryPath);
     }
   }
 }
 
-async function assertNoGitEdges(root: string, current = root): Promise<void> {
+/** A verification copy is data only; repository control edges never cross the boundary. */
+export async function assertVerificationTreeHasNoGitEdges(
+  root: string,
+  current = root,
+): Promise<void> {
   for (const entry of await readdir(current, { withFileTypes: true })) {
     if (entry.name === ".git") {
       throw new DisposableWorkspaceError(
@@ -104,7 +115,8 @@ async function assertNoGitEdges(root: string, current = root): Promise<void> {
         `Disposable copy retained a .git edge: ${slash(relative(root, join(current, entry.name)))}`,
       );
     }
-    if (entry.isDirectory()) await assertNoGitEdges(root, join(current, entry.name));
+    if (entry.isDirectory())
+      await assertVerificationTreeHasNoGitEdges(root, join(current, entry.name));
   }
 }
 
@@ -279,7 +291,8 @@ async function assertMutableBoundary(
   }
 }
 
-async function cleanup(parent: string): Promise<void> {
+/** Remove an ephemeral verification tree without an unbounded shutdown wait. */
+export async function cleanupVerificationTree(parent: string): Promise<void> {
   const deletion = rm(parent, { recursive: true, force: true });
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
@@ -316,7 +329,7 @@ export async function runInDisposableWorkspace<T>(
   run: (disposableRoot: string) => Promise<T>,
 ): Promise<DisposableWorkspaceRunResult<T>> {
   const authoritativeRoot = await validateWorkspaceRoot(options.authoritativeRoot);
-  await assertSafeTreeSymlinks(authoritativeRoot);
+  await assertSafeVerificationTree(authoritativeRoot);
   const authoritativeTreeDigestBefore = await computeTreeDigest(authoritativeRoot);
   const parent = await mkdtemp(join(tmpdir(), "remoteagent-verification-"));
   const disposableRoot = join(parent, "workspace");
@@ -334,9 +347,9 @@ export async function runInDisposableWorkspace<T>(
     // Re-check both sides after copying. A symlink swapped after the initial
     // preflight must not become a trusted edge merely because its link text was
     // copied byte-for-byte and therefore produced a matching tree digest.
-    await assertSafeTreeSymlinks(authoritativeRoot);
-    await assertNoGitEdges(verifiedDisposableRoot);
-    await assertSafeTreeSymlinks(verifiedDisposableRoot);
+    await assertSafeVerificationTree(authoritativeRoot);
+    await assertVerificationTreeHasNoGitEdges(verifiedDisposableRoot);
+    await assertSafeVerificationTree(verifiedDisposableRoot);
     const disposableTreeDigestBefore = await computeTreeDigest(verifiedDisposableRoot);
     const authorityAfterCopy = await computeTreeDigest(authoritativeRoot);
     if (
@@ -404,6 +417,6 @@ export async function runInDisposableWorkspace<T>(
       },
     };
   } finally {
-    await cleanup(parent);
+    await cleanupVerificationTree(parent);
   }
 }

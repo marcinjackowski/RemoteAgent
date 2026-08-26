@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 
 import { Database } from "../src/client.js";
 import { EngineeringControlStateError } from "../src/errors.js";
+import { migrateDown, migrationStatus } from "../src/migrate.js";
 import {
   CaseRepository,
   CheckpointRepository,
@@ -602,6 +603,28 @@ describeIntegration(
       await expect(
         controlPlane.bindOperationIntent(db, stale, operationInput("stale-op")),
       ).rejects.toBeInstanceOf(StaleFencingTokenError);
+    });
+
+    it("binds LOCAL_COMMIT as an explicit mutating operation with attempt > 1 available", async () => {
+      await prepareRepositoryPath();
+      const operation = await controlPlane.bindOperationIntent(
+        db,
+        lease,
+        operationInput("local-commit-operation", {
+          stage: "LOCAL_COMMIT",
+          stageAttempt: 2,
+          operationKind: "engineering.stage.local_commit",
+          effectClass: "MUTATING_SIDE_EFFECT",
+          descriptor: { verified: true },
+        }),
+      );
+      expect(operation).toMatchObject({
+        stage: "LOCAL_COMMIT",
+        stage_attempt: 2,
+        effect_class: "MUTATING_SIDE_EFFECT",
+      });
+      await expect(migrateDown(db)).rejects.toThrow(/LOCAL_COMMIT rows exist/);
+      expect((await migrationStatus(db)).at(-1)).toMatchObject({ version: 35, applied: true });
     });
 
     it("rolls back the job intent when operation binding is fault-injected", async () => {

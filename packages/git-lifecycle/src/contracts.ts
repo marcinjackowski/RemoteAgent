@@ -26,7 +26,13 @@
  * response differs: the agent's own edits are what it is here to commit, whereas a
  * user's uncommitted work must stop the operation rather than be staged into it.
  */
-import { idString, sha256Digest, valueObject, versionedContract } from "@remoteagent/contracts";
+import {
+  canonicalDigest,
+  idString,
+  sha256Digest,
+  valueObject,
+  versionedContract,
+} from "@remoteagent/contracts";
 import * as z from "zod";
 
 /** Upper bound on paths one commit may stage. */
@@ -214,6 +220,104 @@ export const gitCommitReceipt = versionedContract({
 });
 
 export type GitCommitReceipt = z.infer<typeof gitCommitReceipt>;
+
+const exactCommitPath = z
+  .string()
+  .min(1)
+  .max(1024)
+  .refine(
+    (path) =>
+      !path.startsWith("/") && !path.includes("\\0") && !path.split(/[/\\\\]+/u).includes(".."),
+    "path must be workspace-relative",
+  );
+
+/** One accepted slice pair, retained in durable execution order. */
+export const gitAcceptedEvidenceReview = valueObject({
+  slice_id: idString,
+  attempt: z.int().positive(),
+  evidence_digest: sha256Digest,
+  review_digest: sha256Digest,
+});
+
+/**
+ * Immutable, server-owned input for the one LOCAL_COMMIT side effect.
+ *
+ * This complete value is persisted in `job_intents.descriptor` before STARTED.
+ * Recovery may therefore inspect Git against the same facts without rebuilding
+ * intent from mutable process state.
+ */
+export const gitEvidenceBoundCommitDescriptor = versionedContract({
+  operation_id: idString,
+  case_id: idString,
+  work_unit_id: idString,
+  workspace_id: idString,
+  repository_id: idString,
+  run_id: idString,
+  checkpoint_revision: z.int().nonnegative(),
+  branch_name: gitBranchName,
+  expected_parent_sha: gitCommitSha,
+  exact_paths: z.array(exactCommitPath).min(1).max(MAX_STAGED_PATHS),
+  message: z.string().min(1).max(4096),
+  operation_marker: z.string().min(1).max(512),
+  tree_digest: sha256Digest,
+  actual_diff_digest: sha256Digest,
+  raw_patch_digest: sha256Digest,
+  accepted: z.array(gitAcceptedEvidenceReview).min(1).max(128),
+  evidence_digest: sha256Digest,
+  review_digest: sha256Digest,
+  final_verification_digest: sha256Digest,
+}).superRefine((descriptor, ctx) => {
+  const sorted = [...descriptor.exact_paths].sort();
+  if (
+    new Set(descriptor.exact_paths).size !== descriptor.exact_paths.length ||
+    descriptor.exact_paths.some((path, index) => path !== sorted[index])
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["exact_paths"],
+      message: "paths must be unique and sorted",
+    });
+  }
+  if (!descriptor.message.includes(descriptor.operation_marker)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["message"],
+      message: "message must contain operation marker",
+    });
+  }
+  const expectedMarker = `[remoteagent-operation:${descriptor.operation_id}]`;
+  if (
+    descriptor.operation_marker !== expectedMarker ||
+    !descriptor.message.endsWith(`\n\n${expectedMarker}`) ||
+    descriptor.message !== descriptor.message.trimEnd()
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["operation_marker"],
+      message: "operation marker and canonical message trailer must match operation_id",
+    });
+  }
+  if (
+    new Set(descriptor.accepted.map((pair) => `${pair.slice_id}\0${String(pair.attempt)}`)).size !==
+    descriptor.accepted.length
+  ) {
+    ctx.addIssue({ code: "custom", path: ["accepted"], message: "accepted pairs must be unique" });
+  }
+  if (
+    descriptor.evidence_digest !==
+      canonicalDigest(descriptor.accepted.map((pair) => pair.evidence_digest)) ||
+    descriptor.review_digest !==
+      canonicalDigest(descriptor.accepted.map((pair) => pair.review_digest))
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["accepted"],
+      message: "accepted evidence and review rollups must match their ordered pairs",
+    });
+  }
+});
+
+export type GitEvidenceBoundCommitDescriptor = z.infer<typeof gitEvidenceBoundCommitDescriptor>;
 
 /**
  * Outcome of a controlled rebase.
