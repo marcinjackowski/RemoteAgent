@@ -6,6 +6,7 @@ import {
   decodeInteraction,
   encodeApproval,
   encodeDecision,
+  encodeEngineeringProposal,
 } from "../src/custom-id.js";
 
 describe("custom-id (decision/approval button binding)", () => {
@@ -52,6 +53,22 @@ describe("custom-id (decision/approval button binding)", () => {
     });
   });
 
+  it("uses a distinct engineering proposal kind bound to proposal/revision/choice", () => {
+    const customId = encodeEngineeringProposal({
+      proposalId: "proposal-9",
+      checkpointRevision: 3,
+      choice: "grant",
+    });
+    expect(customId).toBe("v1:engineering:proposal-9:3:grant");
+    expect(decodeInteraction(customId)).toEqual({
+      kind: "engineering",
+      proposalId: "proposal-9",
+      checkpointRevision: 3,
+      choice: "grant",
+    });
+    expect(decodeInteraction(customId)).not.toMatchObject({ kind: "approval" });
+  });
+
   it("rejects a foreign or tampered custom_id fail-closed (returns null)", () => {
     expect(decodeInteraction("random")).toBeNull();
     expect(decodeInteraction("v2:decision:dec:1:opt")).toBeNull(); // wrong version
@@ -59,6 +76,7 @@ describe("custom-id (decision/approval button binding)", () => {
     expect(decodeInteraction("v1:decision:dec:1.5:opt")).toBeNull(); // non-integer
     expect(decodeInteraction("v1:decision::1:opt")).toBeNull(); // empty id
     expect(decodeInteraction("v1:approval:ap:1:maybe")).toBeNull(); // bad choice
+    expect(decodeInteraction("v1:engineering:proposal:1:maybe")).toBeNull();
     expect(decodeInteraction("v1:other:x:1:y")).toBeNull(); // unknown kind
   });
 

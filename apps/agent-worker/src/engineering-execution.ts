@@ -10,12 +10,14 @@ import {
   engineeringSliceImplementationReceipt,
   assertEngineeringPathsWithinWriteAllowlist,
   normalizeEngineeringWritePathAllowlist,
+  engineeringWriteDeploymentPolicyFromExecutionConfigV2,
   relativeRepositoryPath,
   EngineeringStage,
   type EngineeringArtifact,
   type EngineeringEvidenceBundle,
   type EngineeringSliceContract,
   type EngineeringSliceImplementationReceipt,
+  type EngineeringWriteDeploymentPolicyV1,
 } from "@remoteagent/contracts";
 import {
   defineStructuredContract,
@@ -101,6 +103,7 @@ export type EngineeringExecutionConfig = Readonly<{
   baselineRoot: string;
   artifactRoot: string;
   writePathAllowlist: readonly string[];
+  writeDeploymentPolicy: EngineeringWriteDeploymentPolicyV1;
   catalog: VerificationGateCatalog;
   configDigest: string;
 }>;
@@ -154,6 +157,7 @@ export async function loadEngineeringExecutionConfig(
   const canonicalPath = await realpath(path);
   if (canonicalPath !== path) throw new Error("RA_ENGINEERING_CONFIG_PATH must be canonical");
   const decoded: unknown = JSON.parse(await readFile(canonicalPath, "utf8"));
+  const writeDeploymentPolicy = engineeringWriteDeploymentPolicyFromExecutionConfigV2(decoded);
   const root = exactRecord(
     decoded,
     [
@@ -206,7 +210,7 @@ export async function loadEngineeringExecutionConfig(
   });
   const baseBranch = nonEmptyString(repository.base_branch, "base_branch");
   const writePathAllowlist = normalizeEngineeringWritePathAllowlist(
-    repository.write_path_allowlist,
+    writeDeploymentPolicy.write_path_allowlist,
   );
   const workspaceConfig: WorkspaceConfig = Object.freeze({
     workspaceRoot,
@@ -220,6 +224,7 @@ export async function loadEngineeringExecutionConfig(
     baselineRoot,
     artifactRoot,
     writePathAllowlist,
+    writeDeploymentPolicy,
     catalog,
     configDigest: canonicalDigest({
       schema_version: 2,
@@ -896,8 +901,7 @@ export function createProductionEngineeringRuntimePort(input: {
     gateExecutor: execution.gateExecutor,
     reviewExecutor: execution.reviewExecutor,
     localCommitExecutor: execution.localCommitExecutor,
-    requiredRepositoryId: input.config.repositoryId,
-    writePathAllowlist: input.config.writePathAllowlist,
+    writeDeploymentPolicy: input.config.writeDeploymentPolicy,
     policy: input.policy,
     ...(input.controlPlane === undefined ? {} : { controlPlane: input.controlPlane }),
     ...(input.workflowDeadlineMs === undefined

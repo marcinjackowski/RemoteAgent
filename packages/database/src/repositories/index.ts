@@ -25,3 +25,4 @@ export * from "./approval.js";
 export * from "./external-action.js";
 export * from "./engineering-control-plane.js";
 export * from "./engineering-context.js";
+export * from "./engineering-approval-ingress.js";

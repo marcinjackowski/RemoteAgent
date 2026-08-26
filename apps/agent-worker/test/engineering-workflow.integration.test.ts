@@ -4,7 +4,8 @@ import {
   engineeringArtifact,
   engineeringArtifactDigest,
   engineeringContextManifest,
-  engineeringWriteAuthorizationScopeDigest,
+  engineeringWriteAuthorizationScopeV2Digest,
+  engineeringWriteDeploymentPolicyV1Digest,
   EngineeringStage,
   TrustLevel,
   canonicalDigest,
@@ -18,6 +19,7 @@ import {
   ApprovalRepository,
   EngineeringControlPlaneRepository,
   JobStore,
+  OutboxRepository,
   OwnerRepository,
   WorkUnitRepository,
   productionRuntime,
@@ -50,15 +52,21 @@ import { WorkerPersistence } from "../src/persistence.js";
 const available = await ensurePostgres();
 const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
 const runtime = productionRuntime();
+const WRITE_POLICY = Object.freeze({
+  schema_version: 1 as const,
+  purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY" as const,
+  repository_id: "repo-1",
+  write_path_allowlist: Object.freeze(["apps/agent-worker/src"]),
+});
 const createPostgresEngineeringRuntimePort = (
   input: Omit<
     Parameters<typeof createPostgresEngineeringRuntimePortProduction>[0],
-    "writePathAllowlist"
+    "writeDeploymentPolicy"
   >,
 ) =>
   createPostgresEngineeringRuntimePortProduction({
     ...input,
-    writePathAllowlist: Object.freeze(["apps/agent-worker/src"]),
+    writeDeploymentPolicy: WRITE_POLICY,
   });
 const smallRiskFacts = Object.freeze({
   authority: "SERVER_OWNED" as const,
@@ -73,6 +81,96 @@ const smallRiskFacts = Object.freeze({
   concurrency: false,
   external_side_effect: false,
 });
+
+function exactWriteScope(patch: Record<string, unknown> = {}) {
+  const policyDigest = engineeringWriteDeploymentPolicyV1Digest(WRITE_POLICY);
+  return {
+    schema_version: 2 as const,
+    purpose: "ENGINEERING_WORKFLOW_WRITE" as const,
+    case_id: "case-1",
+    owner_id: "owner-1",
+    checkpoint_revision: 0,
+    work_unit_id: "unit-1",
+    run_id: "run-1",
+    process_class: "LARGE_OR_HIGH_RISK" as const,
+    authoritative_scope: {
+      connection_ids: [] as string[],
+      repo_allowlist: [WRITE_POLICY.repository_id],
+      can_write_workspace: true as const,
+    },
+    repository_id: WRITE_POLICY.repository_id,
+    write_path_allowlist: WRITE_POLICY.write_path_allowlist,
+    deployment_policy_digest: policyDigest,
+    ...patch,
+  };
+}
+
+async function materializeGrantedProposal(
+  db: Database,
+  input: {
+    proposalId: string;
+    approvalId: string;
+    jobId: string;
+    actionDigest: string;
+    scope?: ReturnType<typeof exactWriteScope>;
+  },
+): Promise<void> {
+  const scope = input.scope ?? exactWriteScope();
+  const approval = await db.query<{ expires_at: Date; granted_by: string }>(
+    `SELECT expires_at, granted_by FROM approvals WHERE approval_id=$1`,
+    [input.approvalId],
+  );
+  const row = approval.rows[0];
+  if (row === undefined) throw new Error("approval fixture missing");
+  await db.withTransaction(async (tx) => {
+    const outbox = await new OutboxRepository(runtime).enqueue(tx, {
+      aggregate: "discord_case",
+      aggregateId: "case-1",
+      eventType: "discord.thread_message",
+      payload: { case_id: "case-1", seq: 1, body: "fixture" },
+    });
+    const seq = await tx.query<{ next: string }>(
+      `SELECT (COALESCE(max(discord_seq),0)+1)::text AS next
+         FROM engineering_write_proposals WHERE case_id='case-1'`,
+    );
+    const triggerId = `fixture:propose:${input.proposalId}`;
+    const grantId = `fixture:grant:${input.proposalId}`;
+    await tx.query(
+      `INSERT INTO engineering_ingress_interactions (
+         interaction_id,case_id,owner_id,proposal_id,checkpoint_revision,interaction_kind)
+       VALUES ($1,'case-1','owner-1',$3,0,'PROPOSE'),
+              ($2,'case-1','owner-1',$3,0,'GRANT')`,
+      [triggerId, grantId, input.proposalId],
+    );
+    await tx.query(
+      `INSERT INTO engineering_write_proposals (
+         proposal_id,trigger_interaction_id,case_id,owner_id,checkpoint_revision,
+         work_unit_id,run_id,process_class,objective,repository_id,write_path_allowlist,
+         authoritative_scope,deployment_policy_digest,action_digest,expires_at,status,
+         terminal_interaction_id,terminal_choice,terminal_actor_id,approval_id,job_id,
+         discord_outbox_id,discord_seq,terminal_at)
+       VALUES ($1,$2,'case-1','owner-1',0,'unit-1','run-1',$3,'fixture',$4,$5::jsonb,$6::jsonb,
+               $7,$8,$9,'GRANTED',$10,'GRANT',$11,$12,$13,$14,$15,now())`,
+      [
+        input.proposalId,
+        triggerId,
+        scope.process_class,
+        scope.repository_id,
+        JSON.stringify(scope.write_path_allowlist),
+        JSON.stringify(scope.authoritative_scope),
+        scope.deployment_policy_digest,
+        input.actionDigest,
+        row.expires_at.toISOString(),
+        grantId,
+        row.granted_by,
+        input.approvalId,
+        input.jobId,
+        outbox.outbox_id,
+        seq.rows[0]!.next,
+      ],
+    );
+  });
+}
 
 function manifest(stage: EngineeringStage, revision = 0) {
   const value = engineeringContextManifest.parse({
@@ -419,6 +517,7 @@ it("extracts only a bounded engineering approval identity from the lease", () =>
       payload: {
         ...baseLease.payload,
         reason: "engineering_approval",
+        proposalId: "proposal-1",
         approvalId: "approval-1",
         checkpointRevision: 4,
         actionDigest: sha("0"),
@@ -426,13 +525,19 @@ it("extracts only a bounded engineering approval identity from the lease", () =>
       },
     }),
   ).toEqual({
+    proposalId: "proposal-1",
     approvalId: "approval-1",
     checkpointRevision: 4,
   });
   expect(() =>
     engineeringApprovalCandidateFromLease({
       ...baseLease,
-      payload: { ...baseLease.payload, reason: "engineering_approval", checkpointRevision: 4 },
+      payload: {
+        ...baseLease.payload,
+        reason: "engineering_approval",
+        approvalId: "approval-1",
+        checkpointRevision: 4,
+      },
     }),
   ).toThrow(/approval binding/);
 });
@@ -2072,21 +2177,8 @@ describeIntegration(
     it("requires an exact process escalation and durable scoped approval for high-risk write", async () => {
       const jobs = new JobStore(runtime);
       const approvalId = "approval-write-1";
-      const actionDigest = engineeringWriteAuthorizationScopeDigest({
-        schema_version: 1,
-        purpose: "ENGINEERING_WORKFLOW_WRITE",
-        case_id: "case-1",
-        owner_id: "owner-1",
-        checkpoint_revision: 0,
-        work_unit_id: "unit-1",
-        run_id: "run-1",
-        process_class: "LARGE_OR_HIGH_RISK",
-        authoritative_scope: {
-          connection_ids: [],
-          repo_allowlist: ["repo-1"],
-          can_write_workspace: true,
-        },
-      });
+      const proposalId = "proposal-write-1";
+      const actionDigest = engineeringWriteAuthorizationScopeV2Digest(exactWriteScope());
       await db.withTransaction(async (tx) => {
         expect(
           await new ApprovalRepository().grant(tx, {
@@ -2099,7 +2191,7 @@ describeIntegration(
           }),
         ).toMatchObject({ outcome: "GRANTED" });
       });
-      await jobs.enqueue(db, {
+      const job = await jobs.enqueue(db, {
         caseId: "case-1",
         jobType: "agent.implementer",
         payload: {
@@ -2107,9 +2199,17 @@ describeIntegration(
           workUnitId: "unit-1",
           runId: "run-1",
           reason: "engineering_approval",
+          proposalId,
           approvalId,
           checkpointRevision: 0,
+          repoId: WRITE_POLICY.repository_id,
         },
+      });
+      await materializeGrantedProposal(db, {
+        proposalId,
+        approvalId,
+        jobId: job.job_id,
+        actionDigest,
       });
       const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
       expect(lease).not.toBeNull();
@@ -2224,6 +2324,28 @@ describeIntegration(
       });
       await expect(decisionOnly.open(runtimeIdentity())).rejects.toThrow(/durable write approval/);
 
+      const staleLease = { ...lease!, fencingToken: lease!.fencingToken + 1 };
+      const staleHolder = createPostgresEngineeringRuntimePort({
+        db,
+        lease: staleLease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        reviewExecutor: executor,
+        executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
+        policy,
+        approvalCandidate: engineeringApprovalCandidateFromLease(staleLease),
+      });
+      await expect(staleHolder.open(runtimeIdentity())).rejects.toThrow(/stale|lease/i);
+      expect(
+        (
+          await db.query<{ consumed: boolean }>(
+            "SELECT consumed FROM approvals WHERE approval_id=$1",
+            [approvalId],
+          )
+        ).rows[0]?.consumed,
+      ).toBe(false);
+
       const granted = createPostgresEngineeringRuntimePort({
         db,
         lease: lease!,
@@ -2261,104 +2383,18 @@ describeIntegration(
       expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
     });
 
-    it("rejects every foreign write-approval scope component before recording an intent", async () => {
+    it("rejects a foreign V2 proposal materialization before recording an intent", async () => {
       const jobs = new JobStore(runtime);
-      await jobs.enqueue(db, {
-        caseId: "case-1",
-        jobType: "agent.implementer",
-        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
-      });
-      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
-      if (lease === null) throw new Error("expected implementer lease");
-      const executor: EngineeringStageExecutor = {
-        configDigest: sha("5"),
-        schemaDigest: () => sha("6"),
-        execute: async ({ binding }) => ({
-          kind: "ARTIFACT",
-          artifact: modelArtifact(binding.stage),
-          modelCalls: 1,
-        }),
-      };
-      const exactScope = {
-        schema_version: 1 as const,
-        purpose: "ENGINEERING_WORKFLOW_WRITE" as const,
-        case_id: "case-1",
-        owner_id: "owner-1",
-        checkpoint_revision: 0,
-        work_unit_id: "unit-1",
-        run_id: "run-1",
-        process_class: "LARGE_OR_HIGH_RISK" as const,
+      const proposalId = "foreign-materialization-proposal";
+      const approvalId = "foreign-materialization-approval";
+      const foreignScope = exactWriteScope({
         authoritative_scope: {
-          connection_ids: [] as string[],
-          repo_allowlist: ["repo-1"],
-          can_write_workspace: true as const,
-        },
-      };
-      const foreignScopes = [
-        { ...exactScope, case_id: "case-foreign" },
-        { ...exactScope, owner_id: "owner-foreign" },
-        { ...exactScope, checkpoint_revision: 1 },
-        { ...exactScope, work_unit_id: "unit-foreign" },
-        { ...exactScope, run_id: "run-foreign" },
-        { ...exactScope, process_class: "MEDIUM" as const },
-        {
-          ...exactScope,
-          authoritative_scope: { ...exactScope.authoritative_scope, repo_allowlist: ["repo-x"] },
-        },
-        {
-          ...exactScope,
-          authoritative_scope: {
-            ...exactScope.authoritative_scope,
-            connection_ids: ["connection-1"],
-          },
-        },
-      ];
-      for (const [index, scope] of foreignScopes.entries()) {
-        const approvalId = `foreign-scope-${index}`;
-        await db.withTransaction(async (tx) => {
-          expect(
-            await new ApprovalRepository().grant(tx, {
-              approvalId,
-              caseId: "case-1",
-              grantedBy: "owner-1",
-              actionDigest: engineeringWriteAuthorizationScopeDigest(scope),
-              checkpointRevision: 0,
-              expiresAt: new Date(Date.now() + 60_000),
-            }),
-          ).toMatchObject({ outcome: "GRANTED" });
-        });
-        const port = createPostgresEngineeringRuntimePort({
-          db,
-          lease,
-          jobs,
-          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
-          executor,
-          policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
-          approvalCandidate: { approvalId, checkpointRevision: 0 },
-        });
-        await expect(port.open(runtimeIdentity())).rejects.toThrow(/DIGEST_MISMATCH/);
-      }
-      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
-    });
-
-    it("rejects ALREADY_CONSUMED approval recovery after the case revision advances", async () => {
-      const jobs = new JobStore(runtime);
-      const approvalId = "approval-restart-stale";
-      const actionDigest = engineeringWriteAuthorizationScopeDigest({
-        schema_version: 1,
-        purpose: "ENGINEERING_WORKFLOW_WRITE",
-        case_id: "case-1",
-        owner_id: "owner-1",
-        checkpoint_revision: 0,
-        work_unit_id: "unit-1",
-        run_id: "run-1",
-        process_class: "LARGE_OR_HIGH_RISK",
-        authoritative_scope: {
-          connection_ids: [],
-          repo_allowlist: ["repo-1"],
+          connection_ids: ["connection-1"],
+          repo_allowlist: [WRITE_POLICY.repository_id],
           can_write_workspace: true,
         },
       });
+      const actionDigest = engineeringWriteAuthorizationScopeV2Digest(foreignScope);
       await db.withTransaction(async (tx) => {
         expect(
           await new ApprovalRepository().grant(tx, {
@@ -2371,7 +2407,69 @@ describeIntegration(
           }),
         ).toMatchObject({ outcome: "GRANTED" });
       });
-      await jobs.enqueue(db, {
+      const job = await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: {
+          reason: "engineering_approval",
+          caseId: "case-1",
+          proposalId,
+          approvalId,
+          checkpointRevision: 0,
+          workUnitId: "unit-1",
+          runId: "run-1",
+          repoId: WRITE_POLICY.repository_id,
+        },
+      });
+      await materializeGrantedProposal(db, {
+        proposalId,
+        approvalId,
+        jobId: job.job_id,
+        actionDigest,
+        scope: foreignScope,
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected implementer lease");
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
+        approvalCandidate: engineeringApprovalCandidateFromLease(lease),
+      });
+      await expect(port.open(runtimeIdentity())).rejects.toThrow(/exact worker materialization/);
+      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    });
+
+    it("rejects ALREADY_CONSUMED approval recovery after the case revision advances", async () => {
+      const jobs = new JobStore(runtime);
+      const approvalId = "approval-restart-stale";
+      const proposalId = "proposal-restart-stale";
+      const actionDigest = engineeringWriteAuthorizationScopeV2Digest(exactWriteScope());
+      await db.withTransaction(async (tx) => {
+        expect(
+          await new ApprovalRepository().grant(tx, {
+            approvalId,
+            caseId: "case-1",
+            grantedBy: "owner-1",
+            actionDigest,
+            checkpointRevision: 0,
+            expiresAt: new Date(Date.now() + 60_000),
+          }),
+        ).toMatchObject({ outcome: "GRANTED" });
+      });
+      const job = await jobs.enqueue(db, {
         caseId: "case-1",
         jobType: "agent.implementer",
         payload: {
@@ -2379,9 +2477,17 @@ describeIntegration(
           workUnitId: "unit-1",
           runId: "run-1",
           reason: "engineering_approval",
+          proposalId,
           approvalId,
           checkpointRevision: 0,
+          repoId: WRITE_POLICY.repository_id,
         },
+      });
+      await materializeGrantedProposal(db, {
+        proposalId,
+        approvalId,
+        jobId: job.job_id,
+        actionDigest,
       });
       const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
       if (lease === null) throw new Error("expected implementer lease");
@@ -2523,21 +2629,8 @@ describeIntegration(
     it("rejects an arbitrary DesignDecision digest before artifact append", async () => {
       const jobs = new JobStore(runtime);
       const approvalId = "design-digest-approval";
-      const actionDigest = engineeringWriteAuthorizationScopeDigest({
-        schema_version: 1,
-        purpose: "ENGINEERING_WORKFLOW_WRITE",
-        case_id: "case-1",
-        owner_id: "owner-1",
-        checkpoint_revision: 0,
-        work_unit_id: "unit-1",
-        run_id: "run-1",
-        process_class: "LARGE_OR_HIGH_RISK",
-        authoritative_scope: {
-          connection_ids: [],
-          repo_allowlist: ["repo-1"],
-          can_write_workspace: true,
-        },
-      });
+      const proposalId = "design-digest-proposal";
+      const actionDigest = engineeringWriteAuthorizationScopeV2Digest(exactWriteScope());
       await db.withTransaction(async (tx) => {
         expect(
           await new ApprovalRepository().grant(tx, {
@@ -2550,7 +2643,7 @@ describeIntegration(
           }),
         ).toMatchObject({ outcome: "GRANTED" });
       });
-      await jobs.enqueue(db, {
+      const job = await jobs.enqueue(db, {
         caseId: "case-1",
         jobType: "agent.implementer",
         payload: {
@@ -2558,9 +2651,17 @@ describeIntegration(
           workUnitId: "unit-1",
           runId: "run-1",
           reason: "engineering_approval",
+          proposalId,
           approvalId,
           checkpointRevision: 0,
+          repoId: WRITE_POLICY.repository_id,
         },
+      });
+      await materializeGrantedProposal(db, {
+        proposalId,
+        approvalId,
+        jobId: job.job_id,
+        actionDigest,
       });
       const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
       if (lease === null) throw new Error("expected implementer lease");

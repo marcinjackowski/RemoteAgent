@@ -14,7 +14,13 @@
  * "contract/composition test without a real secret".
  */
 import { randomUUID } from "node:crypto";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 
+import {
+  engineeringWriteDeploymentPolicyFromExecutionConfigV2,
+  type EngineeringWriteDeploymentPolicyV1,
+} from "@remoteagent/contracts";
 import { Database } from "@remoteagent/database";
 import {
   DiscordBindingRepository,
@@ -22,6 +28,9 @@ import {
   DiscordSendIntentRepository,
   AuditLogRepository,
   InboundMessageRepository,
+  EngineeringApprovalIngressError,
+  EngineeringApprovalIngressRepository,
+  EngineeringStopIngressRepository,
   productionRuntime,
 } from "@remoteagent/database";
 import {
@@ -77,6 +86,9 @@ export interface DiscordEnvConfig {
 
 type Env = Record<string, string | undefined>;
 
+type EngineeringIngressPort = Pick<EngineeringApprovalIngressRepository, "propose" | "respond">;
+type EngineeringStopPort = Pick<EngineeringStopIngressRepository, "stop">;
+
 function required(env: Env, name: string): string {
   const value = env[name];
   if (value === undefined || value.trim() === "") {
@@ -105,6 +117,20 @@ export function discordConfigFromEnv(env: Env = process.env): DiscordEnvConfig {
   };
 }
 
+/** Read only the authority projection from the worker's immutable deployment document. */
+export async function engineeringWritePolicyFromEnv(
+  env: Env = process.env,
+): Promise<EngineeringWriteDeploymentPolicyV1 | null> {
+  const path = env.RA_ENGINEERING_CONFIG_PATH?.trim();
+  if (path === undefined || path === "") return null;
+  if (!isAbsolute(path)) throw new DiscordEnvError("RA_ENGINEERING_CONFIG_PATH must be absolute");
+  const canonicalPath = await realpath(path);
+  if (canonicalPath !== path)
+    throw new DiscordEnvError("RA_ENGINEERING_CONFIG_PATH must be canonical");
+  const decoded: unknown = JSON.parse(await readFile(canonicalPath, "utf8"));
+  return engineeringWriteDeploymentPolicyFromExecutionConfigV2(decoded);
+}
+
 /**
  * RA-031: turn an authorized owner message in a case thread into durable work. It is recorded as
  * UNTRUSTED context and materialized into a PENDING supervisor unit + a `case.resume` job (see
@@ -125,6 +151,74 @@ export function createOwnerMessageSink(db: Database): (outcome: IntakeOutcome) =
   };
 }
 
+/** Exhaustive production routing for owner outcomes; generic buttons never enter engineering. */
+export function createOwnerOutcomeSink(input: {
+  db: Database;
+  engineeringIngress: EngineeringIngressPort | null;
+  stopIngress: EngineeringStopPort;
+  logger?: (event: string, detail?: Record<string, unknown>) => void;
+}): (outcome: IntakeOutcome) => Promise<void> {
+  const inbound = new InboundMessageRepository(productionRuntime());
+  return async (outcome) => {
+    switch (outcome.kind) {
+      case "message":
+        await inbound.receiveOwnerMessage(input.db, {
+          messageId: outcome.messageId ?? randomUUID(),
+          caseId: outcome.caseId,
+          content: outcome.content,
+        });
+        return;
+      case "stop":
+        await input.stopIngress.stop(input.db, {
+          caseId: outcome.caseId,
+          actorId: outcome.actorId,
+          interactionId: outcome.interactionId,
+        });
+        return;
+      case "engineering_proposal":
+        if (input.engineeringIngress === null) {
+          input.logger?.("engineering.ingress_disabled", { reason: "deployment_policy_absent" });
+          return;
+        }
+        try {
+          await input.engineeringIngress.propose(input.db, {
+            caseId: outcome.caseId,
+            actorId: outcome.actorId,
+            interactionId: outcome.interactionId,
+          });
+        } catch (error) {
+          if (!(error instanceof EngineeringApprovalIngressError)) throw error;
+          input.logger?.("engineering.proposal_refused", { error: error.name });
+        }
+        return;
+      case "engineering":
+        if (input.engineeringIngress === null) {
+          input.logger?.("engineering.ingress_disabled", { reason: "deployment_policy_absent" });
+          return;
+        }
+        try {
+          await input.engineeringIngress.respond(input.db, {
+            caseId: outcome.caseId,
+            actorId: outcome.actorId,
+            interactionId: outcome.interactionId,
+            proposalId: outcome.interaction.proposalId,
+            checkpointRevision: outcome.interaction.checkpointRevision,
+            choice: outcome.interaction.choice,
+          });
+        } catch (error) {
+          if (!(error instanceof EngineeringApprovalIngressError)) throw error;
+          input.logger?.("engineering.response_refused", { error: error.name });
+        }
+        return;
+      case "decision":
+      case "approval":
+      case "denied":
+      case "ignored":
+        return;
+    }
+  };
+}
+
 /**
  * Compose a runnable {@link DiscordBot} from a parsed config and a database. The
  * REST transport (`fetch`) and gateway socket (`WebSocket`) are the concrete
@@ -139,6 +233,9 @@ export function createDiscordBotFromEnv(
     restTransport?: ReturnType<typeof fetchRestTransport>;
     socketFactory?: ReturnType<typeof nodeWebSocketFactory>;
     logger?: (event: string, detail?: Record<string, unknown>) => void;
+    deploymentPolicy?: EngineeringWriteDeploymentPolicyV1 | null;
+    engineeringIngress?: EngineeringIngressPort | null;
+    stopIngress?: EngineeringStopPort;
   } = {},
 ): DiscordBot {
   const registry = new ChannelRegistry({
@@ -162,6 +259,17 @@ export function createDiscordBotFromEnv(
     channels: registry,
   });
   const map: DispatchMapConfig = { registry, botUserId: config.botUserId };
+  const runtime = productionRuntime();
+  const engineeringIngress =
+    overrides.engineeringIngress !== undefined
+      ? overrides.engineeringIngress
+      : overrides.deploymentPolicy == null
+        ? null
+        : new EngineeringApprovalIngressRepository({
+            runtime,
+            deploymentPolicy: overrides.deploymentPolicy,
+          });
+  const stopIngress = overrides.stopIngress ?? new EngineeringStopIngressRepository({ runtime });
   return createDiscordBot({
     dispatcher,
     processor: {
@@ -172,7 +280,12 @@ export function createDiscordBotFromEnv(
       db,
     },
     map,
-    onInboundOutcome: createOwnerMessageSink(db),
+    onInboundOutcome: createOwnerOutcomeSink({
+      db,
+      engineeringIngress,
+      stopIngress,
+      ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
+    }),
     session: {
       factory: overrides.socketFactory ?? nodeWebSocketFactory(),
       token: config.token,
@@ -194,16 +307,43 @@ export function runFromEnv(
   env: Env = process.env,
   overrides: {
     logger?: (event: string, detail?: Record<string, unknown>) => void;
+    /** Composition-test seam; production opens the database from the environment. */
+    db?: Database;
+    /** Composition-test seam proving the parsed policy reaches the real bot factory boundary. */
+    composeBot?: typeof createDiscordBotFromEnv;
   } = {},
-): { bot: DiscordBot; db: Database } {
+): Promise<{ bot: DiscordBot; db: Database }> {
+  return runFromEnvAsync(env, overrides);
+}
+
+async function runFromEnvAsync(
+  env: Env,
+  overrides: {
+    logger?: (event: string, detail?: Record<string, unknown>) => void;
+    db?: Database;
+    composeBot?: typeof createDiscordBotFromEnv;
+  },
+): Promise<{ bot: DiscordBot; db: Database }> {
   const config = discordConfigFromEnv(env);
-  const db = Database.fromEnv();
+  const db = overrides.db ?? Database.fromEnv();
+  let deploymentPolicy: EngineeringWriteDeploymentPolicyV1 | null = null;
+  try {
+    deploymentPolicy = await engineeringWritePolicyFromEnv(env);
+  } catch (error) {
+    overrides.logger?.("engineering.config_invalid", {
+      error: error instanceof Error ? error.name : "UnknownError",
+    });
+  }
   // The logger is forwarded because without it the process is UNDIAGNOSABLE. The gateway
   // classifies a disallowed privileged intent as a FATAL close (`4014`) and stops rather than
   // reconnecting — correct behaviour, but the only record of it is `gateway.close_fatal`. With
   // no logger the process prints "discord ready" and then goes silent, which reads as a
   // working bot that nobody is talking to.
-  const bot = createDiscordBotFromEnv(config, db, overrides);
+  const composeBot = overrides.composeBot ?? createDiscordBotFromEnv;
+  const bot = composeBot(config, db, {
+    ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
+    deploymentPolicy,
+  });
   bot.session.start();
   return { bot, db };
 }

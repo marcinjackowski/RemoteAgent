@@ -26,7 +26,15 @@ import {
   engineeringVerificationDecision,
   engineeringWriteAuthorizationScopeDigest,
   engineeringWriteAuthorizationScopeV1,
+  engineeringWriteAuthorizationScopeV2Digest,
+  engineeringWriteAuthorizationScopeV2,
+  engineeringWriteProposalV1,
+  engineeringWriteDeploymentPolicyV1,
+  engineeringWriteDeploymentPolicyV1Digest,
+  engineeringWriteDeploymentPolicyFromExecutionConfigV2,
   normalizeEngineeringWriteAuthorizationScope,
+  normalizeEngineeringWriteAuthorizationScopeV2,
+  normalizeEngineeringWriteDeploymentPolicyV1,
   type EngineeringProcessRiskFacts,
 } from "../src/engineering-workflow.js";
 
@@ -64,6 +72,51 @@ const risk = (patch: Partial<EngineeringProcessRiskFacts> = {}): EngineeringProc
 });
 
 describe("engineering workflow contracts", () => {
+  it("projects the exact deployment write policy from execution config v2", () => {
+    const executionConfig = {
+      schema_version: 2,
+      workspace_root: "/srv/workspaces",
+      baseline_root: "/srv/baselines",
+      artifact_root: "/srv/artifacts",
+      repository: {
+        repository_id: "remote-agent",
+        source_path: "/srv/source",
+        base_branch: "main",
+        write_path_allowlist: ["packages/z", "apps/a", "apps/a"],
+      },
+      gates: [],
+      executable_allowlist: [],
+    };
+    const policy = engineeringWriteDeploymentPolicyFromExecutionConfigV2(executionConfig);
+    expect(policy).toEqual({
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+      repository_id: "remote-agent",
+      write_path_allowlist: ["apps/a", "packages/z"],
+    });
+    expect(Object.isFrozen(policy)).toBe(true);
+    expect(Object.isFrozen(policy.write_path_allowlist)).toBe(true);
+
+    expect(() =>
+      engineeringWriteDeploymentPolicyFromExecutionConfigV2({
+        ...executionConfig,
+        deployment_policy_digest: digest,
+      }),
+    ).toThrow(/unrecognized/i);
+    expect(() =>
+      engineeringWriteDeploymentPolicyFromExecutionConfigV2({
+        ...executionConfig,
+        repository: { ...executionConfig.repository, repository_id: "../foreign" },
+      }),
+    ).toThrow();
+    expect(() =>
+      engineeringWriteDeploymentPolicyFromExecutionConfigV2({
+        ...executionConfig,
+        repository: { ...executionConfig.repository, caller_digest: digest },
+      }),
+    ).toThrow(/unrecognized/i);
+  });
+
   it("owns a frozen exhaustive stage-to-artifact-kind map and a segment-aware write cap", () => {
     expect(Object.keys(engineeringArtifactKindsByStage).sort()).toEqual(
       Object.values(EngineeringStage).sort(),
@@ -145,6 +198,94 @@ describe("engineering workflow contracts", () => {
         }),
       ).toThrow();
     }
+  });
+
+  it("binds a V2 write grant and proposal to the normalized deployment path ceiling", () => {
+    const deploymentPolicy = normalizeEngineeringWriteDeploymentPolicyV1({
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+      repository_id: "repo",
+      write_path_allowlist: ["src/lib", "src", "src"],
+    });
+    expect(deploymentPolicy.write_path_allowlist).toEqual(["src", "src/lib"]);
+    expect(engineeringWriteDeploymentPolicyV1Digest(deploymentPolicy)).toBe(
+      canonicalDigest(deploymentPolicy),
+    );
+    expect(() =>
+      engineeringWriteDeploymentPolicyV1.parse({
+        ...deploymentPolicy,
+        write_path_allowlist: ["src/lib", "src"],
+      }),
+    ).toThrow(/unique and sorted/);
+
+    const scope = normalizeEngineeringWriteAuthorizationScopeV2({
+      schema_version: 2,
+      purpose: "ENGINEERING_WORKFLOW_WRITE",
+      case_id: "case",
+      owner_id: "owner",
+      checkpoint_revision: 3,
+      work_unit_id: "unit",
+      run_id: "run",
+      process_class: "LARGE_OR_HIGH_RISK",
+      authoritative_scope: {
+        connection_ids: [],
+        repo_allowlist: ["repo"],
+        can_write_workspace: true,
+      },
+      repository_id: "repo",
+      write_path_allowlist: ["src/lib", "src", "src"],
+      deployment_policy_digest: engineeringWriteDeploymentPolicyV1Digest(deploymentPolicy),
+    });
+    expect(scope.write_path_allowlist).toEqual(["src", "src/lib"]);
+    expect(Object.isFrozen(scope.write_path_allowlist)).toBe(true);
+    expect(engineeringWriteAuthorizationScopeV2Digest(scope)).toBe(canonicalDigest(scope));
+    const narrowerDeploymentPolicy = normalizeEngineeringWriteDeploymentPolicyV1({
+      ...deploymentPolicy,
+      write_path_allowlist: ["src/lib"],
+    });
+    expect(engineeringWriteAuthorizationScopeV2Digest(scope)).not.toBe(
+      engineeringWriteAuthorizationScopeV2Digest({
+        ...scope,
+        write_path_allowlist: ["src/lib"],
+        deployment_policy_digest:
+          engineeringWriteDeploymentPolicyV1Digest(narrowerDeploymentPolicy),
+      }),
+    );
+    expect(() =>
+      engineeringWriteAuthorizationScopeV2Digest({
+        ...scope,
+        deployment_policy_digest: engineeringWriteDeploymentPolicyV1Digest({
+          ...deploymentPolicy,
+          write_path_allowlist: ["src/lib"],
+        }),
+      }),
+    ).toThrow(/deployment_policy_digest/);
+    expect(() =>
+      engineeringWriteAuthorizationScopeV2.parse({
+        ...scope,
+        authoritative_scope: { ...scope.authoritative_scope, repo_allowlist: ["other"] },
+      }),
+    ).toThrow(/repository_id/);
+
+    const proposal = {
+      schema_version: 1,
+      proposal_id: "proposal",
+      objective: "Implement the bounded case change",
+      authorization_scope: scope,
+      action_digest: engineeringWriteAuthorizationScopeV2Digest(scope),
+      expires_at: "2026-08-26T12:00:00.000Z",
+    };
+    expect(engineeringWriteProposalV1.parse(proposal)).toEqual(proposal);
+    expect(() =>
+      engineeringWriteProposalV1.parse({
+        ...proposal,
+        action_digest: "sha256:" + "c".repeat(64),
+      }),
+    ).toThrow(/action_digest/);
+    expect(() => engineeringWriteProposalV1.parse({ ...proposal, option_id: "grant" })).toThrow();
+    expect(() => engineeringWriteProposalV1.parse({ ...proposal, objective: "   " })).toThrow(
+      /blank/,
+    );
   });
 
   it("strictly validates every standalone boundary without type coercion", () => {

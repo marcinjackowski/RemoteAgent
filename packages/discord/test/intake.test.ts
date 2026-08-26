@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ChannelRegistry } from "../src/channels.js";
-import { encodeApproval, encodeDecision } from "../src/custom-id.js";
+import { encodeApproval, encodeDecision, encodeEngineeringProposal } from "../src/custom-id.js";
 import { handleInbound, type InboundInteraction } from "../src/intake.js";
 
 function registry(): ChannelRegistry {
@@ -62,10 +62,13 @@ describe("handleInbound", () => {
       ...owner,
       origin: { surface: "thread", threadId: "t-2" },
       command: "stop",
+      interactionId: "interaction-stop",
     };
     expect(await handleInbound(registry(), stopInThread, threadCase({ "t-2": "case-2" }))).toEqual({
       kind: "stop",
       caseId: "case-2",
+      actorId: "owner-1",
+      interactionId: "interaction-stop",
     });
 
     // /stop in a top-level channel has no single case target → ignored, never a
@@ -75,6 +78,7 @@ describe("handleInbound", () => {
       ...owner,
       origin: { surface: "channel", channelId: "c-jira" },
       command: "stop",
+      interactionId: "interaction-stop-channel",
     };
     const outcome = await handleInbound(registry(), stopInChannel, threadCase({}));
     expect(outcome).toEqual({ kind: "ignored", reason: "stop_requires_case_thread" });
@@ -86,10 +90,13 @@ describe("handleInbound", () => {
       ...owner,
       origin: { surface: "thread", threadId: "t-1" },
       customId: encodeDecision({ decisionId: "dec-9", checkpointRevision: 4, optionId: "opt-b" }),
+      interactionId: "interaction-decision",
     };
     expect(await handleInbound(registry(), interaction, threadCase({ "t-1": "case-1" }))).toEqual({
       kind: "decision",
       caseId: "case-1",
+      actorId: "owner-1",
+      interactionId: "interaction-decision",
       interaction: {
         kind: "decision",
         decisionId: "dec-9",
@@ -105,12 +112,55 @@ describe("handleInbound", () => {
       ...owner,
       origin: { surface: "thread", threadId: "t-1" },
       customId: encodeApproval({ approvalId: "ap-2", checkpointRevision: 1, choice: "deny" }),
+      interactionId: "interaction-approval",
     };
     const outcome = await handleInbound(registry(), interaction, threadCase({ "t-1": "case-1" }));
     expect(outcome).toEqual({
       kind: "approval",
       caseId: "case-1",
+      actorId: "owner-1",
+      interactionId: "interaction-approval",
       interaction: { kind: "approval", approvalId: "ap-2", checkpointRevision: 1, choice: "deny" },
+    });
+  });
+
+  it("routes code-owned /engineering and proposal buttons with durable interaction identity", async () => {
+    const create: InboundInteraction = {
+      type: "command",
+      ...owner,
+      origin: { surface: "thread", threadId: "t-1" },
+      command: "engineering",
+      interactionId: "interaction-create",
+    };
+    expect(await handleInbound(registry(), create, threadCase({ "t-1": "case-1" }))).toEqual({
+      kind: "engineering_proposal",
+      caseId: "case-1",
+      actorId: "owner-1",
+      interactionId: "interaction-create",
+    });
+
+    const click: InboundInteraction = {
+      type: "button",
+      ...owner,
+      origin: { surface: "thread", threadId: "t-1" },
+      customId: encodeEngineeringProposal({
+        proposalId: "proposal-1",
+        checkpointRevision: 4,
+        choice: "deny",
+      }),
+      interactionId: "interaction-click",
+    };
+    expect(await handleInbound(registry(), click, threadCase({ "t-1": "case-1" }))).toEqual({
+      kind: "engineering",
+      caseId: "case-1",
+      actorId: "owner-1",
+      interactionId: "interaction-click",
+      interaction: {
+        kind: "engineering",
+        proposalId: "proposal-1",
+        checkpointRevision: 4,
+        choice: "deny",
+      },
     });
   });
 
@@ -120,6 +170,7 @@ describe("handleInbound", () => {
       ...owner,
       origin: { surface: "thread", threadId: "t-1" },
       customId: "v9:decision:dec:1:opt",
+      interactionId: "interaction-tampered",
     };
     expect(await handleInbound(registry(), interaction, threadCase({ "t-1": "case-1" }))).toEqual({
       kind: "ignored",

@@ -343,8 +343,9 @@ export class JobStore {
   }
 
   /**
-   * Assert the exact, still-live lease without extending it or opening a
-   * transaction. Callers use this immediately before each workspace mutation.
+   * Assert the exact, still-live lease without extending it or opening a transaction.
+   * When the caller supplies a transaction, FOR SHARE holds the lease row against a
+   * concurrent terminal/reclaim update until that transaction commits.
    */
   public async assertCurrentLease(q: Queryable, lease: LeaseIdentity): Promise<void> {
     const nowMs = this.clock.now();
@@ -353,7 +354,8 @@ export class JobStore {
        WHERE job_id = $1 AND case_id IS NOT DISTINCT FROM $2
          AND lease_owner = $3 AND fencing_token = $4
          AND job_type = $5 AND payload IS NOT DISTINCT FROM $6::jsonb
-         AND status = 'LEASED' AND lease_expires_at > ${this.lt.now(7)}`,
+         AND status = 'LEASED' AND lease_expires_at > ${this.lt.now(7)}
+       FOR SHARE`,
       [
         lease.jobId,
         lease.caseId,

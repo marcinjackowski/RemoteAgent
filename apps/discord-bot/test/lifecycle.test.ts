@@ -6,7 +6,12 @@
  * composed dispatch handler durably audits a denied attempt via the append-only
  * audit repository — all with a fake Queryable, no network and no database.
  */
-import { AuditLogRepository, type Queryable } from "@remoteagent/database";
+import {
+  AuditLogRepository,
+  Database,
+  EngineeringApprovalIngressError,
+  type Queryable,
+} from "@remoteagent/database";
 import { ChannelRegistry, type InteractionAcknowledger } from "@remoteagent/discord";
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +20,7 @@ import {
   extractInteractionAck,
   mapDispatchToInbound,
 } from "../src/lifecycle.js";
+import { createOwnerOutcomeSink } from "../src/env.js";
 
 const OWNER = "owner-1";
 const CHANNELS = {
@@ -85,26 +91,152 @@ describe("mapDispatchToInbound (RA-006)", () => {
 
   it("maps button and command interactions", () => {
     const button = mapDispatchToInbound(config, "INTERACTION_CREATE", {
+      id: "interaction-button",
       type: 3,
       guild_id: "guild-1",
       channel_id: "thread-1",
       member: { user: { id: OWNER } },
       data: { custom_id: "v1:decision:d1:2:optA" },
     });
-    expect(button).toMatchObject({ type: "button", customId: "v1:decision:d1:2:optA" });
+    expect(button).toMatchObject({
+      type: "button",
+      customId: "v1:decision:d1:2:optA",
+      interactionId: "interaction-button",
+    });
 
     const command = mapDispatchToInbound(config, "INTERACTION_CREATE", {
+      id: "interaction-command",
       type: 2,
       guild_id: "guild-1",
       channel_id: "thread-1",
       member: { user: { id: OWNER } },
       data: { name: "stop" },
     });
-    expect(command).toMatchObject({ type: "command", command: "stop" });
+    expect(command).toMatchObject({
+      type: "command",
+      command: "stop",
+      interactionId: "interaction-command",
+    });
+
+    expect(
+      mapDispatchToInbound(config, "INTERACTION_CREATE", {
+        type: 2,
+        guild_id: "guild-1",
+        channel_id: "thread-1",
+        member: { user: { id: OWNER } },
+        data: { name: "engineering" },
+      }),
+    ).toBeNull();
   });
 });
 
 describe("createInboundDispatchHandler (RA-006 composition)", () => {
+  it("persists engineering control outcomes before ACK and never ACKs a failed sink", async () => {
+    const { db } = captureQueryable();
+    const audit = new AuditLogRepository();
+    const order: string[] = [];
+    const acknowledger: InteractionAcknowledger = {
+      acknowledgeInteraction: () => {
+        order.push("ack");
+        return Promise.resolve();
+      },
+    };
+    const success = createInboundDispatchHandler(
+      { registry: registry(), resolveThreadCase: async () => "case-1", audit, db },
+      { registry: registry(), botUserId: "bot-1" },
+      {
+        acknowledger,
+        onOutcome: (outcome) => {
+          expect(outcome.kind).toBe("engineering");
+          order.push("durable");
+        },
+      },
+    );
+    const event = {
+      id: "int-engineering",
+      token: "secret-token",
+      type: 3,
+      guild_id: "guild-1",
+      channel_id: "thread-1",
+      member: { user: { id: OWNER } },
+      data: { custom_id: "v1:engineering:proposal-1:0:grant" },
+    };
+    await success("INTERACTION_CREATE", event);
+    expect(order).toEqual(["durable", "ack"]);
+
+    order.length = 0;
+    const failure = createInboundDispatchHandler(
+      { registry: registry(), resolveThreadCase: async () => "case-1", audit, db },
+      { registry: registry(), botUserId: "bot-1" },
+      {
+        acknowledger,
+        onOutcome: () => {
+          order.push("durable-failed");
+          return Promise.reject(new Error("database unavailable"));
+        },
+      },
+    );
+    await expect(failure("INTERACTION_CREATE", event)).rejects.toThrow(/database unavailable/);
+    expect(order).toEqual(["durable-failed"]);
+  });
+
+  it("ACKs a deterministic engineering refusal but not an unexpected persistence failure", async () => {
+    const { db: auditDb } = captureQueryable();
+    const database = new Database({ connectionString: "postgres://unused/localhost" });
+    const acks: string[] = [];
+    const event = {
+      id: "int-engineering-refusal",
+      token: "secret-token",
+      type: 3,
+      guild_id: "guild-1",
+      channel_id: "thread-1",
+      member: { user: { id: OWNER } },
+      data: { custom_id: "v1:engineering:proposal-1:0:grant" },
+    };
+    const makeHandler = (respond: () => Promise<never>) =>
+      createInboundDispatchHandler(
+        {
+          registry: registry(),
+          resolveThreadCase: async () => "case-1",
+          audit: new AuditLogRepository(),
+          db: auditDb,
+        },
+        { registry: registry(), botUserId: "bot-1" },
+        {
+          acknowledger: {
+            acknowledgeInteraction: ({ interactionId }) => {
+              acks.push(interactionId);
+              return Promise.resolve();
+            },
+          },
+          onOutcome: createOwnerOutcomeSink({
+            db: database,
+            engineeringIngress: {
+              propose: () => Promise.reject(new Error("not used")),
+              respond: () => respond(),
+            },
+            stopIngress: {
+              stop: () => Promise.resolve({ status: "stopped", stoppedProposalIds: [] }),
+            },
+          }),
+        },
+      );
+
+    await makeHandler(() =>
+      Promise.reject(new EngineeringApprovalIngressError("deterministic stale proposal")),
+    )("INTERACTION_CREATE", event);
+    expect(acks).toEqual(["int-engineering-refusal"]);
+
+    await expect(
+      makeHandler(() => Promise.reject(new Error("database unavailable")))("INTERACTION_CREATE", {
+        ...event,
+        id: "int-engineering-db-failure",
+      }),
+    ).rejects.toThrow(/database unavailable/);
+    expect(acks).toEqual(["int-engineering-refusal"]);
+    await database.close();
+  });
+
   it("durably audits a denied attempt and does not audit an authorized one", async () => {
     const { db, calls } = captureQueryable();
     const audit = new AuditLogRepository();

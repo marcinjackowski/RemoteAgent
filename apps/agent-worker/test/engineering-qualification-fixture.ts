@@ -6,15 +6,23 @@ import { promisify } from "node:util";
 
 import {
   canonicalDigest,
-  engineeringWriteAuthorizationScopeDigest,
+  engineeringWriteAuthorizationScopeV2Digest,
+  engineeringWriteDeploymentPolicyV1Digest,
   type EngineeringProcessClass,
 } from "@remoteagent/contracts";
-import { createRuntimeConfig, type RuntimeTransport } from "@remoteagent/bedrock-runtime";
+import {
+  createRuntimeConfig,
+  type RuntimeConfig,
+  type RuntimeRequest,
+  type RuntimeResponse,
+  type RuntimeTransport,
+} from "@remoteagent/bedrock-runtime";
 import {
   CaseRepository,
   ConnectionRepository,
   ApprovalRepository,
   JobStore,
+  OutboxRepository,
   OwnerRepository,
   WorkUnitRepository,
   productionRuntime,
@@ -48,9 +56,190 @@ import { WorkerPersistence } from "../src/persistence.js";
 const run = promisify(execFile);
 export const qualificationRuntime = productionRuntime();
 export const qualificationModel = { provider: "bedrock", model_id: "qualification-model" } as const;
+const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
+
+/** Scripted provider boundary shared by qualification and cross-app production E2E tests. */
+export class EngineeringQualificationTransport implements RuntimeTransport {
+  public readonly requests: RuntimeRequest[] = [];
+  readonly #caseId: string;
+  readonly #runId: string;
+  readonly #sliceIds: readonly string[];
+  readonly #implementationPaths: readonly string[];
+  readonly #processClass: "SMALL" | "MEDIUM" | "LARGE_OR_HIGH_RISK";
+  #planning = 0;
+  #implementation = 0;
+  #awaitingImplementationReport = false;
+  #memory = 0;
+
+  public constructor(input: {
+    caseId: string;
+    runId: string;
+    sliceIds: readonly string[];
+    implementationPaths: readonly string[];
+    processClass: "SMALL" | "MEDIUM" | "LARGE_OR_HIGH_RISK";
+  }) {
+    this.#caseId = input.caseId;
+    this.#runId = input.runId;
+    this.#sliceIds = input.sliceIds;
+    this.#implementationPaths = input.implementationPaths;
+    this.#processClass = input.processClass;
+  }
+
+  public async converse(request: RuntimeRequest, _config: RuntimeConfig): Promise<RuntimeResponse> {
+    this.requests.push(request);
+    const name = request.outputSchema?.name;
+    const json = (value: unknown): RuntimeResponse => ({
+      model: qualificationModel,
+      content: [{ type: "json", value: value as never }],
+    });
+    const common = {
+      schema_version: 1,
+      case_id: this.#caseId,
+      run_id: this.#runId,
+      revision: 0,
+    };
+    if (name === "EngineeringOutcomeContract_v1") {
+      return json({
+        ...common,
+        artifact_kind: "OutcomeContract",
+        problem: "qualify the production engineering path",
+        outcome: "durable reviewed implementation",
+        non_goals: [],
+        objective: "execute bounded slices",
+        success_criteria: ["required gates pass"],
+        constraints: ["one server-owned repository"],
+        process_class: this.#processClass,
+        source_digest: sha("1"),
+      });
+    }
+    if (name === "EngineeringSystemDesign_v1") {
+      return json({
+        ...common,
+        artifact_kind: "SystemDesign",
+        boundaries: ["worker", "PostgreSQL", "Git"],
+        data: ["immutable engineering artifacts"],
+        api: ["production runtime port"],
+        integrations: ["PostgreSQL", "Git", "process gates"],
+        invariants: ["single writer", "exact durable evidence"],
+        architecture: "durable production engineering loop",
+        components: ["SupervisorRuntime", "PostgresEngineeringRuntimePort"],
+        interfaces: ["stage intent", "artifact", "completion"],
+        data_flow: "context to slice to gates to review",
+        risks: [],
+        source_digest: sha("2"),
+      });
+    }
+    if (name === "EngineeringProgramDesign_v1") {
+      return json({
+        ...common,
+        artifact_kind: "ProgramDesign",
+        call_flow: [...this.#sliceIds],
+        file_tree_delta: [...this.#implementationPaths],
+        key_types_and_signatures: ["bounded qualification files"],
+        uncertainty_review: ["review every slice"],
+        expected_tests: ["qualification"],
+        slice_order: [...this.#sliceIds],
+        source_digest: sha("3"),
+      });
+    }
+    if (name === "EngineeringDesignDecision_v1") {
+      const prompt = request.messages
+        .flatMap((message) => message.content)
+        .map((content) => (content.type === "text" ? content.text : ""))
+        .join("\n");
+      const reviewedDigest = /exact durable digest (sha256:[0-9a-f]{64})/u.exec(prompt)?.[1];
+      if (reviewedDigest === undefined) throw new Error("reviewed ProgramDesign digest absent");
+      return json({
+        ...common,
+        artifact_kind: "DesignDecision",
+        decision_id: "design-approved",
+        rationale: "the exact durable program design is approved",
+        decision: "APPROVE",
+        artifact_digest: reviewedDigest,
+        findings: [],
+        required_changes: [],
+      });
+    }
+    if (name === "EngineeringSliceContract_v1") {
+      const sliceId = this.#sliceIds[this.#planning++];
+      if (sliceId === undefined) throw new Error("unexpected extra slice planning call");
+      return json({
+        ...common,
+        artifact_kind: "SliceContract",
+        slice_id: sliceId,
+        objective: `implement ${sliceId}`,
+        observable_result: `${sliceId} is present in Git evidence`,
+        allowed_paths: ["src"],
+        gate_ids: ["qualification"],
+        inspection_method: "inspect exact durable evidence",
+        stop_condition: "fresh pre-commit review passes",
+      });
+    }
+    if (name === "SliceImplementationReport_v1") {
+      const index = this.#implementation;
+      const path = this.#implementationPaths[index];
+      if (path === undefined) throw new Error("unexpected extra implementation call");
+      if (!this.#awaitingImplementationReport) {
+        this.#awaitingImplementationReport = true;
+        return {
+          model: qualificationModel,
+          content: [
+            {
+              type: "tool-use",
+              id: `write-${String(index)}`,
+              name: "write",
+              input: {
+                relative_path: path,
+                content:
+                  path === "src/qualified.ts"
+                    ? "export const qualification = 'qualified-green';\n"
+                    : `export const slice${String(index + 1)} = true;\n`,
+              },
+            },
+          ],
+        };
+      }
+      this.#awaitingImplementationReport = false;
+      this.#implementation += 1;
+      return json({ schema_version: 1, changed_files: [path] });
+    }
+    if (name === "PreCommitReviewOutput_v1") {
+      return json({ schema_version: 1, findings: [], lines_examined: 20 });
+    }
+    if (name === "EngineeringMemoryUpdate_v1") {
+      this.#memory += 1;
+      return json({
+        ...common,
+        artifact_kind: "MemoryUpdate",
+        source_watermark: sha("4"),
+        evidence_digests: [sha("5")],
+        trust: "UNTRUSTED_DATA",
+        authority: "MODEL_PROJECTION",
+        completed_requirements: [`slice-${String(this.#memory)}`],
+        open_issues: [],
+      });
+    }
+    if (name === "EngineeringVerificationDecision_v1") {
+      return json({
+        ...common,
+        artifact_kind: "VerificationDecision",
+        decision_id: "qualification-verified",
+        rationale: "all exact gate and review evidence is durable",
+        decision: "VERIFIED",
+        criterion_outcomes: [
+          { criterion_id: "all-slices", status: "PASSED", evidence_digest: sha("6") },
+        ],
+        evidence_digest: sha("6"),
+      });
+    }
+    throw new Error(`unexpected qualification schema ${String(name)}`);
+  }
+}
 
 export interface EngineeringQualificationFixtureOptions {
   readonly id: string;
+  /** Cross-app ingress tests let the dedicated GRANT producer allocate the writer/run. */
+  readonly preallocateWriter?: boolean;
   readonly testFirst?: boolean;
   /** Deliberately vacuous baseline used to prove test-first fail-closed behavior. */
   readonly baselineQualified?: boolean;
@@ -121,7 +310,9 @@ export async function createEngineeringQualificationFixture(
   options: EngineeringQualificationFixtureOptions,
 ): Promise<EngineeringQualificationFixture> {
   const created = await createTestDatabase();
-  const { db } = created;
+  // The shared harness imports database source while application packages resolve its built
+  // declaration. Both objects are the same runtime implementation; bridge only that test seam.
+  const db = created.db as unknown as Database;
   const prefix = `qualification-${options.id}`;
   const ids = Object.freeze({
     ownerId: `${prefix}-owner`,
@@ -172,23 +363,25 @@ export async function createEngineeringQualificationFixture(
      VALUES ($1,$2,0,$3::jsonb)`,
     [ids.caseId, ids.ownerId, JSON.stringify(makeCheckpoint(ids.caseId, 0))],
   );
-  const units = new WorkUnitRepository();
-  await units.insert(db, {
-    workUnitId: ids.workUnitId,
-    caseId: ids.caseId,
-    role: "IMPLEMENTER",
-    objective: `${options.id} bounded engineering qualification`,
-    authoritativeScope: {
-      connection_ids: [],
-      repo_allowlist: [ids.repositoryId],
-      can_write_workspace: true,
-    },
-  });
-  await units.claim(db, {
-    workUnitId: ids.workUnitId,
-    runId: ids.runId,
-    checkpointRevision: 0,
-  });
+  if (options.preallocateWriter !== false) {
+    const units = new WorkUnitRepository();
+    await units.insert(db, {
+      workUnitId: ids.workUnitId,
+      caseId: ids.caseId,
+      role: "IMPLEMENTER",
+      objective: `${options.id} bounded engineering qualification`,
+      authoritativeScope: {
+        connection_ids: [],
+        repo_allowlist: [ids.repositoryId],
+        can_write_workspace: true,
+      },
+    });
+    await units.claim(db, {
+      workUnitId: ids.workUnitId,
+      runId: ids.runId,
+      checkpointRevision: 0,
+    });
+  }
 
   const executable = await realpath(process.execPath);
   const gateScript = options.testFirst
@@ -227,6 +420,12 @@ export async function createEngineeringQualificationFixture(
     baselineRoot,
     artifactRoot,
     writePathAllowlist: Object.freeze(["src"]),
+    writeDeploymentPolicy: Object.freeze({
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+      repository_id: ids.repositoryId,
+      write_path_allowlist: Object.freeze(["src"]),
+    }),
     catalog,
     configDigest: canonicalDigest({
       repository_id: ids.repositoryId,
@@ -241,6 +440,10 @@ export async function createEngineeringQualificationFixture(
   });
   const jobs = new JobStore(qualificationRuntime);
   const readContext = createEngineeringRoleContextReader({ db });
+  const approvalScopes = new Map<
+    string,
+    Readonly<{ digest: string; scope: Record<string, unknown> }>
+  >();
 
   return {
     db,
@@ -251,16 +454,98 @@ export async function createEngineeringQualificationFixture(
     sourcePath,
     baseSha,
     claimImplementer: async (payload = {}) => {
-      await jobs.enqueue(db, {
+      const approvalId =
+        payload.reason === "engineering_approval" && typeof payload.approvalId === "string"
+          ? payload.approvalId
+          : null;
+      const proposalId = approvalId === null ? null : `${prefix}-proposal-${approvalId}`;
+      const exactPayload =
+        approvalId === null || proposalId === null
+          ? {
+              caseId: ids.caseId,
+              workUnitId: ids.workUnitId,
+              runId: ids.runId,
+              ...payload,
+            }
+          : {
+              reason: "engineering_approval",
+              caseId: ids.caseId,
+              proposalId,
+              approvalId,
+              checkpointRevision: 0,
+              workUnitId: ids.workUnitId,
+              runId: ids.runId,
+              repoId: ids.repositoryId,
+            };
+      const job = await jobs.enqueue(db, {
         caseId: ids.caseId,
         jobType: "agent.implementer",
-        payload: {
-          caseId: ids.caseId,
-          workUnitId: ids.workUnitId,
-          runId: ids.runId,
-          ...payload,
-        },
+        payload: exactPayload,
       });
+      if (approvalId !== null && proposalId !== null) {
+        const authorized = approvalScopes.get(approvalId);
+        if (authorized !== undefined) {
+          const approval = await db.query<{ expires_at: Date; granted_by: string }>(
+            `SELECT expires_at, granted_by FROM approvals WHERE approval_id=$1`,
+            [approvalId],
+          );
+          const approvalRow = approval.rows[0];
+          if (approvalRow === undefined) throw new Error("qualification approval row is absent");
+          await db.withTransaction(async (tx) => {
+            const outbox = await new OutboxRepository(qualificationRuntime).enqueue(tx, {
+              aggregate: "discord_case",
+              aggregateId: ids.caseId,
+              eventType: "discord.thread_message",
+              payload: { case_id: ids.caseId, seq: 1, body: "qualification fixture" },
+            });
+            const triggerId = `${proposalId}:propose`;
+            const grantId = `${proposalId}:grant`;
+            await tx.query(
+              `INSERT INTO engineering_ingress_interactions (
+               interaction_id,case_id,owner_id,proposal_id,checkpoint_revision,interaction_kind)
+             VALUES ($1,$3,$4,$2,0,'PROPOSE'),($5,$3,$4,$2,0,'GRANT')`,
+              [triggerId, proposalId, ids.caseId, ids.ownerId, grantId],
+            );
+            const scope = authorized.scope as {
+              process_class: string;
+              repository_id: string;
+              write_path_allowlist: readonly string[];
+              authoritative_scope: Record<string, unknown>;
+              deployment_policy_digest: string;
+            };
+            await tx.query(
+              `INSERT INTO engineering_write_proposals (
+               proposal_id,trigger_interaction_id,case_id,owner_id,checkpoint_revision,
+               work_unit_id,run_id,process_class,objective,repository_id,write_path_allowlist,
+               authoritative_scope,deployment_policy_digest,action_digest,expires_at,status,
+               terminal_interaction_id,terminal_choice,terminal_actor_id,approval_id,job_id,
+               discord_outbox_id,discord_seq,terminal_at)
+             VALUES ($1,$2,$3,$4,0,$5,$6,$7,'qualification',$8,$9::jsonb,$10::jsonb,$11,$12,$13,
+                     'GRANTED',$14,'GRANT',$15,$16,$17,$18,1,now())`,
+              [
+                proposalId,
+                triggerId,
+                ids.caseId,
+                ids.ownerId,
+                ids.workUnitId,
+                ids.runId,
+                scope.process_class,
+                scope.repository_id,
+                JSON.stringify(scope.write_path_allowlist),
+                JSON.stringify(scope.authoritative_scope),
+                scope.deployment_policy_digest,
+                authorized.digest,
+                approvalRow.expires_at.toISOString(),
+                grantId,
+                approvalRow.granted_by,
+                approvalId,
+                job.job_id,
+                outbox.outbox_id,
+              ],
+            );
+          });
+        }
+      }
       const lease = await jobs.claim(db, { owner: `${prefix}-writer`, leaseMs: 300_000 });
       if (lease === null) throw new Error("expected engineering qualification lease");
       return lease;
@@ -296,8 +581,11 @@ export async function createEngineeringQualificationFixture(
     grantWriteApproval: async ({ approvalId, processClass, scopePatch = {} }) => {
       const caseId = scopePatch.caseId ?? ids.caseId;
       const checkpointRevision = scopePatch.checkpointRevision ?? 0;
-      const digest = engineeringWriteAuthorizationScopeDigest({
-        schema_version: 1,
+      const deploymentPolicyDigest = engineeringWriteDeploymentPolicyV1Digest(
+        config.writeDeploymentPolicy,
+      );
+      const scope = {
+        schema_version: 2,
         purpose: "ENGINEERING_WORKFLOW_WRITE",
         case_id: caseId,
         owner_id: scopePatch.ownerId ?? ids.ownerId,
@@ -310,7 +598,11 @@ export async function createEngineeringQualificationFixture(
           repo_allowlist: scopePatch.repoAllowlist ?? [ids.repositoryId],
           can_write_workspace: true,
         },
-      });
+        repository_id: ids.repositoryId,
+        write_path_allowlist: config.writeDeploymentPolicy.write_path_allowlist,
+        deployment_policy_digest: deploymentPolicyDigest,
+      } as const;
+      const digest = engineeringWriteAuthorizationScopeV2Digest(scope);
       const outcome = await db.withTransaction((tx) =>
         new ApprovalRepository().grant(tx, {
           approvalId,
@@ -324,6 +616,7 @@ export async function createEngineeringQualificationFixture(
       if (outcome.outcome !== "GRANTED" && outcome.outcome !== "ALREADY_GRANTED") {
         throw new Error(`qualification approval grant refused: ${outcome.outcome}`);
       }
+      approvalScopes.set(approvalId, Object.freeze({ digest, scope }));
       return digest;
     },
     makeProduction: (lease, input) => {

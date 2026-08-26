@@ -3734,6 +3734,308 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
     ],
     "type": "object",
   },
+  "EngineeringWriteAuthorizationScopeV2": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "authoritative_scope": {
+        "additionalProperties": false,
+        "properties": {
+          "can_write_workspace": {
+            "const": true,
+            "type": "boolean",
+          },
+          "connection_ids": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "maxItems": 64,
+            "type": "array",
+          },
+          "repo_allowlist": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "maxItems": 64,
+            "type": "array",
+          },
+        },
+        "required": [
+          "connection_ids",
+          "repo_allowlist",
+          "can_write_workspace",
+        ],
+        "type": "object",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "checkpoint_revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "deployment_policy_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "owner_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "process_class": {
+        "enum": [
+          "SMALL",
+          "MEDIUM",
+          "LARGE_OR_HIGH_RISK",
+        ],
+        "type": "string",
+      },
+      "purpose": {
+        "const": "ENGINEERING_WORKFLOW_WRITE",
+        "type": "string",
+      },
+      "repository_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 2,
+        "type": "number",
+      },
+      "work_unit_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "write_path_allowlist": {
+        "items": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+    },
+    "required": [
+      "schema_version",
+      "purpose",
+      "case_id",
+      "owner_id",
+      "checkpoint_revision",
+      "work_unit_id",
+      "run_id",
+      "process_class",
+      "authoritative_scope",
+      "repository_id",
+      "write_path_allowlist",
+      "deployment_policy_digest",
+    ],
+    "type": "object",
+  },
+  "EngineeringWriteDeploymentPolicy": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "purpose": {
+        "const": "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+        "type": "string",
+      },
+      "repository_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "write_path_allowlist": {
+        "items": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+    },
+    "required": [
+      "schema_version",
+      "purpose",
+      "repository_id",
+      "write_path_allowlist",
+    ],
+    "type": "object",
+  },
+  "EngineeringWriteProposal": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "action_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "authorization_scope": {
+        "additionalProperties": false,
+        "properties": {
+          "authoritative_scope": {
+            "additionalProperties": false,
+            "properties": {
+              "can_write_workspace": {
+                "const": true,
+                "type": "boolean",
+              },
+              "connection_ids": {
+                "items": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "maxItems": 64,
+                "type": "array",
+              },
+              "repo_allowlist": {
+                "items": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "maxItems": 64,
+                "type": "array",
+              },
+            },
+            "required": [
+              "connection_ids",
+              "repo_allowlist",
+              "can_write_workspace",
+            ],
+            "type": "object",
+          },
+          "case_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "checkpoint_revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "deployment_policy_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "owner_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "process_class": {
+            "enum": [
+              "SMALL",
+              "MEDIUM",
+              "LARGE_OR_HIGH_RISK",
+            ],
+            "type": "string",
+          },
+          "purpose": {
+            "const": "ENGINEERING_WORKFLOW_WRITE",
+            "type": "string",
+          },
+          "repository_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "run_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "schema_version": {
+            "const": 2,
+            "type": "number",
+          },
+          "work_unit_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "write_path_allowlist": {
+            "items": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._/-]+$",
+              "type": "string",
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+          },
+        },
+        "required": [
+          "schema_version",
+          "purpose",
+          "case_id",
+          "owner_id",
+          "checkpoint_revision",
+          "work_unit_id",
+          "run_id",
+          "process_class",
+          "authoritative_scope",
+          "repository_id",
+          "write_path_allowlist",
+          "deployment_policy_digest",
+        ],
+        "type": "object",
+      },
+      "expires_at": {
+        "type": "string",
+      },
+      "objective": {
+        "maxLength": 8192,
+        "minLength": 1,
+        "type": "string",
+      },
+      "proposal_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+    },
+    "required": [
+      "schema_version",
+      "proposal_id",
+      "objective",
+      "authorization_scope",
+      "action_digest",
+      "expires_at",
+    ],
+    "type": "object",
+  },
   "EventEnvelope": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,

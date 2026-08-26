@@ -47,13 +47,34 @@ export const approvalButtonsSpec = z.strictObject({
   checkpoint_revision: revision,
 });
 
-export const threadMessagePayload = z.strictObject({
-  case_id: id,
-  seq,
-  body: z.string().max(65_536),
-  decision: decisionButtonsSpec.optional(),
-  approval: approvalButtonsSpec.optional(),
+/** Dedicated engineering proposal identity; never interpreted as a generic approval id. */
+export const engineeringProposalButtonsSpec = z.strictObject({
+  proposal_id: id,
+  checkpoint_revision: revision,
 });
+
+export const threadMessagePayload = z
+  .strictObject({
+    case_id: id,
+    seq,
+    body: z.string().max(65_536),
+    decision: decisionButtonsSpec.optional(),
+    approval: approvalButtonsSpec.optional(),
+    engineering_proposal: engineeringProposalButtonsSpec.optional(),
+  })
+  .superRefine((payload, ctx) => {
+    const buttonSections = [
+      payload.decision,
+      payload.approval,
+      payload.engineering_proposal,
+    ].filter((section) => section !== undefined);
+    if (buttonSections.length > 1) {
+      ctx.addIssue({
+        code: "custom",
+        message: "a thread message may carry at most one interactive button section",
+      });
+    }
+  });
 
 /**
  * A "the agent is composing a reply" hint (RA-035). It carries NO seq: typing is an

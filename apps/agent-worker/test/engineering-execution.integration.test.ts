@@ -65,6 +65,12 @@ it("loads one strict canonical deployment config and fails closed on widening", 
     baselineRoot: baseline,
     artifactRoot: artifacts,
     writePathAllowlist: ["packages", "src"],
+    writeDeploymentPolicy: {
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+      repository_id: "repo",
+      write_path_allowlist: ["packages", "src"],
+    },
   });
   expect(loaded.catalog.definitions.map((gate) => gate.gate_id)).toEqual(["unit"]);
   expect(Object.isFrozen(loaded.writePathAllowlist)).toBe(true);
@@ -86,11 +92,15 @@ it("loads one strict canonical deployment config and fails closed on widening", 
   const missingCap = { ...value.repository } as Record<string, unknown>;
   delete missingCap.write_path_allowlist;
   await writeFile(configPath, `${JSON.stringify({ ...value, repository: missingCap })}\n`);
-  await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(/unknown or missing/);
+  await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(
+    /expected array|unknown or missing/,
+  );
   await writeFile(configPath, `${JSON.stringify(value)}\n`);
 
   await writeFile(configPath, `${JSON.stringify({ ...value, unexpected: true })}\n`);
-  await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(/unknown or missing/);
+  await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(
+    /unrecognized|unknown or missing/i,
+  );
   await writeFile(
     configPath,
     `${JSON.stringify({ ...value, gates: [{ ...value.gates[0], required: false }] })}\n`,

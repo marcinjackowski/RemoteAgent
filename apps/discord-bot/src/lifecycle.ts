@@ -88,17 +88,38 @@ export function mapDispatchToInbound(
     const i = d as RawInteraction;
     const userId = i.member?.user?.id ?? i.user?.id;
     const channelId = i.channel_id;
-    if (userId === undefined || channelId === undefined) return null;
+    const interactionId = i.id;
+    if (
+      userId === undefined ||
+      channelId === undefined ||
+      typeof interactionId !== "string" ||
+      interactionId.length === 0
+    )
+      return null;
     const origin = originOf(config.registry, channelId);
     if (i.type === INTERACTION_TYPE.MESSAGE_COMPONENT) {
       const customId = i.data?.custom_id;
       if (customId === undefined) return null;
-      return { type: "button", guildId: i.guild_id ?? null, userId, origin, customId };
+      return {
+        type: "button",
+        guildId: i.guild_id ?? null,
+        userId,
+        origin,
+        customId,
+        interactionId,
+      };
     }
     if (i.type === INTERACTION_TYPE.APPLICATION_COMMAND) {
       const command = i.data?.name;
       if (command === undefined) return null;
-      return { type: "command", guildId: i.guild_id ?? null, userId, origin, command };
+      return {
+        type: "command",
+        guildId: i.guild_id ?? null,
+        userId,
+        origin,
+        command,
+        interactionId,
+      };
     }
     return null;
   }
@@ -144,9 +165,8 @@ export function createInboundDispatchHandler(
     const interaction = mapDispatchToInbound(mapConfig, t, d);
     if (interaction === null) return;
 
-    // Acknowledge interactions promptly (content-free defer) so the user's client
-    // does not show a failure while the domain side effect proceeds.
-    if (options.acknowledger !== undefined && interaction.type !== "message") {
+    const acknowledge = async (): Promise<void> => {
+      if (options.acknowledger === undefined || interaction.type === "message") return;
       const ack = extractInteractionAck(t, d);
       if (ack !== null) {
         try {
@@ -157,9 +177,23 @@ export function createInboundDispatchHandler(
           options.logger?.("inbound.ack_failed", safeErrorLabel(error));
         }
       }
-    }
+    };
 
     const outcome = await processInbound(processorDeps, interaction);
+    const durableEngineeringControl =
+      outcome.kind === "engineering_proposal" ||
+      outcome.kind === "engineering" ||
+      outcome.kind === "stop";
+    if (durableEngineeringControl && options.onOutcome !== undefined) {
+      // These outcomes can grant or revoke write authority. Persist them first: a crash after a
+      // successful Discord ACK but before the database transaction would otherwise lose the
+      // operator action. A failed sink propagates without a false-success ACK; an owner retry or
+      // provider reconnect remains safe because the durable ingress identity is idempotent.
+      await options.onOutcome(outcome);
+      await acknowledge();
+      return;
+    }
+    await acknowledge();
     if (options.onOutcome !== undefined) {
       await options.onOutcome(outcome);
     }

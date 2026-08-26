@@ -108,7 +108,12 @@ describeIntegration(
           jobs: fixture.jobs,
           readContext: async () => context(fixture),
           executor,
-          writePathAllowlist: Object.freeze(["apps/agent-worker/src"]),
+          writeDeploymentPolicy: Object.freeze({
+            schema_version: 1,
+            purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+            repository_id: fixture.ids.repositoryId,
+            write_path_allowlist: Object.freeze(["apps/agent-worker/src"]),
+          }),
           policy: {
             riskFacts: {
               authority: "SERVER_OWNED",

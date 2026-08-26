@@ -27,7 +27,7 @@ import { randomUUID } from "node:crypto";
 import type * as z from "zod";
 
 import type { ChannelRegistry } from "./channels.js";
-import { encodeApproval, encodeDecision } from "./custom-id.js";
+import { encodeApproval, encodeDecision, encodeEngineeringProposal } from "./custom-id.js";
 import { caseTag, markerSubtextOverhead, statusMarker, withMarkerSubtext } from "./markers.js";
 import type { DiscordGateway, MessageButton } from "./gateway.js";
 import {
@@ -434,7 +434,7 @@ export class DiscordDispatcher {
     }
 
     const chunks = sanitizeMessage(p.body);
-    const components = this.#buttonsFor(p);
+    const components = discordButtonsForThreadMessage(p);
     // Each chunk is a durable, non-reconcilable side effect (HIGH-01 / MEDIUM-06):
     // an unknown outcome halts as AMBIGUOUS instead of being replayed.
     const firstMessageId = await this.#sendChunks({
@@ -840,52 +840,79 @@ export class DiscordDispatcher {
     }
   }
 
-  #buttonsFor(p: ThreadMessagePayload): MessageButton[] {
-    const buttons: MessageButton[] = [];
-    if (p.decision !== undefined) {
-      for (const option of p.decision.options) {
-        buttons.push({
-          customId: encodeDecision({
-            decisionId: p.decision.decision_id,
-            checkpointRevision: p.decision.checkpoint_revision,
-            optionId: option.option_id,
-          }),
-          label: option.label,
-          style: "primary",
-        });
-      }
-    }
-    if (p.approval !== undefined) {
-      buttons.push(
-        {
-          customId: encodeApproval({
-            approvalId: p.approval.approval_id,
-            checkpointRevision: p.approval.checkpoint_revision,
-            choice: "grant",
-          }),
-          label: "Approve",
-          style: "success",
-        },
-        {
-          customId: encodeApproval({
-            approvalId: p.approval.approval_id,
-            checkpointRevision: p.approval.checkpoint_revision,
-            choice: "deny",
-          }),
-          label: "Deny",
-          style: "danger",
-        },
-      );
-    }
-    return buttons;
-  }
-
   #assertInOrder(caseId: string, deliveredSeq: string, seq: number): void {
     const expected = Number(deliveredSeq) + 1;
     if (seq !== expected) {
       throw new DiscordDeferredError(caseId, expected, seq);
     }
   }
+}
+
+/**
+ * Pure code-owned button renderer shared by the production dispatcher and focused contract tests.
+ * Parsing here prevents a caller from smuggling an unvalidated option shape into a custom id.
+ */
+export function discordButtonsForThreadMessage(input: unknown): readonly MessageButton[] {
+  const p = threadMessagePayload.parse(input);
+  const buttons: MessageButton[] = [];
+  if (p.decision !== undefined) {
+    for (const option of p.decision.options) {
+      buttons.push({
+        customId: encodeDecision({
+          decisionId: p.decision.decision_id,
+          checkpointRevision: p.decision.checkpoint_revision,
+          optionId: option.option_id,
+        }),
+        label: option.label,
+        style: "primary",
+      });
+    }
+  }
+  if (p.approval !== undefined) {
+    buttons.push(
+      {
+        customId: encodeApproval({
+          approvalId: p.approval.approval_id,
+          checkpointRevision: p.approval.checkpoint_revision,
+          choice: "grant",
+        }),
+        label: "Approve",
+        style: "success",
+      },
+      {
+        customId: encodeApproval({
+          approvalId: p.approval.approval_id,
+          checkpointRevision: p.approval.checkpoint_revision,
+          choice: "deny",
+        }),
+        label: "Deny",
+        style: "danger",
+      },
+    );
+  }
+  if (p.engineering_proposal !== undefined) {
+    buttons.push(
+      {
+        customId: encodeEngineeringProposal({
+          proposalId: p.engineering_proposal.proposal_id,
+          checkpointRevision: p.engineering_proposal.checkpoint_revision,
+          choice: "grant",
+        }),
+        label: "GRANT",
+        style: "success",
+      },
+      {
+        customId: encodeEngineeringProposal({
+          proposalId: p.engineering_proposal.proposal_id,
+          checkpointRevision: p.engineering_proposal.checkpoint_revision,
+          choice: "deny",
+        }),
+        label: "DENY",
+        style: "danger",
+      },
+    );
+  }
+  return Object.freeze(buttons);
 }
 
 /** Redacted, bounded error text stored as attempt evidence (never a secret). */

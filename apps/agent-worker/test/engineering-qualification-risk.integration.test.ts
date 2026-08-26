@@ -1,11 +1,19 @@
-import { engineeringArtifactDigest, EngineeringStage } from "@remoteagent/contracts";
+import {
+  canonicalDigest,
+  engineeringArtifactDigest,
+  EngineeringStage,
+} from "@remoteagent/contracts";
 import {
   type RuntimeConfig,
   type RuntimeRequest,
   type RuntimeResponse,
   type RuntimeTransport,
 } from "@remoteagent/bedrock-runtime";
-import { WorkUnitRepository } from "@remoteagent/database";
+import {
+  ExternalActionRepository,
+  ReceiptRepository,
+  WorkUnitRepository,
+} from "@remoteagent/database";
 import { afterEach, expect, it } from "vitest";
 
 import {
@@ -444,7 +452,7 @@ describeIntegration(
           unit: { workUnit: unit },
           run: { runId: fixture.ids.runId, checkpointRevision: 0 },
         }),
-      ).rejects.toThrow(/NOT_FOUND/);
+      ).rejects.toThrow(/exact worker materialization/);
       expect(transport.requests).toHaveLength(0);
       expect(
         (
@@ -457,66 +465,6 @@ describeIntegration(
         (await fixture.db.query("SELECT 1 FROM workspaces WHERE case_id=$1", [fixture.ids.caseId]))
           .rowCount,
       ).toBe(0);
-      for (const selectedOptionId of ["grant", "deny"] as const) {
-        const genericFixture = await createEngineeringQualificationFixture({
-          id: `large-decision-${selectedOptionId}`,
-        });
-        active.push(genericFixture);
-        await genericFixture.seedAnsweredDecision("decision-z-escalation");
-        await genericFixture.seedAnsweredDecision(
-          `decision-generic-${selectedOptionId}`,
-          selectedOptionId,
-        );
-        // A real scoped approval deliberately shares the decision id. Only the lease reason
-        // distinguishes the authorization channel; recognizing decision_answer would now write.
-        await genericFixture.grantWriteApproval({
-          approvalId: `decision-generic-${selectedOptionId}`,
-          processClass: "LARGE_OR_HIGH_RISK",
-        });
-        const genericLease = await genericFixture.claimImplementer({
-          reason: "decision_answer",
-          decisionId: `decision-generic-${selectedOptionId}`,
-          checkpointRevision: 0,
-        });
-        const genericTransport = new QualificationTransport({
-          caseId: genericFixture.ids.caseId,
-          runId: genericFixture.ids.runId,
-          sliceIds: ["slice-1"],
-          implementationPaths: ["src/large.ts"],
-          processClass: "LARGE_OR_HIGH_RISK",
-        });
-        const genericProduction = genericFixture.makeProduction(genericLease, {
-          transport: genericTransport,
-          policy,
-        });
-        const genericUnit = await new WorkUnitRepository().findById(
-          genericFixture.db,
-          genericFixture.ids.workUnitId,
-        );
-        if (genericUnit === null) throw new Error("expected generic decision work unit");
-        await expect(
-          genericProduction.port.open({
-            unit: { workUnit: genericUnit },
-            run: { runId: genericFixture.ids.runId, checkpointRevision: 0 },
-          }),
-        ).rejects.toThrow(/durable write approval/);
-        expect(genericTransport.requests).toHaveLength(0);
-        expect(
-          (
-            await genericFixture.db.query("SELECT 1 FROM engineering_operations WHERE run_id=$1", [
-              genericFixture.ids.runId,
-            ])
-          ).rowCount,
-        ).toBe(0);
-        expect(
-          (
-            await genericFixture.db.query("SELECT 1 FROM workspaces WHERE case_id=$1", [
-              genericFixture.ids.caseId,
-            ])
-          ).rowCount,
-        ).toBe(0);
-      }
-
       const approvedFixture = await createEngineeringQualificationFixture({ id: "large-approved" });
       active.push(approvedFixture);
       await approvedFixture.seedAnsweredDecision("decision-z-escalation");
@@ -528,9 +476,6 @@ describeIntegration(
         reason: "engineering_approval",
         approvalId: "approval-a-write",
         checkpointRevision: 0,
-        // Spoofed scope and digest are deliberately ignored by the candidate extractor.
-        actionDigest: `sha256:${"0".repeat(64)}`,
-        authoritativeScope: { repo_allowlist: ["foreign-repo"] },
       });
       const approvedTransport = new QualificationTransport({
         caseId: approvedFixture.ids.caseId,
@@ -608,6 +553,226 @@ describeIntegration(
         "approval-a-write",
         "decision-z-escalation",
       ]);
+    });
+
+    it.each(["grant", "deny"] as const)(
+      "rejects durable DecisionAnswer model option %s and its generic approval before engineering work",
+      async (selectedOptionId) => {
+        const fixture = await createEngineeringQualificationFixture({
+          id: `large-decision-${selectedOptionId}`,
+        });
+        active.push(fixture);
+        await fixture.seedAnsweredDecision("decision-z-escalation");
+        const decisionId = `decision-generic-${selectedOptionId}`;
+        await fixture.seedAnsweredDecision(decisionId, selectedOptionId);
+        // The generic Approval deliberately shares the DecisionAnswer identity and exact write
+        // digest. Only the dedicated proposal/materialization channel may make it authoritative.
+        await fixture.grantWriteApproval({
+          approvalId: decisionId,
+          processClass: "LARGE_OR_HIGH_RISK",
+        });
+        const lease = await fixture.claimImplementer({
+          reason: "decision_answer",
+          decisionId,
+          checkpointRevision: 0,
+        });
+        const transport = new QualificationTransport({
+          caseId: fixture.ids.caseId,
+          runId: fixture.ids.runId,
+          sliceIds: ["slice-1"],
+          implementationPaths: ["src/decision-bypass.ts"],
+          processClass: "LARGE_OR_HIGH_RISK",
+        });
+        const production = fixture.makeProduction(lease, {
+          transport,
+          policy: {
+            riskFacts: { ...riskFacts, security_or_policy: true },
+            ownerEscalation: {
+              authority: "OWNER_DECISION",
+              decisionId: "decision-z-escalation",
+              checkpointRevision: 0,
+              processClass: "LARGE_OR_HIGH_RISK",
+            },
+          },
+        });
+        const unit = await new WorkUnitRepository().findById(fixture.db, fixture.ids.workUnitId);
+        if (unit === null) throw new Error("expected generic decision work unit");
+
+        await expect(
+          production.port.open({
+            unit: { workUnit: unit },
+            run: { runId: fixture.ids.runId, checkpointRevision: 0 },
+          }),
+        ).rejects.toThrow(/durable write approval/);
+        expect(transport.requests).toHaveLength(0);
+        expect(
+          (
+            await fixture.db.query("SELECT 1 FROM engineering_operations WHERE run_id=$1", [
+              fixture.ids.runId,
+            ])
+          ).rowCount,
+        ).toBe(0);
+        expect(
+          (
+            await fixture.db.query("SELECT 1 FROM workspaces WHERE case_id=$1", [
+              fixture.ids.caseId,
+            ])
+          ).rowCount,
+        ).toBe(0);
+        expect(
+          (
+            await fixture.db.query<{ consumed: boolean }>(
+              "SELECT consumed FROM approvals WHERE approval_id=$1",
+              [decisionId],
+            )
+          ).rows[0]?.consumed,
+        ).toBe(false);
+        expect((await fixture.db.query("SELECT 1 FROM engineering_write_proposals")).rowCount).toBe(
+          0,
+        );
+      },
+    );
+
+    it("rejects a receipted external action and its generic approval before engineering work", async () => {
+      const fixture = await createEngineeringQualificationFixture({ id: "large-external-action" });
+      active.push(fixture);
+      await fixture.seedAnsweredDecision("decision-z-escalation");
+
+      const actionId = "generic-external-action";
+      const approvalId = "generic-external-approval";
+      const receiptId = "generic-external-receipt";
+      const canonicalPayload = {
+        schema_version: 2,
+        purpose: "ENGINEERING_WORKFLOW_WRITE",
+        case_id: fixture.ids.caseId,
+        owner_id: fixture.ids.ownerId,
+        checkpoint_revision: 0,
+        work_unit_id: fixture.ids.workUnitId,
+        run_id: fixture.ids.runId,
+        process_class: "LARGE_OR_HIGH_RISK",
+        authoritative_scope: {
+          connection_ids: [],
+          repo_allowlist: [fixture.ids.repositoryId],
+          can_write_workspace: true,
+        },
+        repository_id: fixture.ids.repositoryId,
+        write_path_allowlist: fixture.config.writeDeploymentPolicy.write_path_allowlist,
+        deployment_policy_digest: canonicalDigest(fixture.config.writeDeploymentPolicy),
+      } as const;
+      const actionDigest = await fixture.grantWriteApproval({
+        approvalId,
+        processClass: "LARGE_OR_HIGH_RISK",
+      });
+      expect(canonicalDigest(canonicalPayload)).toBe(actionDigest);
+      await fixture.db.withTransaction(async (tx) => {
+        expect(
+          await new ExternalActionRepository().propose(tx, {
+            actionId,
+            caseId: fixture.ids.caseId,
+            toolName: "jira.comment",
+            connectionId: fixture.ids.connectionId,
+            canonicalPayload,
+            actionDigest,
+            riskTier: "R3",
+            policyDecision: "REQUIRES_APPROVAL",
+            idempotencyKey: "generic-external-action-key",
+          }),
+        ).toMatchObject({ outcome: "PROPOSED" });
+        expect(
+          await new ExternalActionRepository().attachApproval(tx, { actionId, approvalId }),
+        ).toBe(true);
+        expect(
+          await new ExternalActionRepository().advanceStatus(tx, {
+            actionId,
+            from: "APPROVED",
+            to: "EXECUTING",
+          }),
+        ).toBe(true);
+        expect(
+          await new ExternalActionRepository().advanceStatus(tx, {
+            actionId,
+            from: "EXECUTING",
+            to: "SUCCEEDED",
+          }),
+        ).toBe(true);
+        await new ReceiptRepository().record(tx, {
+          receiptId,
+          actionId,
+          externalId: "jira-comment-1",
+          entityVersion: "1",
+          entityVersionField: "version",
+          status: "SUCCEEDED",
+        });
+      });
+      const lease = await fixture.claimImplementer({
+        reason: "external_action",
+        actionId,
+        approvalId,
+        receiptId,
+        checkpointRevision: 0,
+      });
+      const transport = new QualificationTransport({
+        caseId: fixture.ids.caseId,
+        runId: fixture.ids.runId,
+        sliceIds: ["slice-1"],
+        implementationPaths: ["src/external-bypass.ts"],
+        processClass: "LARGE_OR_HIGH_RISK",
+      });
+      const production = fixture.makeProduction(lease, {
+        transport,
+        policy: {
+          riskFacts: { ...riskFacts, security_or_policy: true },
+          ownerEscalation: {
+            authority: "OWNER_DECISION",
+            decisionId: "decision-z-escalation",
+            checkpointRevision: 0,
+            processClass: "LARGE_OR_HIGH_RISK",
+          },
+        },
+      });
+      const unit = await new WorkUnitRepository().findById(fixture.db, fixture.ids.workUnitId);
+      if (unit === null) throw new Error("expected external-action qualification work unit");
+
+      await expect(
+        production.port.open({
+          unit: { workUnit: unit },
+          run: { runId: fixture.ids.runId, checkpointRevision: 0 },
+        }),
+      ).rejects.toThrow(/durable write approval/);
+      expect(transport.requests).toHaveLength(0);
+      expect(
+        (
+          await fixture.db.query("SELECT 1 FROM engineering_operations WHERE run_id=$1", [
+            fixture.ids.runId,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      expect(
+        (await fixture.db.query("SELECT 1 FROM workspaces WHERE case_id=$1", [fixture.ids.caseId]))
+          .rowCount,
+      ).toBe(0);
+      expect(
+        (
+          await fixture.db.query<{ consumed: boolean }>(
+            "SELECT consumed FROM approvals WHERE approval_id=$1",
+            [approvalId],
+          )
+        ).rows[0]?.consumed,
+      ).toBe(false);
+      expect(
+        (
+          await fixture.db.query<{ status: string; receipt_id: string }>(
+            `SELECT a.status, r.receipt_id
+               FROM external_actions a
+               JOIN receipts r ON r.action_id=a.action_id
+              WHERE a.action_id=$1`,
+            [actionId],
+          )
+        ).rows[0],
+      ).toEqual({ status: "SUCCEEDED", receipt_id: receiptId });
+      expect((await fixture.db.query("SELECT 1 FROM engineering_write_proposals")).rowCount).toBe(
+        0,
+      );
     });
   },
   available,

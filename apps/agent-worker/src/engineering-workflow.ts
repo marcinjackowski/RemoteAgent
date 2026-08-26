@@ -14,9 +14,11 @@ import {
   engineeringSliceContract,
   engineeringSystemDesign,
   engineeringVerificationDecision,
-  engineeringWriteAuthorizationScopeDigest,
+  engineeringWriteAuthorizationScopeV2Digest,
+  engineeringWriteDeploymentPolicyV1Digest,
   engineeringProcessClass,
-  normalizeEngineeringWriteAuthorizationScope,
+  normalizeEngineeringWriteAuthorizationScopeV2,
+  normalizeEngineeringWriteDeploymentPolicyV1,
   canonicalDigest,
   idString,
   sha256Digest,
@@ -28,6 +30,7 @@ import {
   type EngineeringProcessRiskFacts,
   type EngineeringSliceImplementationReceipt,
   type EngineeringStage as EngineeringStageValue,
+  type EngineeringWriteDeploymentPolicyV1,
 } from "@remoteagent/contracts";
 import {
   engineeringStructuralFingerprint,
@@ -47,6 +50,7 @@ import {
 } from "@remoteagent/bedrock-runtime";
 import {
   EngineeringControlPlaneRepository,
+  EngineeringGrantedProposalRepository,
   ApprovalRepository,
   JobStore,
   productionRuntime,
@@ -392,6 +396,7 @@ export interface EngineeringWorkflowPolicyOptions {
 }
 
 export type EngineeringApprovalCandidate = Readonly<{
+  proposalId: string;
   approvalId: string;
   checkpointRevision: number;
 }>;
@@ -401,9 +406,11 @@ export function engineeringApprovalCandidateFromLease(
   lease: JobLease,
 ): EngineeringApprovalCandidate | undefined {
   if (lease.payload.reason !== "engineering_approval") return undefined;
+  const proposalId = idString.safeParse(lease.payload.proposalId);
   const approvalId = idString.safeParse(lease.payload.approvalId);
   const checkpointRevision = lease.payload.checkpointRevision;
   if (
+    !proposalId.success ||
     !approvalId.success ||
     !Number.isSafeInteger(checkpointRevision) ||
     (checkpointRevision as number) < 0
@@ -411,6 +418,7 @@ export function engineeringApprovalCandidateFromLease(
     throw new Error("engineering-approval writer lease lacks a bounded approval binding");
   }
   return Object.freeze({
+    proposalId: proposalId.data,
     approvalId: approvalId.data,
     checkpointRevision: checkpointRevision as number,
   });
@@ -431,10 +439,8 @@ export interface EngineeringRuntimePortOptions {
   readonly policy: EngineeringWorkflowPolicyOptions;
   /** Untrusted identity candidate extracted from the lease; never carries scope or a digest. */
   readonly approvalCandidate?: EngineeringApprovalCandidate;
-  /** Production deployment's single exact repository allowlist entry. */
-  readonly requiredRepositoryId?: string;
   /** Required server-owned deployment cap; never derived from model-authored slice paths. */
-  readonly writePathAllowlist: readonly string[];
+  readonly writeDeploymentPolicy: EngineeringWriteDeploymentPolicyV1;
   /** Overall duration from the durable run creation time, not from a retry or lease renewal. */
   readonly workflowDeadlineMs?: number;
   readonly controlPlane?: EngineeringControlPlaneRepository;
@@ -835,6 +841,8 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
   readonly #options: EngineeringRuntimePortOptions;
   readonly #control: EngineeringControlPlaneRepository;
   readonly #approvals = new ApprovalRepository();
+  readonly #grantedProposals = new EngineeringGrantedProposalRepository();
+  readonly #writePolicy: EngineeringWriteDeploymentPolicyV1;
   readonly #contexts = new Map<string, CompiledRoleContext>();
   readonly #operations = new Map<string, EngineeringControlOperationRow>();
   readonly #commitDescriptors = new Map<string, GitEvidenceBoundCommitDescriptor>();
@@ -858,6 +866,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       throw new Error("workflowDeadlineMs must be a positive safe integer");
     }
     this.#options = options;
+    this.#writePolicy = normalizeEngineeringWriteDeploymentPolicyV1(options.writeDeploymentPolicy);
     this.#control =
       options.controlPlane ?? new EngineeringControlPlaneRepository(productionRuntime());
   }
@@ -883,11 +892,9 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       throw new Error("engineering port lease/run binding mismatch");
     }
     if (
-      this.#options.requiredRepositoryId !== undefined &&
-      (input.unit.workUnit.authoritative_scope.can_write_workspace !== true ||
-        input.unit.workUnit.authoritative_scope.repo_allowlist.length !== 1 ||
-        input.unit.workUnit.authoritative_scope.repo_allowlist[0] !==
-          this.#options.requiredRepositoryId)
+      input.unit.workUnit.authoritative_scope.can_write_workspace !== true ||
+      input.unit.workUnit.authoritative_scope.repo_allowlist.length !== 1 ||
+      input.unit.workUnit.authoritative_scope.repo_allowlist[0] !== this.#writePolicy.repository_id
     ) {
       throw new Error(
         "engineering work unit does not match the exact deployment repository allowlist",
@@ -938,8 +945,9 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       ) {
         throw new Error("large engineering workflow lacks an exact durable write approval");
       }
-      const scope = normalizeEngineeringWriteAuthorizationScope({
-        schema_version: 1,
+      const deploymentPolicyDigest = engineeringWriteDeploymentPolicyV1Digest(this.#writePolicy);
+      const scope = normalizeEngineeringWriteAuthorizationScopeV2({
+        schema_version: 2,
         purpose: "ENGINEERING_WORKFLOW_WRITE",
         case_id: input.unit.workUnit.case_id,
         owner_id: ownerId,
@@ -948,9 +956,29 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         run_id: input.run.runId,
         process_class: plan.processClass,
         authoritative_scope: input.unit.workUnit.authoritative_scope,
+        repository_id: this.#writePolicy.repository_id,
+        write_path_allowlist: this.#writePolicy.write_path_allowlist,
+        deployment_policy_digest: deploymentPolicyDigest,
       });
-      const scopeDigest = engineeringWriteAuthorizationScopeDigest(scope);
+      const scopeDigest = engineeringWriteAuthorizationScopeV2Digest(scope);
       const consumption = await this.#options.db.withTransaction(async (tx) => {
+        // Lease authority fences every later read/consume in the same transaction. A reclaimed
+        // loser must never consume the single-use Approval before the current winner opens.
+        await this.#options.jobs.assertCurrentLease(tx, this.#options.lease);
+        await this.#grantedProposals.assertExact(tx, {
+          proposalId: candidate.proposalId,
+          approvalId: candidate.approvalId,
+          jobId: this.#options.lease.jobId,
+          caseId: input.unit.workUnit.case_id,
+          ownerId,
+          checkpointRevision: input.run.checkpointRevision,
+          workUnitId: input.unit.workUnit.work_unit_id,
+          runId: input.run.runId,
+          repositoryId: this.#writePolicy.repository_id,
+          writePathAllowlist: this.#writePolicy.write_path_allowlist,
+          deploymentPolicyDigest,
+          actionDigest: scopeDigest,
+        });
         const consumed = await this.#approvals.consume(tx, {
           approvalId: candidate.approvalId,
           caseId: input.unit.workUnit.case_id,
@@ -1073,7 +1101,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       if (recovered.artifact.payload.artifact_kind === "SliceContract")
         assertEngineeringPathsWithinWriteAllowlist(
           recovered.artifact.payload.allowed_paths,
-          this.#options.writePathAllowlist,
+          this.#writePolicy.write_path_allowlist,
         );
       if (
         recovered.artifact.revision !== binding.checkpointRevision ||
@@ -1546,12 +1574,12 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     if (artifact.artifact_kind === "SliceContract") {
       assertEngineeringPathsWithinWriteAllowlist(
         artifact.allowed_paths,
-        this.#options.writePathAllowlist,
+        this.#writePolicy.write_path_allowlist,
       );
     } else if (artifact.artifact_kind === "SliceImplementationReceipt") {
       assertEngineeringPathsWithinWriteAllowlist(
         artifact.cumulative_paths,
-        this.#options.writePathAllowlist,
+        this.#writePolicy.write_path_allowlist,
       );
     }
     if (binding.stage === EngineeringStage.LOCAL_COMMIT) {
@@ -1800,7 +1828,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
   }
 
   async #assertDurableWritePolicy(binding: EngineeringStageBinding): Promise<void> {
-    const cap = this.#options.writePathAllowlist;
+    const cap = this.#writePolicy.write_path_allowlist;
     if (binding.stage === EngineeringStage.SLICE_PLANNING) return;
     const rows = await this.#control.listRunArtifactRevisions(this.#options.db, {
       runId: binding.runId,

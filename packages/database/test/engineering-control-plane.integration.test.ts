@@ -653,8 +653,13 @@ describeIntegration(
         stage_attempt: 2,
         effect_class: "MUTATING_SIDE_EFFECT",
       });
+      // Migration 036 is now the newest layer. Revert it first, then prove that the
+      // load-bearing migration-035 guard still refuses to erase LOCAL_COMMIT provenance.
+      await expect(migrateDown(db)).resolves.toEqual({ applied: [], reverted: [36] });
       await expect(migrateDown(db)).rejects.toThrow(/LOCAL_COMMIT rows exist/);
-      expect((await migrationStatus(db)).at(-1)).toMatchObject({ version: 35, applied: true });
+      expect(
+        (await migrationStatus(db)).find((migration) => migration.version === 35),
+      ).toMatchObject({ version: 35, applied: true });
     });
 
     it("rolls back the job intent when operation binding is fault-injected", async () => {

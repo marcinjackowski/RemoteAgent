@@ -34,6 +34,9 @@ import {
   engineeringSystemDesign,
   engineeringTerminalReason,
   engineeringVerificationDecision,
+  engineeringWriteAuthorizationScopeV2,
+  engineeringWriteDeploymentPolicyV1,
+  engineeringWriteProposalV1,
 } from "./engineering-workflow.js";
 
 /**
@@ -62,6 +65,9 @@ export const contractSchemas = {
   ExternalAction: externalAction,
   ExternalReceipt: externalReceipt,
   Approval: approval,
+  EngineeringWriteAuthorizationScopeV2: engineeringWriteAuthorizationScopeV2,
+  EngineeringWriteDeploymentPolicy: engineeringWriteDeploymentPolicyV1,
+  EngineeringWriteProposal: engineeringWriteProposalV1,
   EngineeringOutcomeContract: engineeringOutcomeContract,
   EngineeringSystemDesign: engineeringSystemDesign,
   EngineeringProgramDesign: engineeringProgramDesign,

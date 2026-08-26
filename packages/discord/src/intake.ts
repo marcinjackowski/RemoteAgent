@@ -1,8 +1,8 @@
 /**
  * Inbound Discord intake (RA-006).
  *
- * Normalizes raw inbound interactions (messages, the `/stop` command, decision /
- * approval button clicks) into typed, authorized intents the rest of the system
+ * Normalizes raw inbound interactions (messages, `/stop` and `/engineering` commands, decision /
+ * approval / engineering proposal button clicks) into typed, authorized intents the rest of the system
  * consumes. Authorization runs FIRST (see `authorization.ts`): an interaction
  * from the wrong guild/user/channel is turned into a content-free `denied`
  * outcome and never parsed further.
@@ -35,11 +35,15 @@ export interface InboundCommand extends InboundContext {
   type: "command";
   /** The slash command name without the leading slash, e.g. "stop". */
   command: string;
+  /** Provider interaction id; durable replay identity. Never the interaction token. */
+  interactionId: string;
 }
 
 export interface InboundButton extends InboundContext {
   type: "button";
   customId: string;
+  /** Provider interaction id; durable replay identity. Never the interaction token. */
+  interactionId: string;
 }
 
 export type InboundInteraction = InboundMessage | InboundCommand | InboundButton;
@@ -54,9 +58,29 @@ export type IntakeOutcome =
       trust: "UNTRUSTED_DATA";
       messageId?: string;
     }
-  | { kind: "stop"; caseId: string }
-  | { kind: "decision"; caseId: string; interaction: Extract<Interaction, { kind: "decision" }> }
-  | { kind: "approval"; caseId: string; interaction: Extract<Interaction, { kind: "approval" }> };
+  | { kind: "stop"; caseId: string; actorId: string; interactionId: string }
+  | { kind: "engineering_proposal"; caseId: string; actorId: string; interactionId: string }
+  | {
+      kind: "decision";
+      caseId: string;
+      actorId: string;
+      interactionId: string;
+      interaction: Extract<Interaction, { kind: "decision" }>;
+    }
+  | {
+      kind: "approval";
+      caseId: string;
+      actorId: string;
+      interactionId: string;
+      interaction: Extract<Interaction, { kind: "approval" }>;
+    }
+  | {
+      kind: "engineering";
+      caseId: string;
+      actorId: string;
+      interactionId: string;
+      interaction: Extract<Interaction, { kind: "engineering" }>;
+    };
 
 export async function handleInbound(
   registry: ChannelRegistry,
@@ -84,15 +108,33 @@ export async function handleInbound(
       };
     }
     case "command": {
-      if (interaction.command !== "stop") {
+      if (interaction.command !== "stop" && interaction.command !== "engineering") {
         return { kind: "ignored", reason: `unknown_command:${interaction.command}` };
       }
       if (auth.caseId === null) {
         // `/stop` must target a specific case thread so it can never stop more
         // than the one case it was invoked in (criterion 6).
-        return { kind: "ignored", reason: "stop_requires_case_thread" };
+        return {
+          kind: "ignored",
+          reason:
+            interaction.command === "stop"
+              ? "stop_requires_case_thread"
+              : "engineering_requires_case_thread",
+        };
       }
-      return { kind: "stop", caseId: auth.caseId };
+      return interaction.command === "stop"
+        ? {
+            kind: "stop",
+            caseId: auth.caseId,
+            actorId: interaction.userId,
+            interactionId: interaction.interactionId,
+          }
+        : {
+            kind: "engineering_proposal",
+            caseId: auth.caseId,
+            actorId: interaction.userId,
+            interactionId: interaction.interactionId,
+          };
     }
     case "button": {
       if (auth.caseId === null) {
@@ -104,9 +146,30 @@ export async function handleInbound(
         return { kind: "ignored", reason: "unrecognized_custom_id" };
       }
       if (decoded.kind === "decision") {
-        return { kind: "decision", caseId: auth.caseId, interaction: decoded };
+        return {
+          kind: "decision",
+          caseId: auth.caseId,
+          actorId: interaction.userId,
+          interactionId: interaction.interactionId,
+          interaction: decoded,
+        };
       }
-      return { kind: "approval", caseId: auth.caseId, interaction: decoded };
+      if (decoded.kind === "approval") {
+        return {
+          kind: "approval",
+          caseId: auth.caseId,
+          actorId: interaction.userId,
+          interactionId: interaction.interactionId,
+          interaction: decoded,
+        };
+      }
+      return {
+        kind: "engineering",
+        caseId: auth.caseId,
+        actorId: interaction.userId,
+        interactionId: interaction.interactionId,
+        interaction: decoded,
+      };
     }
     default: {
       const exhaustive: never = interaction;

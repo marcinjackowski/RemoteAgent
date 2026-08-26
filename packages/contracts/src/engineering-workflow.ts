@@ -33,6 +33,239 @@ export const engineeringWriteAuthorizationScopeV1 = z.strictObject({
   }),
 });
 
+const engineeringWriteAuthorizationScopeV2Base = z.strictObject({
+  schema_version: z.literal(2),
+  purpose: z.literal("ENGINEERING_WORKFLOW_WRITE"),
+  case_id: idString,
+  owner_id: idString,
+  checkpoint_revision: z.int().nonnegative(),
+  work_unit_id: idString,
+  run_id: idString,
+  process_class: engineeringProcessClass,
+  authoritative_scope: z.strictObject({
+    connection_ids: z.array(idString).max(64),
+    repo_allowlist: z.array(idString).max(64),
+    can_write_workspace: z.literal(true),
+  }),
+  repository_id: idString,
+  write_path_allowlist: z.array(relativeRepositoryPath).min(1).max(256),
+  deployment_policy_digest: sha256Digest,
+});
+
+const engineeringWriteDeploymentPolicyV1Base = z.strictObject({
+  schema_version: z.literal(1),
+  purpose: z.literal("ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY"),
+  repository_id: idString,
+  write_path_allowlist: z.array(relativeRepositoryPath).min(1).max(256),
+});
+
+const engineeringExecutionConfigV2PolicyProjection = z.strictObject({
+  schema_version: z.literal(2),
+  workspace_root: z.string().trim().min(1),
+  baseline_root: z.string().trim().min(1),
+  artifact_root: z.string().trim().min(1),
+  repository: z.strictObject({
+    repository_id: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(/^[A-Za-z0-9._-]+$/u),
+    source_path: z.string().trim().min(1),
+    base_branch: z.string().trim().min(1),
+    write_path_allowlist: z.array(relativeRepositoryPath).min(1).max(256),
+  }),
+  gates: z.array(z.unknown()),
+  executable_allowlist: z.array(z.string().trim().min(1)),
+});
+
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function isCanonicalList(values: readonly string[]): boolean {
+  const canonical = uniqueSorted(values);
+  return (
+    canonical.length === values.length && canonical.every((value, index) => value === values[index])
+  );
+}
+
+/** Server deployment's independent repository/path ceiling. */
+export const engineeringWriteDeploymentPolicyV1 =
+  engineeringWriteDeploymentPolicyV1Base.superRefine((policy, ctx) => {
+    if (!isCanonicalList(policy.write_path_allowlist)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["write_path_allowlist"],
+        message: "must be unique and sorted",
+      });
+    }
+  });
+
+type ParsedEngineeringWriteDeploymentPolicyV1 = z.infer<typeof engineeringWriteDeploymentPolicyV1>;
+export type EngineeringWriteDeploymentPolicyV1 = Readonly<
+  Omit<ParsedEngineeringWriteDeploymentPolicyV1, "write_path_allowlist"> & {
+    readonly write_path_allowlist: readonly string[];
+  }
+>;
+
+/** Canonicalize the deployment ceiling before it is compared or digested. */
+export function normalizeEngineeringWriteDeploymentPolicyV1(
+  input: unknown,
+): Readonly<EngineeringWriteDeploymentPolicyV1> {
+  const parsed = engineeringWriteDeploymentPolicyV1Base.parse(input);
+  const normalized = engineeringWriteDeploymentPolicyV1.parse({
+    ...parsed,
+    write_path_allowlist: uniqueSorted(parsed.write_path_allowlist),
+  });
+  return Object.freeze({
+    ...normalized,
+    write_path_allowlist: Object.freeze([...normalized.write_path_allowlist]),
+  });
+}
+
+/** Always derive the policy digest from the strict normalized deployment document. */
+export function engineeringWriteDeploymentPolicyV1Digest(input: unknown): string {
+  return canonicalDigest(normalizeEngineeringWriteDeploymentPolicyV1(input));
+}
+
+/**
+ * Project the one authority-bearing subset of production execution config v2.
+ *
+ * Both deployment processes call this exact helper. The Discord process need not mount or
+ * canonicalize the worker's repository/workspace directories, while the worker still performs
+ * that full operational validation before executing. No caller-provided digest is accepted.
+ */
+export function engineeringWriteDeploymentPolicyFromExecutionConfigV2(
+  input: unknown,
+): Readonly<EngineeringWriteDeploymentPolicyV1> {
+  const config = engineeringExecutionConfigV2PolicyProjection.parse(input);
+  return normalizeEngineeringWriteDeploymentPolicyV1({
+    schema_version: 1,
+    purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+    repository_id: config.repository.repository_id,
+    write_path_allowlist: config.repository.write_path_allowlist,
+  });
+}
+
+/**
+ * Exact engineering approval scope used by the dedicated proposal ingress.
+ *
+ * V1 remains unchanged for legacy durable grants. V2 adds the production repository and path
+ * ceiling plus a digest of the server-owned deployment policy. The duplicated repository id is
+ * intentional: it makes both the work-unit authority and the deployment ceiling explicit, and the
+ * refinement requires them to be the same singleton.
+ */
+export const engineeringWriteAuthorizationScopeV2 =
+  engineeringWriteAuthorizationScopeV2Base.superRefine((scope, ctx) => {
+    if (
+      scope.authoritative_scope.repo_allowlist.length !== 1 ||
+      scope.authoritative_scope.repo_allowlist[0] !== scope.repository_id
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["repository_id"],
+        message: "repository_id must equal the exact authoritative repo_allowlist singleton",
+      });
+    }
+    const expectedDeploymentPolicyDigest = engineeringWriteDeploymentPolicyV1Digest({
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+      repository_id: scope.repository_id,
+      write_path_allowlist: scope.write_path_allowlist,
+    });
+    if (scope.deployment_policy_digest !== expectedDeploymentPolicyDigest) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["deployment_policy_digest"],
+        message: "must match the canonical server-owned repository/path deployment policy",
+      });
+    }
+    for (const [path, values] of [
+      [["authoritative_scope", "connection_ids"], scope.authoritative_scope.connection_ids],
+      [["authoritative_scope", "repo_allowlist"], scope.authoritative_scope.repo_allowlist],
+      [["write_path_allowlist"], scope.write_path_allowlist],
+    ] as const) {
+      if (!isCanonicalList(values)) {
+        ctx.addIssue({ code: "custom", path: [...path], message: "must be unique and sorted" });
+      }
+    }
+  });
+
+type ParsedEngineeringWriteAuthorizationScopeV2 = z.infer<
+  typeof engineeringWriteAuthorizationScopeV2
+>;
+export type EngineeringWriteAuthorizationScopeV2 = Readonly<
+  Omit<
+    ParsedEngineeringWriteAuthorizationScopeV2,
+    "authoritative_scope" | "write_path_allowlist"
+  > & {
+    readonly authoritative_scope: Readonly<{
+      readonly connection_ids: readonly string[];
+      readonly repo_allowlist: readonly string[];
+      readonly can_write_workspace: true;
+    }>;
+    readonly write_path_allowlist: readonly string[];
+  }
+>;
+
+/** Canonicalize every set-like V2 field before deriving authority. */
+export function normalizeEngineeringWriteAuthorizationScopeV2(
+  input: unknown,
+): Readonly<EngineeringWriteAuthorizationScopeV2> {
+  const parsed = engineeringWriteAuthorizationScopeV2Base.parse(input);
+  const normalized = engineeringWriteAuthorizationScopeV2.parse({
+    ...parsed,
+    authoritative_scope: {
+      connection_ids: uniqueSorted(parsed.authoritative_scope.connection_ids),
+      repo_allowlist: uniqueSorted(parsed.authoritative_scope.repo_allowlist),
+      can_write_workspace: true as const,
+    },
+    write_path_allowlist: uniqueSorted(parsed.write_path_allowlist),
+  });
+  return Object.freeze({
+    ...normalized,
+    authoritative_scope: Object.freeze({
+      ...normalized.authoritative_scope,
+      connection_ids: Object.freeze([...normalized.authoritative_scope.connection_ids]),
+      repo_allowlist: Object.freeze([...normalized.authoritative_scope.repo_allowlist]),
+    }),
+    write_path_allowlist: Object.freeze([...normalized.write_path_allowlist]),
+  });
+}
+
+/** Digest for the V2 scope only; the legacy V1 digest/parser is deliberately unchanged. */
+export function engineeringWriteAuthorizationScopeV2Digest(input: unknown): string {
+  return canonicalDigest(normalizeEngineeringWriteAuthorizationScopeV2(input));
+}
+
+/** Strict owner-visible proposal. Authority is carried only by its server-owned V2 scope. */
+export const engineeringWriteProposalV1 = z
+  .strictObject({
+    schema_version: z.literal(1),
+    proposal_id: idString,
+    objective: text
+      .min(1)
+      .max(8_192)
+      .refine((value) => value.trim().length > 0, "must not be blank"),
+    authorization_scope: engineeringWriteAuthorizationScopeV2,
+    action_digest: sha256Digest,
+    expires_at: isoTimestamp,
+  })
+  .superRefine((proposal, ctx) => {
+    if (
+      proposal.action_digest !==
+      engineeringWriteAuthorizationScopeV2Digest(proposal.authorization_scope)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["action_digest"],
+        message: "action_digest must match the canonical V2 authorization scope",
+      });
+    }
+  });
+
+export type EngineeringWriteProposalV1 = Readonly<z.infer<typeof engineeringWriteProposalV1>>;
+
 type ParsedEngineeringWriteAuthorizationScopeV1 = z.infer<
   typeof engineeringWriteAuthorizationScopeV1
 >;
@@ -51,12 +284,11 @@ export function normalizeEngineeringWriteAuthorizationScope(
   input: unknown,
 ): Readonly<EngineeringWriteAuthorizationScopeV1> {
   const parsed = engineeringWriteAuthorizationScopeV1.parse(input);
-  const uniqueSorted = (values: readonly string[]) => Object.freeze([...new Set(values)].sort());
   return Object.freeze({
     ...parsed,
     authoritative_scope: Object.freeze({
-      connection_ids: uniqueSorted(parsed.authoritative_scope.connection_ids),
-      repo_allowlist: uniqueSorted(parsed.authoritative_scope.repo_allowlist),
+      connection_ids: Object.freeze(uniqueSorted(parsed.authoritative_scope.connection_ids)),
+      repo_allowlist: Object.freeze(uniqueSorted(parsed.authoritative_scope.repo_allowlist)),
       can_write_workspace: true as const,
     }),
   });

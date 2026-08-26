@@ -1,5 +1,5 @@
 /**
- * Interaction `custom_id` encoding for decision / approval buttons (RA-006).
+ * Interaction `custom_id` encoding for decision / approval / engineering proposal buttons.
  *
  * A decision button MUST be bound to the exact decision id AND the checkpoint
  * revision it was raised at (acceptance criterion 5), so an owner clicking a
@@ -19,7 +19,7 @@ export const MAX_CUSTOM_ID_LENGTH = 100;
 
 const VERSION = "v1";
 
-export type InteractionKind = "decision" | "approval";
+export type InteractionKind = "decision" | "approval" | "engineering";
 
 export interface DecisionInteraction {
   kind: "decision";
@@ -36,7 +36,16 @@ export interface ApprovalInteraction {
   choice: "grant" | "deny";
 }
 
-export type Interaction = DecisionInteraction | ApprovalInteraction;
+/** Dedicated engineering proposal choice. It is never a generic policy approval. */
+export interface EngineeringProposalInteraction {
+  kind: "engineering";
+  proposalId: string;
+  checkpointRevision: number;
+  choice: "grant" | "deny";
+}
+
+export type Interaction =
+  DecisionInteraction | ApprovalInteraction | EngineeringProposalInteraction;
 
 export class CustomIdError extends Error {
   public constructor(message: string) {
@@ -83,6 +92,22 @@ export function encodeApproval(input: {
   ]);
 }
 
+/** Build the distinct code-owned engineering proposal interaction identity. */
+export function encodeEngineeringProposal(input: {
+  proposalId: string;
+  checkpointRevision: number;
+  choice: "grant" | "deny";
+}): string {
+  assertRevision(input.checkpointRevision);
+  return finalize([
+    VERSION,
+    "engineering",
+    input.proposalId,
+    String(input.checkpointRevision),
+    input.choice,
+  ]);
+}
+
 /**
  * Parse a `custom_id` received from a Discord interaction. Returns `null` for any
  * id this module did not produce (unknown version/kind, wrong shape, malformed
@@ -116,6 +141,10 @@ export function decodeInteraction(customId: string): Interaction | null {
   if (kind === "approval") {
     if (id.length === 0 || (tail !== "grant" && tail !== "deny")) return null;
     return { kind: "approval", approvalId: id, checkpointRevision: revision, choice: tail };
+  }
+  if (kind === "engineering") {
+    if (id.length === 0 || (tail !== "grant" && tail !== "deny")) return null;
+    return { kind: "engineering", proposalId: id, checkpointRevision: revision, choice: tail };
   }
   return null;
 }

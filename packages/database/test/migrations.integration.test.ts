@@ -4,12 +4,160 @@
  */
 import { afterAll, beforeAll, expect, it } from "vitest";
 
+import {
+  CaseRepository,
+  CheckpointRepository,
+  ConnectionRepository,
+  DiscordBindingRepository,
+  EngineeringApprovalIngressRepository,
+  OwnerRepository,
+} from "../src/repositories/index.js";
+import { ManualClock, SequentialIdGenerator } from "../src/queue/index.js";
 import { loadMigrations, migrateDown, migrateUp, migrationStatus } from "../src/migrate.js";
 import { createEmptyDatabase } from "./harness.js";
 import type { Database } from "../src/client.js";
 import { describeIntegration, ensurePostgres } from "./integration-base.js";
 
 const available = await ensurePostgres();
+
+const ROLLBACK_POLICY = Object.freeze({
+  schema_version: 1 as const,
+  purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY" as const,
+  repository_id: "rollback-repository",
+  write_path_allowlist: ["src"],
+});
+
+async function seedEngineeringIngress(db: Database, status: "PENDING" | "GRANTED"): Promise<void> {
+  const now = Date.now();
+  const ownerId = `rollback-${status.toLowerCase()}-owner`;
+  const connectionId = `rollback-${status.toLowerCase()}-connection`;
+  const caseId = `rollback-${status.toLowerCase()}-case`;
+  const owners = new OwnerRepository();
+  const connections = new ConnectionRepository();
+  const cases = new CaseRepository();
+  const checkpoints = new CheckpointRepository();
+  const bindings = new DiscordBindingRepository();
+  await owners.insert(db, { ownerId, displayName: ownerId });
+  await connections.insert(db, {
+    connectionId,
+    ownerId,
+    provider: "jira",
+    displayName: connectionId,
+  });
+  await cases.insert(db, {
+    caseId,
+    ownerId,
+    status: "NEW",
+    integrationScope: { providers: ["jira"], connection_ids: [connectionId] },
+    discordThreadId: `rollback-${status.toLowerCase()}-thread`,
+  });
+  await db.withTransaction(async (tx) => {
+    await checkpoints.ensureBaseline(tx, {
+      caseId,
+      updatedAt: new Date(now).toISOString(),
+    });
+    await bindings.ensure(tx, { caseId, ownerId, channelId: "rollback-channel" });
+    await bindings.setThread(tx, caseId, {
+      threadId: `rollback-${status.toLowerCase()}-thread`,
+      rootMessageId: `rollback-${status.toLowerCase()}-root`,
+    });
+  });
+  const ingress = new EngineeringApprovalIngressRepository({
+    runtime: {
+      clock: new ManualClock(now),
+      ids: new SequentialIdGenerator(),
+      leaseTime: "db",
+    },
+    deploymentPolicy: ROLLBACK_POLICY,
+    proposalTtlMs: 300_000,
+  });
+  const proposed = await ingress.propose(db, {
+    caseId,
+    actorId: "discord-audit-actor",
+    interactionId: `rollback-${status.toLowerCase()}-propose`,
+  });
+  if (proposed.status !== "created") throw new Error("rollback proposal fixture was not created");
+  if (status === "GRANTED") {
+    const granted = await ingress.respond(db, {
+      caseId,
+      actorId: "discord-audit-actor",
+      interactionId: "rollback-granted-grant",
+      proposalId: proposed.proposal.proposal_id,
+      checkpointRevision: 0,
+      choice: "grant",
+    });
+    if (granted.status !== "granted") throw new Error("rollback grant fixture was not created");
+  }
+}
+
+async function engineeringIngressSnapshot(db: Database): Promise<unknown> {
+  const counts = await db.query<Record<string, string>>(
+    `SELECT
+       (SELECT count(*) FROM engineering_write_proposals)::text proposals,
+       (SELECT count(*) FROM engineering_ingress_interactions)::text interactions,
+       (SELECT count(*) FROM approvals)::text approvals,
+       (SELECT count(*) FROM work_units)::text work_units,
+       (SELECT count(*) FROM agent_runs)::text runs,
+       (SELECT count(*) FROM jobs)::text jobs,
+       (SELECT count(*) FROM outbox)::text outbox`,
+  );
+  const proposals = await db.query<{
+    proposal_id: string;
+    status: string;
+    approval_id: string | null;
+    work_unit_id: string;
+    run_id: string;
+    job_id: string | null;
+  }>(
+    `SELECT proposal_id,status,approval_id,work_unit_id,run_id,job_id
+       FROM engineering_write_proposals ORDER BY proposal_id`,
+  );
+  const interactions = await db.query<{
+    interaction_id: string;
+    proposal_id: string | null;
+    interaction_kind: string;
+  }>(
+    `SELECT interaction_id,proposal_id,interaction_kind
+       FROM engineering_ingress_interactions ORDER BY interaction_id`,
+  );
+  const authority = await db.query<{ kind: string; id: string }>(
+    `SELECT 'approval' kind, approval_id id FROM approvals
+     UNION ALL SELECT 'work_unit', work_unit_id FROM work_units
+     UNION ALL SELECT 'run', run_id FROM agent_runs
+     UNION ALL SELECT 'job', job_id FROM jobs
+     ORDER BY kind,id`,
+  );
+  return {
+    counts: counts.rows[0],
+    proposals: proposals.rows,
+    interactions: interactions.rows,
+    authority: authority.rows,
+  };
+}
+
+async function waitForBlockedByWriter(
+  db: Database,
+  writerPid: number,
+  cancelled: () => boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline && !cancelled()) {
+    const waiting = await db.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM pg_stat_activity
+          WHERE datname=current_database()
+            AND pid <> pg_backend_pid()
+            AND wait_event_type='Lock'
+            AND $1 = ANY(pg_blocking_pids(pid))
+       ) AS waiting`,
+      [writerPid],
+    );
+    if (waiting.rows[0]?.waiting === true) return true;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  return false;
+}
 
 describeIntegration(
   "migration lifecycle",
@@ -42,6 +190,47 @@ describeIntegration(
       );
       expect(stageChecks.rows).toHaveLength(2);
       expect(stageChecks.rows.every((row) => row.definition.includes("LOCAL_COMMIT"))).toBe(true);
+
+      const ingressSchema = await db.query<{
+        proposals: string | null;
+        interactions: string | null;
+      }>(
+        `SELECT to_regclass('public.engineering_write_proposals')::text AS proposals,
+                to_regclass('public.engineering_ingress_interactions')::text AS interactions`,
+      );
+      expect(ingressSchema.rows[0]).toEqual({
+        proposals: "engineering_write_proposals",
+        interactions: "engineering_ingress_interactions",
+      });
+      const ingressTriggers = await db.query<{ tgname: string }>(
+        `SELECT tgname FROM pg_trigger
+          WHERE tgrelid IN (
+            'engineering_write_proposals'::regclass,
+            'engineering_ingress_interactions'::regclass)
+            AND NOT tgisinternal
+          ORDER BY tgname`,
+      );
+      expect(ingressTriggers.rows.map((row) => row.tgname)).toEqual([
+        "engineering_ingress_interactions_append_only",
+        "engineering_write_proposals_guard_update",
+        "engineering_write_proposals_no_delete",
+        "engineering_write_proposals_touch_updated_at",
+      ]);
+
+      const ingressForeignKeys = await db.query<{ definition: string }>(
+        `SELECT pg_get_constraintdef(oid) AS definition
+           FROM pg_constraint
+          WHERE conrelid='engineering_write_proposals'::regclass
+            AND contype='f'`,
+      );
+      expect(
+        ingressForeignKeys.rows.filter((row) =>
+          row.definition.includes("engineering_ingress_interactions"),
+        ),
+      ).toHaveLength(2);
+      expect(ingressForeignKeys.rows.some((row) => row.definition.includes("approvals"))).toBe(
+        true,
+      );
     });
 
     it("supports up/down/up returning to a fully-migrated state", async () => {
@@ -73,6 +262,136 @@ describeIntegration(
 
       // Restore full state for a clean teardown.
       await migrateUp(db);
+    });
+
+    it.each(["PENDING", "GRANTED"] as const)(
+      "refuses to revert 036 with a %s proposal and preserves exact ingress authority",
+      async (proposalStatus) => {
+        const created = await createEmptyDatabase();
+        const rollbackDb = created.db;
+        try {
+          await migrateUp(rollbackDb);
+          await seedEngineeringIngress(rollbackDb, proposalStatus);
+          const before = await engineeringIngressSnapshot(rollbackDb);
+
+          await expect(migrateDown(rollbackDb)).rejects.toThrow(
+            /cannot revert migration 036 while engineering ingress rows exist/,
+          );
+
+          expect(
+            (await migrationStatus(rollbackDb)).find((row) => row.version === 36)?.applied,
+          ).toBe(true);
+          expect(await engineeringIngressSnapshot(rollbackDb)).toEqual(before);
+        } finally {
+          await created.drop();
+        }
+      },
+    );
+
+    it("refuses to revert 036 while a concurrent ingress writer can still commit", async () => {
+      const created = await createEmptyDatabase();
+      const rollbackDb = created.db;
+      let releaseWriter!: () => void;
+      const writerMayCommit = new Promise<void>((resolve) => {
+        releaseWriter = resolve;
+      });
+      let writerLocked!: (pid: number) => void;
+      const writerHasLock = new Promise<number>((resolve) => {
+        writerLocked = resolve;
+      });
+      let cancelLockObservation = false;
+      let writer: Promise<void> | null = null;
+      try {
+        await migrateUp(rollbackDb);
+        await new OwnerRepository().insert(rollbackDb, {
+          ownerId: "rollback-race-owner",
+          displayName: "rollback-race-owner",
+        });
+        await new ConnectionRepository().insert(rollbackDb, {
+          connectionId: "rollback-race-connection",
+          ownerId: "rollback-race-owner",
+          provider: "jira",
+          displayName: "rollback-race-connection",
+        });
+        await new CaseRepository().insert(rollbackDb, {
+          caseId: "rollback-race-case",
+          ownerId: "rollback-race-owner",
+          status: "NEW",
+          integrationScope: {
+            providers: ["jira"],
+            connection_ids: ["rollback-race-connection"],
+          },
+          discordThreadId: "rollback-race-thread",
+        });
+
+        writer = rollbackDb.withTransaction(async (tx) => {
+          await tx.query("LOCK TABLE engineering_ingress_interactions IN ROW EXCLUSIVE MODE");
+          const backend = await tx.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+          writerLocked(backend.rows[0]!.pid);
+          await writerMayCommit;
+          await tx.query(
+            `INSERT INTO engineering_ingress_interactions (
+               interaction_id, case_id, owner_id, proposal_id, checkpoint_revision,
+               interaction_kind)
+             VALUES ('rollback-race-interaction','rollback-race-case','rollback-race-owner',
+                     'rollback-race-proposal',0,'PROPOSE')`,
+          );
+        });
+        const writerPid = await writerHasLock;
+
+        const down = migrateDown(rollbackDb);
+        const downSettled = down.then(
+          () => true,
+          () => true,
+        );
+        const firstBoundary = await Promise.race([
+          downSettled.then(() => "down-settled" as const),
+          waitForBlockedByWriter(rollbackDb, writerPid, () => cancelLockObservation).then(
+            (blocked) => (blocked ? ("drop-blocked" as const) : ("observation-cancelled" as const)),
+          ),
+        ]);
+        cancelLockObservation = true;
+        releaseWriter();
+        await writer;
+        const downOutcome = await down.then(
+          (result) => ({ status: "resolved" as const, result }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+
+        expect(firstBoundary).toBe("down-settled");
+        expect(downOutcome.status).toBe("rejected");
+        if (downOutcome.status !== "rejected") throw new Error("migration unexpectedly reverted");
+        expect(downOutcome.error).toBeInstanceOf(Error);
+        expect((downOutcome.error as Error).message).toMatch(/could not obtain lock/i);
+        expect((await migrationStatus(rollbackDb)).find((row) => row.version === 36)?.applied).toBe(
+          true,
+        );
+        expect(await engineeringIngressSnapshot(rollbackDb)).toEqual({
+          counts: {
+            proposals: "0",
+            interactions: "1",
+            approvals: "0",
+            work_units: "0",
+            runs: "0",
+            jobs: "0",
+            outbox: "0",
+          },
+          proposals: [],
+          interactions: [
+            {
+              interaction_id: "rollback-race-interaction",
+              proposal_id: "rollback-race-proposal",
+              interaction_kind: "PROPOSE",
+            },
+          ],
+          authority: [],
+        });
+      } finally {
+        cancelLockObservation = true;
+        releaseWriter();
+        await writer?.catch(() => undefined);
+        await created.drop();
+      }
     });
 
     it("rejects checksum drift on an already-applied migration", async () => {

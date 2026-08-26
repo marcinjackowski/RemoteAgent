@@ -140,6 +140,50 @@ describeIntegration(
       expect(processed).toBe(10);
     });
 
+    it("holds an asserted lease fence until the authority transaction commits", async () => {
+      const jobs = new JobStore({ clock: new SystemClock(), ids: new UuidGenerator() });
+      await seedCase("case-lease-fence");
+      await jobs.enqueue(db, {
+        jobType: "w",
+        payload: { purpose: "authority-consume" },
+        caseId: "case-lease-fence",
+      });
+      const lease = await jobs.claim(db, { owner: "winner", leaseMs: 60_000 });
+      if (lease === null) throw new Error("expected lease fence fixture");
+
+      let releaseFence!: () => void;
+      const held = new Promise<void>((resolve) => {
+        releaseFence = resolve;
+      });
+      let asserted!: () => void;
+      const fenceReady = new Promise<void>((resolve) => {
+        asserted = resolve;
+      });
+      const authorityTransaction = db.withTransaction(async (tx) => {
+        await jobs.assertCurrentLease(tx, lease);
+        asserted();
+        await held;
+      });
+      await fenceReady;
+
+      try {
+        await expect(
+          db.withTransaction(async (tx) => {
+            await tx.query("SET LOCAL lock_timeout = '250ms'");
+            await tx.query("UPDATE jobs SET last_error='must block' WHERE job_id=$1", [
+              lease.jobId,
+            ]);
+          }),
+        ).rejects.toMatchObject({ code: "55P03" });
+      } finally {
+        releaseFence();
+        await authorityTransaction;
+      }
+      await expect(jobs.fail(db, lease, "reclaimed after authority boundary")).resolves.toBe(
+        "PENDING",
+      );
+    });
+
     it("fault injection at COMMIT: a crash before commit persists nothing", async () => {
       const jobs = new JobStore({
         clock: new ManualClock(1000),
