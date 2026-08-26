@@ -28,11 +28,16 @@ it("loads one strict canonical deployment config and fails closed on widening", 
   await Promise.all([artifactInsideSource, sourceInsideWorkspace].map((path) => mkdir(path)));
   const executable = await realpath(process.execPath);
   const value = {
-    schema_version: 1,
+    schema_version: 2,
     workspace_root: workspace,
     baseline_root: baseline,
     artifact_root: artifacts,
-    repository: { repository_id: "repo", source_path: source, base_branch: "main" },
+    repository: {
+      repository_id: "repo",
+      source_path: source,
+      base_branch: "main",
+      write_path_allowlist: ["src", "packages"],
+    },
     gates: [
       {
         schema_version: 1,
@@ -59,12 +64,30 @@ it("loads one strict canonical deployment config and fails closed on widening", 
     repositoryId: "repo",
     baselineRoot: baseline,
     artifactRoot: artifacts,
+    writePathAllowlist: ["packages", "src"],
   });
   expect(loaded.catalog.definitions.map((gate) => gate.gate_id)).toEqual(["unit"]);
+  expect(Object.isFrozen(loaded.writePathAllowlist)).toBe(true);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({
+      ...value,
+      repository: { ...value.repository, write_path_allowlist: ["src"] },
+    })}\n`,
+  );
+  const narrower = await loadEngineeringExecutionConfig(configPath);
+  expect(narrower.configDigest).not.toBe(loaded.configDigest);
+  await writeFile(configPath, `${JSON.stringify(value)}\n`);
   await expect(
     engineeringExecutionConfigFromEnv({ RA_ENGINEERING_CONFIG_PATH: configPath }),
   ).resolves.toMatchObject({ repositoryId: "repo" });
   await expect(engineeringExecutionConfigFromEnv({})).resolves.toBeNull();
+
+  const missingCap = { ...value.repository } as Record<string, unknown>;
+  delete missingCap.write_path_allowlist;
+  await writeFile(configPath, `${JSON.stringify({ ...value, repository: missingCap })}\n`);
+  await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(/unknown or missing/);
+  await writeFile(configPath, `${JSON.stringify(value)}\n`);
 
   await writeFile(configPath, `${JSON.stringify({ ...value, unexpected: true })}\n`);
   await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(/unknown or missing/);

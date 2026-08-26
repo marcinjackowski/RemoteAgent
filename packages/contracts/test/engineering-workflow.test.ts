@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { canonicalDigest } from "../src/canonical.js";
 import {
   assertEngineeringProcessClassAllowed,
   engineeringArtifact,
   engineeringArtifactDigest,
+  engineeringArtifactKindsByStage,
+  isEngineeringArtifactKindAllowedForStage,
+  normalizeEngineeringWritePathAllowlist,
+  assertEngineeringPathsWithinWriteAllowlist,
+  EngineeringStage,
   engineeringContextManifest,
   engineeringDesignDecision,
   engineeringEvidenceBundle,
@@ -18,6 +24,9 @@ import {
   engineeringSystemDesign,
   engineeringTerminalReason,
   engineeringVerificationDecision,
+  engineeringWriteAuthorizationScopeDigest,
+  engineeringWriteAuthorizationScopeV1,
+  normalizeEngineeringWriteAuthorizationScope,
   type EngineeringProcessRiskFacts,
 } from "../src/engineering-workflow.js";
 
@@ -55,6 +64,89 @@ const risk = (patch: Partial<EngineeringProcessRiskFacts> = {}): EngineeringProc
 });
 
 describe("engineering workflow contracts", () => {
+  it("owns a frozen exhaustive stage-to-artifact-kind map and a segment-aware write cap", () => {
+    expect(Object.keys(engineeringArtifactKindsByStage).sort()).toEqual(
+      Object.values(EngineeringStage).sort(),
+    );
+    expect(Object.isFrozen(engineeringArtifactKindsByStage)).toBe(true);
+    for (const kinds of Object.values(engineeringArtifactKindsByStage)) {
+      expect(Object.isFrozen(kinds)).toBe(true);
+      expect(kinds.length).toBeGreaterThan(0);
+    }
+    expect(
+      isEngineeringArtifactKindAllowedForStage(EngineeringStage.GATE_EXECUTION, "EvidenceBundle"),
+    ).toBe(true);
+    expect(
+      isEngineeringArtifactKindAllowedForStage(EngineeringStage.GATE_EXECUTION, "SliceContract"),
+    ).toBe(false);
+
+    const cap = normalizeEngineeringWritePathAllowlist(["src/lib", "src", "src"]);
+    expect(cap).toEqual(["src", "src/lib"]);
+    expect(Object.isFrozen(cap)).toBe(true);
+    expect(assertEngineeringPathsWithinWriteAllowlist(["src/a.ts"], ["src"])).toEqual(["src/a.ts"]);
+    expect(() => assertEngineeringPathsWithinWriteAllowlist(["src2/a.ts"], ["src"])).toThrow(
+      /outside.*allowlist/,
+    );
+  });
+
+  it("normalizes, freezes and digests the strict server-owned write authorization scope", () => {
+    const scope = normalizeEngineeringWriteAuthorizationScope({
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE",
+      case_id: "case",
+      owner_id: "owner",
+      checkpoint_revision: 3,
+      work_unit_id: "unit",
+      run_id: "run",
+      process_class: "LARGE_OR_HIGH_RISK",
+      authoritative_scope: {
+        connection_ids: ["connection-b", "connection-a", "connection-a"],
+        repo_allowlist: ["repo-b", "repo-a"],
+        can_write_workspace: true,
+      },
+    });
+    expect(scope.authoritative_scope.connection_ids).toEqual(["connection-a", "connection-b"]);
+    expect(scope.authoritative_scope.repo_allowlist).toEqual(["repo-a", "repo-b"]);
+    expect(Object.isFrozen(scope)).toBe(true);
+    expect(Object.isFrozen(scope.authoritative_scope)).toBe(true);
+    expect(Object.isFrozen(scope.authoritative_scope.connection_ids)).toBe(true);
+    expect(engineeringWriteAuthorizationScopeDigest(scope)).toBe(canonicalDigest(scope));
+    expect(engineeringWriteAuthorizationScopeDigest(scope)).toBe(
+      engineeringWriteAuthorizationScopeDigest({
+        ...scope,
+        authoritative_scope: {
+          ...scope.authoritative_scope,
+          connection_ids: ["connection-b", "connection-a"],
+        },
+      }),
+    );
+    expect(() => engineeringWriteAuthorizationScopeV1.parse({ ...scope, digest })).toThrow();
+    for (const key of [
+      "purpose",
+      "case_id",
+      "owner_id",
+      "checkpoint_revision",
+      "work_unit_id",
+      "run_id",
+      "process_class",
+      "authoritative_scope",
+    ] as const) {
+      const missing = { ...scope } as Record<string, unknown>;
+      delete missing[key];
+      expect(() => engineeringWriteAuthorizationScopeDigest(missing)).toThrow();
+    }
+    for (const key of ["connection_ids", "repo_allowlist", "can_write_workspace"] as const) {
+      const authoritativeScope = { ...scope.authoritative_scope } as Record<string, unknown>;
+      delete authoritativeScope[key];
+      expect(() =>
+        engineeringWriteAuthorizationScopeDigest({
+          ...scope,
+          authoritative_scope: authoritativeScope,
+        }),
+      ).toThrow();
+    }
+  });
+
   it("strictly validates every standalone boundary without type coercion", () => {
     const binding = { schema_version: 1, case_id: "c", run_id: "r", revision: 0 };
     const source = {

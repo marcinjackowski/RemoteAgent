@@ -35,9 +35,9 @@ import {
 import {
   buildEvidenceBoundCommitDescriptor,
   executeEvidenceBoundLocalCommit,
-  executeVerticalSlice,
-  executeVerticalSliceGates,
-  executeVerticalSliceReview,
+  executeVerticalSlice as executeVerticalSliceProduction,
+  executeVerticalSliceGates as executeVerticalSliceGatesProduction,
+  executeVerticalSliceReview as executeVerticalSliceReviewProduction,
   recoverEvidenceBoundLocalCommit,
   verticalSliceWorkspaceId,
   type VerticalSliceWriterFence,
@@ -45,6 +45,16 @@ import {
 
 const run = promisify(execFile);
 const available = await ensurePostgres();
+const testWritePathAllowlist = Object.freeze(["docs/README.md", "src"]);
+const executeVerticalSlice = (
+  input: Omit<Parameters<typeof executeVerticalSliceProduction>[0], "writePathAllowlist">,
+) => executeVerticalSliceProduction({ ...input, writePathAllowlist: testWritePathAllowlist });
+const executeVerticalSliceGates = (
+  input: Omit<Parameters<typeof executeVerticalSliceGatesProduction>[0], "writePathAllowlist">,
+) => executeVerticalSliceGatesProduction({ ...input, writePathAllowlist: testWritePathAllowlist });
+const executeVerticalSliceReview = (
+  input: Omit<Parameters<typeof executeVerticalSliceReviewProduction>[0], "writePathAllowlist">,
+) => executeVerticalSliceReviewProduction({ ...input, writePathAllowlist: testWritePathAllowlist });
 
 describeIntegration(
   "server-owned vertical slice executor",
@@ -334,6 +344,19 @@ describeIntegration(
         enabled: true,
         inImplementation: false,
       };
+      let caplessImplementerCalls = 0;
+      await expect(
+        executeVerticalSliceProduction({
+          ...common,
+          writer: writer(authority),
+          writePathAllowlist: undefined as never,
+          implement: async () => {
+            caplessImplementerCalls += 1;
+            return { changed_files: [] };
+          },
+        }),
+      ).rejects.toThrow();
+      expect(caplessImplementerCalls).toBe(0);
       await expect(
         executeVerticalSlice({ ...common, writer: writer(authority, "writer-second", 12) }),
       ).rejects.toBeInstanceOf(WorkspaceFencingError);
@@ -365,6 +388,14 @@ describeIntegration(
         attempt: 1,
         implement: async () => ({ changed_files: [] }),
       } as const;
+
+      await expect(
+        executeVerticalSliceProduction({
+          ...common,
+          slice: { ...slice, allowed_paths: ["src2"] },
+          writePathAllowlist: ["src"],
+        }),
+      ).rejects.toThrow(/outside.*allowlist/);
 
       for (const foreign of [
         { ...slice, case_id: "case-foreign" },

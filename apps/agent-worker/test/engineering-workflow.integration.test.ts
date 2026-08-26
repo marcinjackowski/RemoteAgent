@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 
 import {
   engineeringArtifact,
+  engineeringArtifactDigest,
   engineeringContextManifest,
+  engineeringWriteAuthorizationScopeDigest,
   EngineeringStage,
   TrustLevel,
   canonicalDigest,
@@ -13,6 +15,7 @@ import { FakeTransport, createRuntimeConfig } from "@remoteagent/bedrock-runtime
 import {
   CaseRepository,
   ConnectionRepository,
+  ApprovalRepository,
   EngineeringControlPlaneRepository,
   JobStore,
   OwnerRepository,
@@ -22,6 +25,7 @@ import {
 } from "@remoteagent/database";
 import { MetricName, MetricRegistry, StructuredLogger } from "@remoteagent/observability";
 import { gitEvidenceBoundCommitDescriptor } from "@remoteagent/git-lifecycle";
+import { evaluateEngineeringProgress } from "@remoteagent/agent-orchestrator";
 
 import { makeCheckpoint } from "../../../packages/database/test/fixtures.js";
 import { createTestDatabase } from "../../../packages/database/test/harness.js";
@@ -33,11 +37,12 @@ import type { CompiledRoleContext } from "../src/context.js";
 import {
   createBedrockEngineeringStageExecutor,
   createBedrockPreCommitReviewSessionFactory,
-  createPostgresEngineeringRuntimePort,
-  engineeringAuthorizationFromLease,
+  createPostgresEngineeringRuntimePort as createPostgresEngineeringRuntimePortProduction,
+  engineeringApprovalCandidateFromLease,
   type EngineeringStageExecutor,
   type EngineeringSliceImplementationStageExecutor,
   type EngineeringLocalCommitStageExecutor,
+  type EngineeringGateStageExecutor,
 } from "../src/engineering-workflow.js";
 import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
@@ -45,6 +50,29 @@ import { WorkerPersistence } from "../src/persistence.js";
 const available = await ensurePostgres();
 const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
 const runtime = productionRuntime();
+const createPostgresEngineeringRuntimePort = (
+  input: Omit<
+    Parameters<typeof createPostgresEngineeringRuntimePortProduction>[0],
+    "writePathAllowlist"
+  >,
+) =>
+  createPostgresEngineeringRuntimePortProduction({
+    ...input,
+    writePathAllowlist: Object.freeze(["apps/agent-worker/src"]),
+  });
+const smallRiskFacts = Object.freeze({
+  authority: "SERVER_OWNED" as const,
+  security_or_policy: false,
+  migration: false,
+  irreversible_side_effect: false,
+  broad_public_contract_change: false,
+  multi_module: false,
+  new_architecture: false,
+  deterministic_oracle: true,
+  user_data: false,
+  concurrency: false,
+  external_side_effect: false,
+});
 
 function manifest(stage: EngineeringStage, revision = 0) {
   const value = engineeringContextManifest.parse({
@@ -359,7 +387,7 @@ function runtimeIdentity() {
   } as const;
 }
 
-it("derives an owner grant only from an exact causal decision-answer lease", () => {
+it("extracts only a bounded engineering approval identity from the lease", () => {
   const baseLease = {
     jobId: "job-1",
     caseId: "case-1",
@@ -373,9 +401,9 @@ it("derives an owner grant only from an exact causal decision-answer lease", () 
     leaseExpiresAtMs: Date.now() + 30_000,
     leaseOwner: "worker-1",
   } as const;
-  expect(engineeringAuthorizationFromLease(baseLease)).toBeUndefined();
+  expect(engineeringApprovalCandidateFromLease(baseLease)).toBeUndefined();
   expect(
-    engineeringAuthorizationFromLease({
+    engineeringApprovalCandidateFromLease({
       ...baseLease,
       payload: {
         ...baseLease.payload,
@@ -384,17 +412,29 @@ it("derives an owner grant only from an exact causal decision-answer lease", () 
         checkpointRevision: 4,
       },
     }),
+  ).toBeUndefined();
+  expect(
+    engineeringApprovalCandidateFromLease({
+      ...baseLease,
+      payload: {
+        ...baseLease.payload,
+        reason: "engineering_approval",
+        approvalId: "approval-1",
+        checkpointRevision: 4,
+        actionDigest: sha("0"),
+        authoritativeScope: { repo_allowlist: ["foreign"] },
+      },
+    }),
   ).toEqual({
-    authority: "OWNER_DECISION",
-    authorizationId: "decision-1",
+    approvalId: "approval-1",
     checkpointRevision: 4,
   });
   expect(() =>
-    engineeringAuthorizationFromLease({
+    engineeringApprovalCandidateFromLease({
       ...baseLease,
-      payload: { ...baseLease.payload, reason: "decision_answer", checkpointRevision: 4 },
+      payload: { ...baseLease.payload, reason: "engineering_approval", checkpointRevision: 4 },
     }),
-  ).toThrow(/authorization binding/);
+  ).toThrow(/approval binding/);
 });
 
 describeIntegration(
@@ -441,6 +481,104 @@ describeIntegration(
     });
 
     afterEach(async () => drop());
+
+    async function durableReviewProgress(
+      mode: "NO_PROGRESS" | "OSCILLATION",
+    ): Promise<ReturnType<typeof evaluateEngineeringProgress>> {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected qualification lease");
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          modelCalls: 1,
+          artifact:
+            binding.stage === EngineeringStage.SLICE_REVIEW
+              ? engineeringArtifact.parse({
+                  ...modelArtifact(binding.stage),
+                  decision: "CHANGES_REQUIRED",
+                  findings: ["[precommit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa] stable finding"],
+                })
+              : modelArtifact(binding.stage),
+        }),
+      };
+      const options = {
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        reviewExecutor: executor,
+        implementationExecutor: fakeImplementationExecutor(),
+        executeSystemStage: async ({ binding }: { binding: { attempt: number } }) =>
+          engineeringArtifact.parse({
+            ...systemArtifact(EngineeringStage.GATE_EXECUTION, binding.attempt),
+            tree_digest: mode === "NO_PROGRESS" || binding.attempt % 2 === 1 ? sha("a") : sha("b"),
+          }),
+        policy: {
+          riskFacts: {
+            authority: "SERVER_OWNED" as const,
+            security_or_policy: false,
+            migration: false,
+            irreversible_side_effect: false,
+            broad_public_contract_change: false,
+            multi_module: false,
+            new_architecture: false,
+            deterministic_oracle: true,
+            user_data: false,
+            concurrency: false,
+            external_side_effect: false,
+          },
+        },
+      };
+      const port = createPostgresEngineeringRuntimePort(options);
+      await port.open(runtimeIdentity());
+      const invoke = async (stage: EngineeringStage, attempt: number) => {
+        const binding = {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage,
+          attempt,
+        } as const;
+        const context = await port.prepareContext(binding);
+        await port.commitStarted(binding);
+        await port.invokeAndRecord({
+          binding,
+          context,
+          definition: {
+            role: stage === EngineeringStage.SLICE_IMPLEMENTATION ? "IMPLEMENTER" : "REVIEWER",
+            input_artifacts: [],
+            output_artifacts: [],
+            completion_contract: null,
+            workspace_access:
+              stage === EngineeringStage.SLICE_IMPLEMENTATION ? "WRITE" : "READ_ONLY",
+          },
+        });
+      };
+      await invoke(EngineeringStage.SLICE_PLANNING, 1);
+      const attempts = mode === "NO_PROGRESS" ? 5 : 6;
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        await invoke(EngineeringStage.SLICE_IMPLEMENTATION, attempt);
+        await invoke(EngineeringStage.GATE_EXECUTION, attempt);
+        await invoke(EngineeringStage.SLICE_REVIEW, attempt);
+      }
+      const resumed = createPostgresEngineeringRuntimePort(options);
+      const session = await resumed.open(runtimeIdentity());
+      expect(session.fingerprints).toHaveLength(attempts);
+      return evaluateEngineeringProgress({
+        ...session,
+        nowMs: session.deadlineMs - 1,
+      });
+    }
 
     it("runs the production handler through PG intent/STARTED/artifact boundaries", async () => {
       const jobs = new JobStore(runtime);
@@ -528,6 +666,13 @@ describeIntegration(
           ),
       ).toBe(true);
     });
+
+    it.each(["NO_PROGRESS", "OSCILLATION"] as const)(
+      "derives %s from production ordered review artifacts",
+      async (expected) => {
+        expect(await durableReviewProgress(expected)).toBe(expected);
+      },
+    );
 
     it("recovers a durable stage artifact without context or executor replay", async () => {
       const jobs = new JobStore(runtime);
@@ -619,9 +764,348 @@ describeIntegration(
         deadlineMs: expectedDeadline,
       });
       expect(await recovered.recoverStage(binding)).toMatchObject({ status: "RECOVERED" });
-      expect(recoveredSession.fingerprints).toHaveLength(1);
+      expect(recoveredSession.fingerprints).toHaveLength(0);
       expect(contextReads).toBe(1);
       expect(executorCalls).toBe(0);
+    });
+
+    it("replays a retry-safe STARTED model intent without recording a second STARTED", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected qualification lease");
+      let modelCalls = 0;
+      const options = {
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor: {
+          configDigest: sha("5"),
+          schemaDigest: () => sha("6"),
+          execute: async ({ binding }) => {
+            modelCalls += 1;
+            return {
+              kind: "ARTIFACT" as const,
+              artifact: modelArtifact(binding.stage),
+              modelCalls: 1,
+            };
+          },
+        } satisfies EngineeringStageExecutor,
+        policy: { riskFacts: smallRiskFacts },
+      };
+      const binding = {
+        caseId: "case-1",
+        workUnitId: "unit-1",
+        runId: "run-1",
+        checkpointRevision: 0,
+        stage: EngineeringStage.SLICE_PLANNING,
+        attempt: 1,
+      } as const;
+      const crashed = createPostgresEngineeringRuntimePort(options);
+      await crashed.open(runtimeIdentity());
+      await crashed.prepareContext(binding);
+      const intentOnly = createPostgresEngineeringRuntimePort(options);
+      await intentOnly.open(runtimeIdentity());
+      expect(await intentOnly.recoverStage(binding)).toEqual({ status: "NOT_STARTED" });
+      expect(modelCalls).toBe(0);
+      await crashed.commitStarted(binding);
+      const resumed = createPostgresEngineeringRuntimePort(options);
+      await resumed.open(runtimeIdentity());
+      expect(await resumed.recoverStage(binding)).toEqual({ status: "NOT_STARTED" });
+      const context = await resumed.prepareContext(binding);
+      await resumed.commitStarted(binding);
+      await expect(
+        resumed.invokeAndRecord({
+          binding,
+          context,
+          definition: {
+            role: "PRODUCT_MANAGER",
+            input_artifacts: [],
+            output_artifacts: [],
+            completion_contract: null,
+            workspace_access: "READ_ONLY",
+          },
+        }),
+      ).resolves.toMatchObject({ status: "COMPLETED" });
+      expect(modelCalls).toBe(1);
+      const starts = await db.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM engineering_stage_events WHERE run_id='run-1' AND stage='SLICE_PLANNING' AND event_type='STARTED'",
+      );
+      expect(starts.rows[0]!.count).toBe("1");
+    });
+
+    it("recovers a STARTED gate through its dedicated hook using only immutable intent authority", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected qualification lease");
+      await db.query(
+        `INSERT INTO decisions (
+           decision_id, case_id, question, why_now, options, recommendation,
+           blocked_scope, checkpoint_revision)
+         VALUES ('gate-recovery-decision','case-1','Proceed?','Before gate recovery',
+                 '[{"id":"grant","label":"Grant","consequences":"Proceed"}]'::jsonb,
+                 'grant','gate recovery',0);
+         INSERT INTO decision_answers (
+           answer_id, decision_id, case_id, checkpoint_revision, selected_option_id,
+           answered_by, answered_at)
+         VALUES ('gate-recovery-answer','gate-recovery-decision','case-1',0,'grant','owner-1',now())`,
+      );
+      const binding = {
+        caseId: "case-1",
+        workUnitId: "unit-1",
+        runId: "run-1",
+        checkpointRevision: 0,
+        stage: EngineeringStage.GATE_EXECUTION,
+        attempt: 1,
+      } as const;
+      let normalCalls = 0;
+      let recoverCalls = 0;
+      let recoveredDigest = "";
+      let recoveredDeadline = "";
+      let foreignAuthority = false;
+      let contextReads = 0;
+      const gateExecutor: EngineeringGateStageExecutor = {
+        configDigest: sha("3"),
+        schemaDigest: sha("4"),
+        execute: async () => {
+          normalCalls += 1;
+          return systemArtifact(EngineeringStage.GATE_EXECUTION);
+        },
+        recover: async ({ contextManifestDigest, decisionIds, deadlineAt }) => {
+          recoverCalls += 1;
+          recoveredDigest = contextManifestDigest;
+          recoveredDeadline = deadlineAt;
+          expect(decisionIds).toEqual(["gate-recovery-decision"]);
+          return {
+            status: "RECOVERED",
+            artifact: engineeringArtifact.parse({
+              ...systemArtifact(EngineeringStage.GATE_EXECUTION),
+              context_digest: foreignAuthority ? sha("0") : contextManifestDigest,
+              decisions: foreignAuthority ? ["foreign-decision"] : [...decisionIds],
+            }),
+          };
+        },
+      };
+      const options = {
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => {
+          contextReads += 1;
+          return manifest(stage);
+        },
+        executor: {
+          configDigest: sha("5"),
+          schemaDigest: () => sha("6"),
+          execute: async () => {
+            throw new Error("generic executor must not replay GATE_EXECUTION");
+          },
+        } satisfies EngineeringStageExecutor,
+        gateExecutor,
+        policy: {
+          riskFacts: smallRiskFacts,
+          ownerEscalation: {
+            authority: "OWNER_DECISION" as const,
+            decisionId: "gate-recovery-decision",
+            checkpointRevision: 0,
+            processClass: "SMALL" as const,
+          },
+        },
+      };
+      const first = createPostgresEngineeringRuntimePort(options);
+      await first.open(runtimeIdentity());
+      const context = await first.prepareContext(binding);
+      await first.commitStarted(binding);
+      const descriptorRow = await db.query<{
+        descriptor: Record<string, unknown>;
+        input_digest: string;
+        deadline_at: Date;
+      }>(
+        `SELECT i.descriptor, o.input_digest, o.deadline_at
+           FROM engineering_operations o JOIN job_intents i ON i.intent_id=o.intent_id
+          WHERE o.run_id='run-1' AND o.stage='GATE_EXECUTION'`,
+      );
+      expect(descriptorRow.rows[0]!.descriptor).toMatchObject({
+        decision_authority: "DURABLE_VERIFIED_ANSWERS",
+        decision_ids: ["gate-recovery-decision"],
+        deadline_at: descriptorRow.rows[0]!.deadline_at.toISOString(),
+      });
+      expect(descriptorRow.rows[0]!.input_digest).toBe(
+        canonicalDigest(descriptorRow.rows[0]!.descriptor),
+      );
+
+      foreignAuthority = true;
+      const rejected = createPostgresEngineeringRuntimePort(options);
+      await rejected.open(runtimeIdentity());
+      await expect(rejected.recoverStage(binding)).rejects.toThrow(/immutable intent authority/);
+      foreignAuthority = false;
+      const recovered = createPostgresEngineeringRuntimePort(options);
+      await recovered.open(runtimeIdentity());
+      expect(await recovered.recoverStage(binding)).toMatchObject({ status: "RECOVERED" });
+      expect(normalCalls).toBe(0);
+      expect(recoverCalls).toBe(2);
+      expect(recoveredDigest).toBe(engineeringArtifactDigest(context.compiled.manifest));
+      expect(recoveredDeadline).toBe(descriptorRow.rows[0]!.deadline_at.toISOString());
+      expect(contextReads).toBe(1);
+      const repaired = await db.query<{ completions: string; observations: string }>(
+        `SELECT
+           (SELECT count(*)::text FROM job_completions c
+             JOIN engineering_operations o ON o.intent_id=c.intent_id AND o.job_id=c.job_id
+            WHERE o.run_id='run-1' AND o.stage='GATE_EXECUTION') AS completions,
+           (SELECT count(*)::text FROM engineering_stage_events
+            WHERE run_id='run-1' AND stage='GATE_EXECUTION'
+              AND event_type='COMPLETION_OBSERVED') AS observations`,
+      );
+      expect(repaired.rows[0]).toEqual({ completions: "1", observations: "1" });
+    });
+
+    it("does not recover a completion-only gate and never invokes the recovery hook", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected qualification lease");
+      const binding = {
+        caseId: "case-1",
+        workUnitId: "unit-1",
+        runId: "run-1",
+        checkpointRevision: 0,
+        stage: EngineeringStage.GATE_EXECUTION,
+        attempt: 1,
+      } as const;
+      let recoverCalls = 0;
+      const gateExecutor: EngineeringGateStageExecutor = {
+        configDigest: sha("3"),
+        schemaDigest: sha("4"),
+        execute: async () => systemArtifact(EngineeringStage.GATE_EXECUTION),
+        recover: async () => {
+          recoverCalls += 1;
+          return { status: "AMBIGUOUS", detail: "must not be called" };
+        },
+      };
+      const options = {
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor: {
+          configDigest: sha("5"),
+          schemaDigest: () => sha("6"),
+          execute: async () => {
+            throw new Error("not expected");
+          },
+        } satisfies EngineeringStageExecutor,
+        gateExecutor,
+        policy: { riskFacts: smallRiskFacts },
+      };
+      const first = createPostgresEngineeringRuntimePort(options);
+      await first.open(runtimeIdentity());
+      await first.prepareContext(binding);
+      const operation = await db.query<{ intent_id: string }>(
+        "SELECT intent_id FROM engineering_operations WHERE run_id='run-1' AND stage='GATE_EXECUTION'",
+      );
+      await jobs.recordCompletion(db, {
+        intentId: operation.rows[0]!.intent_id,
+        jobId: lease.jobId,
+        outcome: "SUCCEEDED",
+        receipt: { durable: true },
+        lease,
+      });
+      const recovered = createPostgresEngineeringRuntimePort(options);
+      await recovered.open(runtimeIdentity());
+      expect(await recovered.recoverStage(binding)).toMatchObject({ status: "AMBIGUOUS" });
+      expect(recoverCalls).toBe(0);
+    });
+
+    it("reads durable run cancellation and blocks the next operation before STARTED", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      expect(lease).not.toBeNull();
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease: lease!,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor: {
+          configDigest: sha("5"),
+          schemaDigest: () => sha("6"),
+          execute: async ({ binding }) => ({
+            kind: "ARTIFACT",
+            artifact: modelArtifact(binding.stage),
+            modelCalls: 1,
+          }),
+        },
+        policy: {
+          riskFacts: {
+            authority: "SERVER_OWNED",
+            security_or_policy: false,
+            migration: false,
+            irreversible_side_effect: false,
+            broad_public_contract_change: false,
+            multi_module: false,
+            new_architecture: false,
+            deterministic_oracle: true,
+            user_data: false,
+            concurrency: false,
+            external_side_effect: false,
+          },
+        },
+      });
+      await port.open(runtimeIdentity());
+      const discovery = {
+        caseId: "case-1",
+        workUnitId: "unit-1",
+        runId: "run-1",
+        checkpointRevision: 0,
+        stage: EngineeringStage.DISCOVERY,
+        attempt: 1,
+      } as const;
+      const context = await port.prepareContext(discovery);
+      await port.commitStarted(discovery);
+      await port.invokeAndRecord({
+        binding: discovery,
+        context,
+        definition: {
+          role: "PLANNER",
+          input_artifacts: ["EngineeringContextManifest"],
+          output_artifacts: [],
+          completion_contract: null,
+          workspace_access: "READ_ONLY",
+        },
+      });
+      const control = new EngineeringControlPlaneRepository(runtime);
+      const projection = await control.prepareResume(db, { runId: "run-1" });
+      await control.requestCancellation(db, {
+        actionId: "cancel-between-stages",
+        operationId: projection.operation_id,
+        actorId: "owner-1",
+        reason: "qualification cancellation",
+        expectedProjectionDigest: projection.projection_digest,
+      });
+      await db.query("DELETE FROM engineering_run_projections WHERE run_id = 'run-1'");
+
+      await expect(port.readControlState()).resolves.toEqual({ cancelled: true });
+      const next = { ...discovery, stage: EngineeringStage.SLICE_PLANNING } as const;
+      await port.prepareContext(next);
+      await expect(port.commitStarted(next)).rejects.toThrow(/cancellation state/);
     });
 
     it("repairs artifact-only stage completion and runs recovered durable-review cleanup", async () => {
@@ -723,6 +1207,12 @@ describeIntegration(
         implementationBinding,
         systemArtifact(EngineeringStage.SLICE_IMPLEMENTATION, 1),
       );
+      const staleRecovery = createPostgresEngineeringRuntimePort({
+        ...options,
+        lease: { ...lease!, fencingToken: lease!.fencingToken + 1 },
+      });
+      await staleRecovery.open(runtimeIdentity());
+      await expect(staleRecovery.recoverStage(implementationBinding)).rejects.toThrow();
       const implementationRecovery = createPostgresEngineeringRuntimePort(options);
       await implementationRecovery.open(runtimeIdentity());
       expect(await implementationRecovery.recoverStage(implementationBinding)).toMatchObject({
@@ -758,6 +1248,22 @@ describeIntegration(
           reason: "BLOCKED",
           detail: "gate route unavailable before an implementation receipt existed",
         }),
+      );
+      const mismatchedTerminalRecovery = createPostgresEngineeringRuntimePort({
+        ...options,
+        gateExecutor: {
+          configDigest: sha("3"),
+          schemaDigest: sha("4"),
+          execute: async () => systemArtifact(EngineeringStage.GATE_EXECUTION),
+          recover: async () => ({
+            status: "RECOVERED" as const,
+            artifact: systemArtifact(EngineeringStage.GATE_EXECUTION),
+          }),
+        },
+      });
+      await mismatchedTerminalRecovery.open(runtimeIdentity());
+      await expect(mismatchedTerminalRecovery.recoverStage(terminalBinding)).rejects.toThrow(
+        /immutable recovery descriptor/,
       );
       const terminalRecovery = createPostgresEngineeringRuntimePort(options);
       await terminalRecovery.open(runtimeIdentity());
@@ -1095,7 +1601,7 @@ describeIntegration(
       ).rejects.toThrow(/zero model calls/);
     });
 
-    it("reconstructs correction identity, attempts and fingerprint history from ordered artifacts", async () => {
+    it("reconstructs correction identity, attempts and review-boundary fingerprint history", async () => {
       const jobs = new JobStore(runtime);
       await jobs.enqueue(db, {
         caseId: "case-1",
@@ -1198,7 +1704,7 @@ describeIntegration(
 
       const resumed = createPostgresEngineeringRuntimePort(options);
       const session = await resumed.open(runtimeIdentity());
-      expect(session.fingerprints).toHaveLength(4);
+      expect(session.fingerprints).toHaveLength(1);
       const recoveredReview = await resumed.recoverStage({
         caseId: "case-1",
         workUnitId: "unit-1",
@@ -1563,12 +2069,47 @@ describeIntegration(
       );
     });
 
-    it("requires an exact answered owner decision before a high-risk design can implement", async () => {
+    it("requires an exact process escalation and durable scoped approval for high-risk write", async () => {
       const jobs = new JobStore(runtime);
+      const approvalId = "approval-write-1";
+      const actionDigest = engineeringWriteAuthorizationScopeDigest({
+        schema_version: 1,
+        purpose: "ENGINEERING_WORKFLOW_WRITE",
+        case_id: "case-1",
+        owner_id: "owner-1",
+        checkpoint_revision: 0,
+        work_unit_id: "unit-1",
+        run_id: "run-1",
+        process_class: "LARGE_OR_HIGH_RISK",
+        authoritative_scope: {
+          connection_ids: [],
+          repo_allowlist: ["repo-1"],
+          can_write_workspace: true,
+        },
+      });
+      await db.withTransaction(async (tx) => {
+        expect(
+          await new ApprovalRepository().grant(tx, {
+            approvalId,
+            caseId: "case-1",
+            grantedBy: "owner-1",
+            actionDigest,
+            checkpointRevision: 0,
+            expiresAt: new Date(Date.now() + 60_000),
+          }),
+        ).toMatchObject({ outcome: "GRANTED" });
+      });
       await jobs.enqueue(db, {
         caseId: "case-1",
         jobType: "agent.implementer",
-        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+        payload: {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          reason: "engineering_approval",
+          approvalId,
+          checkpointRevision: 0,
+        },
       });
       const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
       expect(lease).not.toBeNull();
@@ -1591,11 +2132,6 @@ describeIntegration(
           decisionId: "owner-grant-1",
           checkpointRevision: 0,
           processClass: "LARGE_OR_HIGH_RISK" as const,
-        },
-        authorization: {
-          authority: "OWNER_DECISION" as const,
-          authorizationId: "owner-grant-1",
-          checkpointRevision: 0,
         },
       };
       const executor: EngineeringStageExecutor = {
@@ -1620,6 +2156,49 @@ describeIntegration(
       await expect(ungranted.open(runtimeIdentity())).rejects.toThrow(/exact durable answer/);
 
       await db.query(
+        `INSERT INTO cases (case_id, owner_id, status, integration_scope, discord_thread_id)
+         VALUES ('foreign-case','owner-1','IMPLEMENTING',
+                 '{"providers":["jira"],"connection_ids":["connection-1"]}'::jsonb,
+                 'foreign-thread')`,
+      );
+      await db.query(
+        `INSERT INTO decisions (
+           decision_id, case_id, question, why_now, options, recommendation,
+           blocked_scope, checkpoint_revision)
+         VALUES
+           ('foreign-case-grant','foreign-case','Authorize?','Before execution',
+            '[{"id":"grant","label":"Grant","consequences":"Proceed"},{"id":"deny","label":"Deny","consequences":"Stop"}]'::jsonb,
+            'grant','engineering workflow',0),
+           ('foreign-revision-grant','case-1','Authorize?','Before execution',
+            '[{"id":"grant","label":"Grant","consequences":"Proceed"},{"id":"deny","label":"Deny","consequences":"Stop"}]'::jsonb,
+            'grant','engineering workflow',1)`,
+      );
+      await db.query(
+        `INSERT INTO decision_answers (
+           answer_id, decision_id, case_id, checkpoint_revision, selected_option_id,
+           answered_by, answered_at)
+         VALUES
+           ('foreign-case-answer','foreign-case-grant','foreign-case',0,'grant','owner-1',now()),
+           ('foreign-revision-answer','foreign-revision-grant','case-1',1,'grant','owner-1',now())`,
+      );
+      for (const authorizationId of ["foreign-case-grant", "foreign-revision-grant"]) {
+        const foreign = createPostgresEngineeringRuntimePort({
+          db,
+          lease: lease!,
+          jobs,
+          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          executor,
+          reviewExecutor: executor,
+          executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
+          policy: {
+            ...policy,
+            ownerEscalation: { ...policy.ownerEscalation, decisionId: authorizationId },
+          },
+        });
+        await expect(foreign.open(runtimeIdentity())).rejects.toThrow(/exact durable answer/);
+      }
+
+      await db.query(
         `INSERT INTO decisions (
            decision_id, case_id, question, why_now, options, recommendation,
            blocked_scope, checkpoint_revision)
@@ -1633,7 +2212,7 @@ describeIntegration(
            answered_by, answered_at)
          VALUES ('answer-grant-1','owner-grant-1','case-1',0,'grant','owner-1',now())`,
       );
-      const granted = createPostgresEngineeringRuntimePort({
+      const decisionOnly = createPostgresEngineeringRuntimePort({
         db,
         lease: lease!,
         jobs,
@@ -1643,9 +2222,401 @@ describeIntegration(
         executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
         policy,
       });
+      await expect(decisionOnly.open(runtimeIdentity())).rejects.toThrow(/durable write approval/);
+
+      const granted = createPostgresEngineeringRuntimePort({
+        db,
+        lease: lease!,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        reviewExecutor: executor,
+        executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
+        policy,
+        approvalCandidate: engineeringApprovalCandidateFromLease(lease!),
+      });
       expect(await granted.open(runtimeIdentity())).toMatchObject({
         plan: { processClass: "LARGE_OR_HIGH_RISK", ownerDecisionId: "owner-grant-1" },
       });
+      const identity = runtimeIdentity();
+      await expect(
+        granted.open({
+          ...identity,
+          unit: {
+            ...identity.unit,
+            workUnit: { ...identity.unit.workUnit, case_id: "foreign-case" },
+          },
+        }),
+      ).rejects.toThrow(/lease\/run binding mismatch/);
+      await expect(
+        granted.prepareContext({
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage: EngineeringStage.SLICE_PLANNING,
+          attempt: 1,
+        }),
+      ).rejects.toThrow(/outside the opened runtime session/);
+      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    });
+
+    it("rejects every foreign write-approval scope component before recording an intent", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected implementer lease");
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const exactScope = {
+        schema_version: 1 as const,
+        purpose: "ENGINEERING_WORKFLOW_WRITE" as const,
+        case_id: "case-1",
+        owner_id: "owner-1",
+        checkpoint_revision: 0,
+        work_unit_id: "unit-1",
+        run_id: "run-1",
+        process_class: "LARGE_OR_HIGH_RISK" as const,
+        authoritative_scope: {
+          connection_ids: [] as string[],
+          repo_allowlist: ["repo-1"],
+          can_write_workspace: true as const,
+        },
+      };
+      const foreignScopes = [
+        { ...exactScope, case_id: "case-foreign" },
+        { ...exactScope, owner_id: "owner-foreign" },
+        { ...exactScope, checkpoint_revision: 1 },
+        { ...exactScope, work_unit_id: "unit-foreign" },
+        { ...exactScope, run_id: "run-foreign" },
+        { ...exactScope, process_class: "MEDIUM" as const },
+        {
+          ...exactScope,
+          authoritative_scope: { ...exactScope.authoritative_scope, repo_allowlist: ["repo-x"] },
+        },
+        {
+          ...exactScope,
+          authoritative_scope: {
+            ...exactScope.authoritative_scope,
+            connection_ids: ["connection-1"],
+          },
+        },
+      ];
+      for (const [index, scope] of foreignScopes.entries()) {
+        const approvalId = `foreign-scope-${index}`;
+        await db.withTransaction(async (tx) => {
+          expect(
+            await new ApprovalRepository().grant(tx, {
+              approvalId,
+              caseId: "case-1",
+              grantedBy: "owner-1",
+              actionDigest: engineeringWriteAuthorizationScopeDigest(scope),
+              checkpointRevision: 0,
+              expiresAt: new Date(Date.now() + 60_000),
+            }),
+          ).toMatchObject({ outcome: "GRANTED" });
+        });
+        const port = createPostgresEngineeringRuntimePort({
+          db,
+          lease,
+          jobs,
+          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          executor,
+          policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
+          approvalCandidate: { approvalId, checkpointRevision: 0 },
+        });
+        await expect(port.open(runtimeIdentity())).rejects.toThrow(/DIGEST_MISMATCH/);
+      }
+      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    });
+
+    it("rejects ALREADY_CONSUMED approval recovery after the case revision advances", async () => {
+      const jobs = new JobStore(runtime);
+      const approvalId = "approval-restart-stale";
+      const actionDigest = engineeringWriteAuthorizationScopeDigest({
+        schema_version: 1,
+        purpose: "ENGINEERING_WORKFLOW_WRITE",
+        case_id: "case-1",
+        owner_id: "owner-1",
+        checkpoint_revision: 0,
+        work_unit_id: "unit-1",
+        run_id: "run-1",
+        process_class: "LARGE_OR_HIGH_RISK",
+        authoritative_scope: {
+          connection_ids: [],
+          repo_allowlist: ["repo-1"],
+          can_write_workspace: true,
+        },
+      });
+      await db.withTransaction(async (tx) => {
+        expect(
+          await new ApprovalRepository().grant(tx, {
+            approvalId,
+            caseId: "case-1",
+            grantedBy: "owner-1",
+            actionDigest,
+            checkpointRevision: 0,
+            expiresAt: new Date(Date.now() + 60_000),
+          }),
+        ).toMatchObject({ outcome: "GRANTED" });
+      });
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          reason: "engineering_approval",
+          approvalId,
+          checkpointRevision: 0,
+        },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected implementer lease");
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const makePort = () =>
+        createPostgresEngineeringRuntimePort({
+          db,
+          lease,
+          jobs,
+          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          executor,
+          policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
+          approvalCandidate: engineeringApprovalCandidateFromLease(lease),
+        });
+      await makePort().open(runtimeIdentity());
+      await db.query(
+        `INSERT INTO case_checkpoints (case_id, owner_id, revision, checkpoint)
+         VALUES ('case-1','owner-1',1,$1::jsonb)`,
+        [JSON.stringify(makeCheckpoint("case-1", 1))],
+      );
+      await db.query("UPDATE cases SET checkpoint_revision=1 WHERE case_id='case-1'");
+      await expect(makePort().open(runtimeIdentity())).rejects.toThrow(/restart proof/);
+      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    });
+
+    it("rejects a cross-stage compiled ContextManifest before binding an intent", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected implementer lease");
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease,
+        jobs,
+        readContext: async () => manifest(EngineeringStage.DISCOVERY),
+        executor,
+        policy: { riskFacts: smallRiskFacts },
+      });
+      await port.open(runtimeIdentity());
+      await expect(
+        port.prepareContext({
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage: EngineeringStage.SLICE_PLANNING,
+          attempt: 1,
+        }),
+      ).rejects.toThrow(/compiled ContextManifest does not match/);
+      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    });
+
+    it("invalidates the complete prior session before a failed re-open on the same port", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected implementer lease");
+      await db.query(
+        `INSERT INTO decisions (
+           decision_id, case_id, question, why_now, options, recommendation,
+           blocked_scope, checkpoint_revision)
+         VALUES ('session-grant','case-1','Authorize?','Before execution',
+                 '[{"id":"grant","label":"Grant","consequences":"Proceed"},{"id":"deny","label":"Deny","consequences":"Stop"}]'::jsonb,
+                 'grant','engineering workflow',0)`,
+      );
+      await db.query(
+        `INSERT INTO decision_answers (
+           answer_id, decision_id, case_id, checkpoint_revision, selected_option_id,
+           answered_by, answered_at)
+         VALUES ('session-answer','session-grant','case-1',0,'grant','owner-1',now())`,
+      );
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        policy: { riskFacts: smallRiskFacts },
+      });
+      const identity = runtimeIdentity();
+      await port.open(identity);
+      await expect(
+        port.open({
+          ...identity,
+          unit: {
+            ...identity.unit,
+            workUnit: { ...identity.unit.workUnit, case_id: "foreign-case" },
+          },
+        }),
+      ).rejects.toThrow(/lease\/run binding mismatch/);
+
+      await expect(
+        port.prepareContext({
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage: EngineeringStage.SLICE_PLANNING,
+          attempt: 1,
+        }),
+      ).rejects.toThrow(/outside the opened runtime session/);
+      expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    });
+
+    it("rejects an arbitrary DesignDecision digest before artifact append", async () => {
+      const jobs = new JobStore(runtime);
+      const approvalId = "design-digest-approval";
+      const actionDigest = engineeringWriteAuthorizationScopeDigest({
+        schema_version: 1,
+        purpose: "ENGINEERING_WORKFLOW_WRITE",
+        case_id: "case-1",
+        owner_id: "owner-1",
+        checkpoint_revision: 0,
+        work_unit_id: "unit-1",
+        run_id: "run-1",
+        process_class: "LARGE_OR_HIGH_RISK",
+        authoritative_scope: {
+          connection_ids: [],
+          repo_allowlist: ["repo-1"],
+          can_write_workspace: true,
+        },
+      });
+      await db.withTransaction(async (tx) => {
+        expect(
+          await new ApprovalRepository().grant(tx, {
+            approvalId,
+            caseId: "case-1",
+            grantedBy: "owner-1",
+            actionDigest,
+            checkpointRevision: 0,
+            expiresAt: new Date(Date.now() + 60_000),
+          }),
+        ).toMatchObject({ outcome: "GRANTED" });
+      });
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          reason: "engineering_approval",
+          approvalId,
+          checkpointRevision: 0,
+        },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected implementer lease");
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
+        approvalCandidate: engineeringApprovalCandidateFromLease(lease),
+      });
+      await port.open(runtimeIdentity());
+      const invoke = async (stage: EngineeringStage) => {
+        const binding = {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage,
+          attempt: 1,
+        } as const;
+        const prepared = await port.prepareContext(binding);
+        await port.commitStarted(binding);
+        return port.invokeAndRecord({
+          binding,
+          context: prepared,
+          definition: {
+            role: "ARCHITECT",
+            input_artifacts: [],
+            output_artifacts: [],
+            completion_contract: null,
+            workspace_access: "READ_ONLY",
+          },
+        });
+      };
+      await invoke(EngineeringStage.PROGRAM_DESIGN);
+      await expect(invoke(EngineeringStage.DESIGN_APPROVAL)).rejects.toThrow(
+        /exact durable ProgramDesign/,
+      );
+      expect(
+        (
+          await db.query(
+            "SELECT 1 FROM engineering_artifact_revisions WHERE artifact_kind='DesignDecision'",
+          )
+        ).rowCount,
+      ).toBe(0);
     });
   },
   available,

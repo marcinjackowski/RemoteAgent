@@ -608,6 +608,28 @@ export class SupervisorRuntime {
           completion: state.completion,
         };
       }
+      if (
+        this.#engineering !== undefined &&
+        state.workUnit.role === "IMPLEMENTER" &&
+        state.workUnit.status === "RUNNING" &&
+        state.run !== null
+      ) {
+        // The outer run is only the driver for the durable engineering stage ledger. An exception
+        // after that run became STARTED says nothing about whether the current inner stage is
+        // NOT_STARTED, recoverable from a receipt, or durably AMBIGUOUS. Leave the outer run
+        // STARTED and make the handler fail; a fresh production pass must call recoverStage first.
+        // Only runEngineeringWorkflow returning null after that durable read may mark the outer
+        // run AMBIGUOUS in the branch above.
+        return {
+          unitId,
+          progressed: claimed || started,
+          ambiguous: false,
+          blocked: true,
+          waiting: false,
+          unit: state,
+          completion: null,
+        };
+      }
       if (started && state.run && this.#persistence.markAmbiguous) {
         try {
           await this.#persistence.markAmbiguous({
@@ -662,6 +684,7 @@ export class SupervisorRuntime {
     const fingerprints = [...session.fingerprints];
     let stageCalls = session.stageCalls;
     let modelCalls = session.modelCalls;
+    let cancelled = session.cancelled;
 
     const stop = async (code: EngineeringRuntimeStopCode, detail: string): Promise<unknown> =>
       port.completion({ unit: state, run: state.run, code, detail });
@@ -676,9 +699,11 @@ export class SupervisorRuntime {
         oscillationLimit: session.oscillationLimit,
         nowMs: this.#clock(),
         deadlineMs: session.deadlineMs,
-        cancelled: session.cancelled,
+        cancelled,
       });
     const stopForProgress = async (): Promise<unknown | undefined> => {
+      const control = await port.readControlState();
+      cancelled ||= control.cancelled;
       const disposition = progress();
       if (disposition === "CONTINUE") return undefined;
       return stop(disposition, `engineering workflow stopped: ${disposition}`);
@@ -702,7 +727,10 @@ export class SupervisorRuntime {
           return stop("APPROVAL_BLOCKED", approval.reasons.join(","));
       }
       loopState = evidence.slice;
-      if (!alreadyCounted)
+      // Progress is sampled at the review boundary. Sampling every implementation/gate/review
+      // stage turns one attempt into A,A,A and the next into B,B,B, which makes a genuine A/B
+      // oscillation invisible to the period-two detector.
+      if (!alreadyCounted && stage === EngineeringStage.SLICE_REVIEW)
         fingerprints.push(engineeringStructuralFingerprint(evidence.structuralState));
       return undefined;
     };
@@ -715,8 +743,6 @@ export class SupervisorRuntime {
       stage: import("@remoteagent/contracts").EngineeringStage,
       attempt: number,
     ): Promise<StageResult> => {
-      const stopped = await stopForProgress();
-      if (stopped !== undefined) return { kind: "RETURN", completion: stopped };
       const binding = {
         caseId: state.workUnit.case_id,
         workUnitId: state.workUnit.work_unit_id,
@@ -732,31 +758,29 @@ export class SupervisorRuntime {
         if (terminal !== undefined) return { kind: "RETURN", completion: terminal };
         return { kind: "COMPLETED", evidence: recovered.evidence };
       }
+      // Recover first: a durable cancellation/deadline must never turn an unknown STARTED
+      // mutating effect into a clean terminal. Dynamic controls apply only before a new stage.
+      const stopped = await stopForProgress();
+      if (stopped !== undefined) return { kind: "RETURN", completion: stopped };
       await writerFence.assertCurrent();
       const context = await port.prepareContext(binding);
-      try {
-        await port.commitStarted(binding);
-        const result = await port.invokeAndRecord({
-          binding,
-          context,
-          definition: engineeringStageRegistry[stage],
-        });
-        if (!Number.isSafeInteger(result.modelCalls) || result.modelCalls < 0) {
-          throw new RuntimeInvariantError("stage modelCalls must be a non-negative safe integer");
-        }
-        stageCalls += 1;
-        modelCalls += result.modelCalls;
-        await writerFence.assertCurrent();
-        if (result.status === "WAITING_FOR_USER" || result.status === "TERMINAL")
-          return { kind: "RETURN", completion: result.completion };
-        const terminal = await acceptEvidence(stage, result.evidence, false);
-        if (terminal !== undefined) return { kind: "RETURN", completion: terminal };
-        return { kind: "COMPLETED", evidence: result.evidence };
-      } catch {
-        // commitStarted may have committed even when the caller observed an error. Recovery must
-        // inspect the durable operation instead of replaying a possibly mutating/model effect.
-        return { kind: "AMBIGUOUS" };
+      await port.commitStarted(binding);
+      const result = await port.invokeAndRecord({
+        binding,
+        context,
+        definition: engineeringStageRegistry[stage],
+      });
+      if (!Number.isSafeInteger(result.modelCalls) || result.modelCalls < 0) {
+        throw new RuntimeInvariantError("stage modelCalls must be a non-negative safe integer");
       }
+      stageCalls += 1;
+      modelCalls += result.modelCalls;
+      await writerFence.assertCurrent();
+      if (result.status === "WAITING_FOR_USER" || result.status === "TERMINAL")
+        return { kind: "RETURN", completion: result.completion };
+      const terminal = await acceptEvidence(stage, result.evidence, false);
+      if (terminal !== undefined) return { kind: "RETURN", completion: terminal };
+      return { kind: "COMPLETED", evidence: result.evidence };
     };
     const unwrap = (result: StageResult): unknown | null | undefined =>
       result.kind === "RETURN" ? result.completion : result.kind === "AMBIGUOUS" ? null : undefined;

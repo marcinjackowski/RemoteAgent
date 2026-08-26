@@ -5,8 +5,11 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import {
   canonicalDigest,
   engineeringArtifact,
+  engineeringArtifactDigest,
   engineeringSliceContract,
   engineeringSliceImplementationReceipt,
+  assertEngineeringPathsWithinWriteAllowlist,
+  normalizeEngineeringWritePathAllowlist,
   relativeRepositoryPath,
   EngineeringStage,
   type EngineeringArtifact,
@@ -33,6 +36,7 @@ import {
 } from "@remoteagent/database";
 import type { BoundedImplementationToolset } from "@remoteagent/implementation-tools";
 import type { MetricRegistry } from "@remoteagent/observability";
+import { PRE_COMMIT_REVIEW_NO_CHANGE, ReviewContractError } from "@remoteagent/review-loop";
 import {
   BaselineWorkspaceStore,
   LocalArtifactStore,
@@ -42,13 +46,15 @@ import {
 import { resolveBaseBranch } from "@remoteagent/workspace-runner";
 import * as z from "zod";
 
-import type { CompiledRoleContext, RoleContextReader } from "./context.js";
+import type { RoleContextReader } from "./context.js";
 import {
   createPostgresEngineeringRuntimePort,
+  engineeringApprovalCandidateFromLease,
   type EngineeringLocalCommitStageExecutor,
   type EngineeringReviewStageExecutor,
   type EngineeringSliceImplementationStageExecutor,
   type EngineeringStageExecutor,
+  type EngineeringGateStageExecutor,
   type EngineeringWorkflowPolicyOptions,
 } from "./engineering-workflow.js";
 import {
@@ -94,6 +100,7 @@ export type EngineeringExecutionConfig = Readonly<{
   repositoryId: string;
   baselineRoot: string;
   artifactRoot: string;
+  writePathAllowlist: readonly string[];
   catalog: VerificationGateCatalog;
   configDigest: string;
 }>;
@@ -160,11 +167,11 @@ export async function loadEngineeringExecutionConfig(
     ],
     "engineering execution config",
   );
-  if (root.schema_version !== 1)
+  if (root.schema_version !== 2)
     throw new Error("engineering execution config version is unsupported");
   const repository = exactRecord(
     root.repository,
-    ["repository_id", "source_path", "base_branch"],
+    ["repository_id", "source_path", "base_branch", "write_path_allowlist"],
     "engineering repository config",
   );
   const repositoryId = nonEmptyString(repository.repository_id, "repository_id");
@@ -198,6 +205,9 @@ export async function loadEngineeringExecutionConfig(
     executable_allowlist: executableAllowlist,
   });
   const baseBranch = nonEmptyString(repository.base_branch, "base_branch");
+  const writePathAllowlist = normalizeEngineeringWritePathAllowlist(
+    repository.write_path_allowlist,
+  );
   const workspaceConfig: WorkspaceConfig = Object.freeze({
     workspaceRoot,
     repositories: Object.freeze({
@@ -209,13 +219,19 @@ export async function loadEngineeringExecutionConfig(
     repositoryId,
     baselineRoot,
     artifactRoot,
+    writePathAllowlist,
     catalog,
     configDigest: canonicalDigest({
-      schema_version: 1,
+      schema_version: 2,
       workspace_root: workspaceRoot,
       baseline_root: baselineRoot,
       artifact_root: artifactRoot,
-      repository: { repository_id: repositoryId, source_path: sourcePath, base_branch: baseBranch },
+      repository: {
+        repository_id: repositoryId,
+        source_path: sourcePath,
+        base_branch: baseBranch,
+        write_path_allowlist: writePathAllowlist,
+      },
       gate_config_digest: catalog.config_digest,
     }),
   });
@@ -331,6 +347,7 @@ async function executeBoundedTool(
 function sliceContract(
   rows: readonly EngineeringControlArtifactRevisionRow[],
   binding: { caseId: string; runId: string; checkpointRevision: number },
+  writePathAllowlist: readonly string[],
 ): EngineeringSliceContract {
   const row = [...rows]
     .reverse()
@@ -345,6 +362,7 @@ function sliceContract(
   ) {
     throw new Error("durable SliceContract crosses the runtime binding");
   }
+  assertEngineeringPathsWithinWriteAllowlist(slice.allowed_paths, writePathAllowlist);
   return slice;
 }
 
@@ -392,6 +410,40 @@ function evidenceBundle(
   if (row?.payload.artifact_kind !== "EvidenceBundle")
     throw new Error("review lacks an exact durable EvidenceBundle");
   return { bundle: row.payload, digest: row.payload_digest };
+}
+
+function previousCorrectionRawPatchDigest(
+  rows: readonly EngineeringControlArtifactRevisionRow[],
+  binding: { caseId: string; runId: string; checkpointRevision: number; attempt: number },
+  slice: EngineeringSliceContract,
+): string | undefined {
+  let activeSliceIndex = -1;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const artifact = rows[index]!.payload;
+    if (
+      artifact.artifact_kind === "SliceContract" &&
+      artifact.slice_id === slice.slice_id &&
+      artifact.case_id === binding.caseId &&
+      artifact.run_id === binding.runId &&
+      artifact.revision === binding.checkpointRevision
+    ) {
+      activeSliceIndex = index;
+      break;
+    }
+  }
+  if (activeSliceIndex < 0 || binding.attempt < 2) return undefined;
+  const previous = rows
+    .slice(activeSliceIndex + 1)
+    .filter((row) => row.payload.artifact_kind === "ReviewDecision")
+    .at(-1);
+  if (
+    previous?.payload.artifact_kind !== "ReviewDecision" ||
+    previous.payload.decision !== "CHANGES_REQUIRED" ||
+    previous.stage_attempt !== binding.attempt - 1
+  ) {
+    return undefined;
+  }
+  return previous.payload.reviewed_digest;
 }
 
 function writerFence(db: Database, jobs: JobStore, lease: JobLease): VerticalSliceWriterFence {
@@ -459,7 +511,7 @@ export function createEngineeringExecution(input: {
     }),
     schemaDigest: implementationDefinition.schemaDigest,
     execute: async ({ binding, objective, context, orderedArtifacts }) => {
-      const slice = sliceContract(orderedArtifacts, binding);
+      const slice = sliceContract(orderedArtifacts, binding, input.config.writePathAllowlist);
       const prior = [...orderedArtifacts]
         .reverse()
         .find((row) => row.payload.artifact_kind === "SliceImplementationReceipt");
@@ -484,6 +536,7 @@ export function createEngineeringExecution(input: {
         checkpointRevision: binding.checkpointRevision,
         writer,
         slice,
+        writePathAllowlist: input.config.writePathAllowlist,
         attempt: binding.attempt,
         priorAgentPaths: priorPaths,
         baselineStore: baselines,
@@ -534,18 +587,22 @@ export function createEngineeringExecution(input: {
     },
   };
 
-  const executeSystemStage = async ({
+  const executeGates = async ({
     binding,
-    context,
+    contextManifestDigest,
     orderedArtifacts,
+    decisionIds,
+    deadlineAt,
   }: {
     binding: import("@remoteagent/agent-orchestrator").EngineeringStageBinding;
-    context: CompiledRoleContext;
+    contextManifestDigest: string;
     orderedArtifacts: readonly EngineeringControlArtifactRevisionRow[];
-  }): Promise<EngineeringArtifact> => {
+    decisionIds: readonly string[];
+    deadlineAt: string;
+  }) => {
     if (binding.stage !== EngineeringStage.GATE_EXECUTION)
       throw new Error("generic system executor is gate-only");
-    const slice = sliceContract(orderedArtifacts, binding);
+    const slice = sliceContract(orderedArtifacts, binding, input.config.writePathAllowlist);
     const receipt = implementationReceipt(orderedArtifacts, binding);
     const observed = await observeSliceImplementationReceipt({
       db: input.db,
@@ -553,6 +610,7 @@ export function createEngineeringExecution(input: {
       workspaceConfig: input.config.workspaceConfig,
       receipt,
       slice,
+      writePathAllowlist: input.config.writePathAllowlist,
       baselineStore: baselines,
     });
     const result = await executeVerticalSliceGates({
@@ -567,26 +625,82 @@ export function createEngineeringExecution(input: {
       checkpointRevision: binding.checkpointRevision,
       writer,
       slice,
+      writePathAllowlist: input.config.writePathAllowlist,
       attempt: binding.attempt,
       baseline: observed.baseline,
       actual: observed.actual,
       catalog: input.config.catalog,
       store: artifacts,
-      deadlineAt: new Date(Date.now() + input.modelConfig.timeoutMs).toISOString(),
-      contextDigest: context.snapshotDigest,
+      deadlineAt,
+      contextDigest: contextManifestDigest,
+      decisions: decisionIds,
       baselineStore: baselines,
     });
-    return result.status === "PASS"
-      ? result.bundle
-      : engineeringArtifact.parse({
-          schema_version: 1,
-          artifact_kind: "TerminalReason",
-          case_id: binding.caseId,
-          run_id: binding.runId,
-          revision: binding.checkpointRevision,
-          reason: "BLOCKED",
-          detail: `required gates did not pass: ${result.reason}`,
+    return result;
+  };
+
+  const blockedGateArtifact = (
+    binding: import("@remoteagent/agent-orchestrator").EngineeringStageBinding,
+    reason: string,
+  ): EngineeringArtifact =>
+    engineeringArtifact.parse({
+      schema_version: 1,
+      artifact_kind: "TerminalReason",
+      case_id: binding.caseId,
+      run_id: binding.runId,
+      revision: binding.checkpointRevision,
+      reason: "BLOCKED",
+      detail: `required gates did not pass: ${reason}`,
+    });
+
+  const gateExecutor: EngineeringGateStageExecutor = {
+    configDigest: canonicalDigest({
+      deployment: input.config.configDigest,
+      route: "GATE_EXECUTION",
+    }),
+    schemaDigest: canonicalDigest({
+      contract: "EngineeringEvidenceBundleOrTerminalReason",
+      version: 1,
+    }),
+    execute: async ({ binding, context, orderedArtifacts, decisionIds, deadlineAt }) => {
+      const result = await executeGates({
+        binding,
+        contextManifestDigest: engineeringArtifactDigest(context.compiled.manifest),
+        orderedArtifacts,
+        decisionIds,
+        deadlineAt,
+      });
+      if (result.status === "BLOCKED" && result.reason === "AMBIGUOUS") {
+        throw new Error("inner verification gate STARTED without a durable completion receipt");
+      }
+      return result.status === "PASS" ? result.bundle : blockedGateArtifact(binding, result.reason);
+    },
+    recover: async ({
+      binding,
+      contextManifestDigest,
+      orderedArtifacts,
+      decisionIds,
+      deadlineAt,
+    }) => {
+      const result = await executeGates({
+        binding,
+        contextManifestDigest,
+        orderedArtifacts,
+        decisionIds,
+        deadlineAt,
+      });
+      if (result.status === "BLOCKED" && result.reason === "AMBIGUOUS") {
+        return Object.freeze({
+          status: "AMBIGUOUS" as const,
+          detail: "inner verification gate STARTED without a durable completion receipt",
         });
+      }
+      return Object.freeze({
+        status: "RECOVERED" as const,
+        artifact:
+          result.status === "PASS" ? result.bundle : blockedGateArtifact(binding, result.reason),
+      });
+    },
   };
 
   const reviewExecutor: EngineeringReviewStageExecutor = {
@@ -596,7 +710,7 @@ export function createEngineeringExecution(input: {
     }),
     schemaDigest: () => canonicalDigest({ contract: "PreCommitReviewOutput", version: 1 }),
     execute: async ({ binding, orderedArtifacts }) => {
-      const slice = sliceContract(orderedArtifacts, binding);
+      const slice = sliceContract(orderedArtifacts, binding, input.config.writePathAllowlist);
       const receipt = implementationReceipt(orderedArtifacts, binding);
       const evidence = evidenceBundle(orderedArtifacts, binding.attempt);
       const observed = await observeSliceImplementationReceipt({
@@ -605,39 +719,65 @@ export function createEngineeringExecution(input: {
         workspaceConfig: input.config.workspaceConfig,
         receipt,
         slice,
+        writePathAllowlist: input.config.writePathAllowlist,
         baselineStore: baselines,
       });
-      const previous = [...orderedArtifacts]
-        .reverse()
-        .find(
-          (row) =>
-            row.payload.artifact_kind === "ReviewDecision" &&
-            row.payload.decision === "CHANGES_REQUIRED",
-        );
-      const result = await executeVerticalSliceReview({
-        db: input.db,
-        lease: input.lease,
-        workspaceConfig: input.config.workspaceConfig,
-        repositoryId: input.config.repositoryId,
-        caseId: binding.caseId,
-        runId: binding.runId,
-        workUnitId: binding.workUnitId,
-        checkpointRevision: binding.checkpointRevision,
-        writer,
+      const previousRawPatchDigest = previousCorrectionRawPatchDigest(
+        orderedArtifacts,
+        binding,
         slice,
-        attempt: binding.attempt,
-        baseline: observed.baseline,
-        actual: observed.actual,
-        evidenceBundle: evidence.bundle,
-        evidenceBundleDigest: evidence.digest,
-        ...(previous?.payload.artifact_kind === "ReviewDecision"
-          ? { previousBlockingRawPatchDigest: previous.payload.reviewed_digest }
-          : {}),
-        taskBrief: input.taskBrief,
-        createReviewerSession: input.createReviewerSession,
-        baselineStore: baselines,
-      });
-      return { kind: "ARTIFACT", artifact: result.decision, modelCalls: result.review.modelCalls };
+      );
+      try {
+        const result = await executeVerticalSliceReview({
+          db: input.db,
+          lease: input.lease,
+          workspaceConfig: input.config.workspaceConfig,
+          repositoryId: input.config.repositoryId,
+          caseId: binding.caseId,
+          runId: binding.runId,
+          workUnitId: binding.workUnitId,
+          checkpointRevision: binding.checkpointRevision,
+          writer,
+          slice,
+          writePathAllowlist: input.config.writePathAllowlist,
+          attempt: binding.attempt,
+          baseline: observed.baseline,
+          actual: observed.actual,
+          evidenceBundle: evidence.bundle,
+          evidenceBundleDigest: evidence.digest,
+          ...(previousRawPatchDigest === undefined
+            ? {}
+            : { previousBlockingRawPatchDigest: previousRawPatchDigest }),
+          taskBrief: input.taskBrief,
+          createReviewerSession: input.createReviewerSession,
+          baselineStore: baselines,
+        });
+        return {
+          kind: "ARTIFACT",
+          artifact: result.decision,
+          modelCalls: result.review.modelCalls,
+        };
+      } catch (error) {
+        if (
+          !(error instanceof ReviewContractError) ||
+          error.message !== PRE_COMMIT_REVIEW_NO_CHANGE
+        ) {
+          throw error;
+        }
+        return {
+          kind: "ARTIFACT",
+          artifact: engineeringArtifact.parse({
+            schema_version: 1,
+            artifact_kind: "TerminalReason",
+            case_id: binding.caseId,
+            run_id: binding.runId,
+            revision: binding.checkpointRevision,
+            reason: "EXHAUSTED",
+            detail: "NO_PROGRESS: corrected attempt produced no change from the rejected patch",
+          }),
+          modelCalls: 0,
+        };
+      }
     },
   };
 
@@ -667,6 +807,7 @@ export function createEngineeringExecution(input: {
         writer,
         workspaceConfig: input.config.workspaceConfig,
         receipt,
+        writePathAllowlist: input.config.writePathAllowlist,
       });
       return buildEvidenceBoundCommitDescriptor({
         operationId,
@@ -711,7 +852,7 @@ export function createEngineeringExecution(input: {
   };
   return Object.freeze({
     implementationExecutor,
-    executeSystemStage,
+    gateExecutor,
     reviewExecutor,
     localCommitExecutor,
     writer,
@@ -730,8 +871,11 @@ export function createProductionEngineeringRuntimePort(input: {
   stageExecutor: EngineeringStageExecutor;
   reviewSessionFactory: import("@remoteagent/review-loop").PreCommitReviewSessionFactory;
   policy: EngineeringWorkflowPolicyOptions;
+  workflowDeadlineMs?: number;
+  controlPlane?: EngineeringControlPlaneRepository;
   metrics?: MetricRegistry;
 }) {
+  const approvalCandidate = engineeringApprovalCandidateFromLease(input.lease);
   const execution = createEngineeringExecution({
     db: input.db,
     jobs: input.jobs,
@@ -749,11 +893,17 @@ export function createProductionEngineeringRuntimePort(input: {
     readContext: input.readContext,
     executor: input.stageExecutor,
     implementationExecutor: execution.implementationExecutor,
-    executeSystemStage: execution.executeSystemStage,
+    gateExecutor: execution.gateExecutor,
     reviewExecutor: execution.reviewExecutor,
     localCommitExecutor: execution.localCommitExecutor,
     requiredRepositoryId: input.config.repositoryId,
+    writePathAllowlist: input.config.writePathAllowlist,
     policy: input.policy,
+    ...(input.controlPlane === undefined ? {} : { controlPlane: input.controlPlane }),
+    ...(input.workflowDeadlineMs === undefined
+      ? {}
+      : { workflowDeadlineMs: input.workflowDeadlineMs }),
+    ...(approvalCandidate === undefined ? {} : { approvalCandidate }),
     ...(input.metrics === undefined ? {} : { metrics: input.metrics }),
   });
 }

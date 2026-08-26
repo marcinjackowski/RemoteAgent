@@ -1,4 +1,8 @@
-import { engineeringArtifactDigest, type EngineeringArtifact } from "@remoteagent/contracts";
+import {
+  engineeringArtifactDigest,
+  TrustLevel,
+  type EngineeringArtifact,
+} from "@remoteagent/contracts";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 
 import { Database, type Transaction } from "../src/client.js";
@@ -326,6 +330,222 @@ describeIntegration(
 
       await context.readSnapshot(wrapped, request);
       expect(statements[0]).toBe("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    });
+
+    it("skips exact durable discovery ContextManifest provenance but rejects an unknown kind", async () => {
+      const manifest: EngineeringArtifact = {
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "case-1",
+        run_id: "run-1",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        sources: [
+          {
+            source_id: "discovery-source",
+            kind: "RAW_EVIDENCE",
+            ref: "case-message:old-relevant",
+            revision: 0,
+            observed_at: RUN_CUTOFF,
+            digest: DIGEST,
+            trust: TrustLevel.UNTRUSTED_DATA,
+            freshness: "pinned",
+            inclusion_reason: "discovery",
+            byte_budget: 64,
+            full_artifact_ref: "case-message:old-relevant",
+          },
+        ],
+        total_byte_budget: 128,
+      };
+      await db.query(
+        `INSERT INTO job_intents
+           (intent_id, job_id, case_id, fencing_token, kind, descriptor, idempotency_key)
+         VALUES ('intent-context','job-1','case-1',1,'engineering.stage.discovery',
+                 '{}'::jsonb,'operation-context')`,
+      );
+      await db.query(
+        `INSERT INTO engineering_operations
+           (operation_id, intent_id, idempotency_key, job_id, case_id, owner_id,
+            run_id, stage, stage_attempt, checkpoint_revision, operation_kind,
+            effect_class, integration_scope_digest, input_digest, config_digest,
+            schema_digest, deadline_at, recorded_at)
+         SELECT 'operation-context','intent-context','operation-context',job_id,case_id,owner_id,
+                run_id,'DISCOVERY',1,checkpoint_revision,'engineering.stage.discovery',
+                'READ_ONLY',integration_scope_digest,input_digest,config_digest,
+                schema_digest,deadline_at,recorded_at
+           FROM engineering_operations WHERE operation_id='operation-1'`,
+      );
+      await db.query(
+        `INSERT INTO engineering_artifact_revisions
+           (artifact_revision_id, artifact_key, revision, artifact_kind, payload,
+            payload_digest, operation_id, intent_id, job_id, case_id, owner_id,
+            run_id, stage, stage_attempt, checkpoint_revision, recorded_at)
+         VALUES ('artifact-context', 'discovery:1', 0, 'ContextManifest', $1::jsonb,
+                 $2, 'operation-context', 'intent-context', 'job-1', 'case-1', 'owner-1',
+                 'run-1', 'DISCOVERY', 1, 0, $3::timestamptz)`,
+        [JSON.stringify(manifest), engineeringArtifactDigest(manifest), RUN_CUTOFF],
+      );
+
+      const snapshot = await context.readSnapshot(db, request);
+      expect(snapshot.sources.some(({ sourceId }) => sourceId === "artifact-context")).toBe(false);
+      expect(snapshot.sources.some(({ sourceType }) => sourceType === "SLICE_CONTRACT")).toBe(true);
+
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await db.query(
+        `UPDATE engineering_artifact_revisions
+            SET artifact_kind='UnknownArtifact',
+                payload=jsonb_set(payload, '{artifact_kind}', '"UnknownArtifact"'::jsonb)
+          WHERE artifact_revision_id='artifact-context'`,
+      );
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions ENABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await expect(context.readSnapshot(db, request)).rejects.toMatchObject({
+        code: "ENGINEERING_CONTEXT_DATA_INVALID",
+      });
+    });
+
+    it("rejects ContextManifest provenance attached to a foreign stage", async () => {
+      const manifest: EngineeringArtifact = {
+        schema_version: 1,
+        artifact_kind: "ContextManifest",
+        case_id: "case-1",
+        run_id: "run-1",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        sources: [
+          {
+            source_id: "foreign-stage-source",
+            kind: "RAW_EVIDENCE",
+            ref: "foreign-stage",
+            revision: 0,
+            observed_at: RUN_CUTOFF,
+            digest: DIGEST,
+            trust: TrustLevel.UNTRUSTED_DATA,
+            freshness: "pinned",
+            inclusion_reason: "mutation",
+            byte_budget: 64,
+            full_artifact_ref: "foreign-stage",
+          },
+        ],
+        total_byte_budget: 128,
+      };
+      await db.query(
+        `INSERT INTO engineering_artifact_revisions
+           (artifact_revision_id, artifact_key, revision, artifact_kind, payload,
+            payload_digest, operation_id, intent_id, job_id, case_id, owner_id,
+            run_id, stage, stage_attempt, checkpoint_revision, recorded_at)
+         VALUES ('artifact-context-foreign', 'discovery-foreign:1', 0, 'ContextManifest',
+                 $1::jsonb, $2, 'operation-1', 'intent-1', 'job-1', 'case-1',
+                 'owner-1', 'run-1', 'SLICE_IMPLEMENTATION', 1, 0, $3::timestamptz)`,
+        [JSON.stringify(manifest), engineeringArtifactDigest(manifest), RUN_CUTOFF],
+      );
+      await expect(context.readSnapshot(db, request)).rejects.toMatchObject({
+        code: "ENGINEERING_CONTEXT_DATA_INVALID",
+      });
+    });
+
+    it("skips exact durable SliceImplementationReceipt provenance before gate context", async () => {
+      const receipt: EngineeringArtifact = {
+        schema_version: 1,
+        artifact_kind: "SliceImplementationReceipt",
+        case_id: "case-1",
+        run_id: "run-1",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        receipt_id: "slice-receipt-1",
+        work_unit_id: "unit-1",
+        slice_id: "slice-1",
+        attempt: 1,
+        workspace_id: "workspace-1",
+        repository_id: "repo-1",
+        base_sha: "a".repeat(40),
+        branch: "remoteagent/slice-1",
+        baseline: {
+          baseline_id: `slice-baseline-${"b".repeat(64)}`,
+          tree_digest: `sha256:${"c".repeat(64)}`,
+        },
+        tree_digest: `sha256:${"d".repeat(64)}`,
+        diff_digest: `sha256:${"e".repeat(64)}`,
+        raw_patch_digest: `sha256:${"f".repeat(64)}`,
+        changed_paths: ["src/one.ts"],
+        cumulative_paths: ["src/one.ts"],
+        files_changed: 1,
+        insertions: 1,
+        deletions: 0,
+        tool_receipt_digests: [DIGEST],
+      };
+      await db.query(
+        `INSERT INTO engineering_artifact_revisions
+           (artifact_revision_id, artifact_key, revision, artifact_kind, payload,
+            payload_digest, operation_id, intent_id, job_id, case_id, owner_id,
+            run_id, stage, stage_attempt, checkpoint_revision, recorded_at)
+         VALUES ('artifact-implementation', 'implementation:1', 0,
+                 'SliceImplementationReceipt', $1::jsonb, $2,
+                 'operation-1', 'intent-1', 'job-1', 'case-1', 'owner-1',
+                 'run-1', 'SLICE_IMPLEMENTATION', 1, 0, $3::timestamptz)`,
+        [JSON.stringify(receipt), engineeringArtifactDigest(receipt), RUN_CUTOFF],
+      );
+
+      const snapshot = await context.readSnapshot(db, request);
+      expect(snapshot.sources.some(({ sourceId }) => sourceId === "artifact-implementation")).toBe(
+        false,
+      );
+      expect(snapshot.sources.some(({ sourceType }) => sourceType === "SLICE_CONTRACT")).toBe(true);
+
+      const mismatched = { ...receipt, attempt: 2 } as EngineeringArtifact;
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await db.query(
+        `UPDATE engineering_artifact_revisions SET payload=$1::jsonb, payload_digest=$2
+          WHERE artifact_revision_id='artifact-implementation'`,
+        [JSON.stringify(mismatched), engineeringArtifactDigest(mismatched)],
+      );
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions ENABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await expect(context.readSnapshot(db, request)).rejects.toMatchObject({
+        code: "ENGINEERING_CONTEXT_DATA_INVALID",
+      });
+
+      const foreignWorkUnit = { ...receipt, work_unit_id: "unit-foreign" } as EngineeringArtifact;
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await db.query(
+        `UPDATE engineering_artifact_revisions SET payload=$1::jsonb, payload_digest=$2
+          WHERE artifact_revision_id='artifact-implementation'`,
+        [JSON.stringify(foreignWorkUnit), engineeringArtifactDigest(foreignWorkUnit)],
+      );
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions ENABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await expect(context.readSnapshot(db, request)).rejects.toMatchObject({
+        code: "ENGINEERING_CONTEXT_DATA_INVALID",
+      });
+
+      const wrongCheckpointRevision = { ...receipt, revision: 1 } as EngineeringArtifact;
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await db.query(
+        `UPDATE engineering_artifact_revisions
+            SET revision=1, payload=$1::jsonb, payload_digest=$2
+          WHERE artifact_revision_id='artifact-implementation'`,
+        [
+          JSON.stringify(wrongCheckpointRevision),
+          engineeringArtifactDigest(wrongCheckpointRevision),
+        ],
+      );
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions ENABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await expect(context.readSnapshot(db, request)).rejects.toMatchObject({
+        code: "ENGINEERING_CONTEXT_DATA_INVALID",
+      });
     });
 
     it("fails closed when a durable artifact payload or digest is corrupt", async () => {

@@ -4,6 +4,7 @@ import {
   canonicalDigest,
   engineeringArtifact,
   engineeringArtifactDigest,
+  isEngineeringArtifactKindAllowedForStage,
   engineeringStage,
   idString,
   isoTimestamp,
@@ -50,6 +51,22 @@ const appendArtifactInput = z
 const observeCompletionInput = z.object({ operationId: idString, completionId: idString }).strict();
 const resumeInput = z.object({ runId: idString }).strict();
 const operatorStatusInput = z.object({ runId: idString, ownerId: idString }).strict();
+const runControlIdentity = z
+  .object({
+    runId: idString,
+    caseId: idString,
+    ownerId: idString,
+    checkpointRevision: z.int().nonnegative(),
+  })
+  .strict();
+const runTraceIdentity = z
+  .object({
+    caseId: idString,
+    ownerId: idString,
+    runId: idString,
+    checkpointRevision: z.int().nonnegative(),
+  })
+  .strict();
 const operatorActionBase = z.object({
   actionId: idString,
   operationId: idString,
@@ -141,6 +158,33 @@ export interface EngineeringControlStageEventRow {
   recorded_at: Date;
 }
 
+export interface EngineeringControlRunTraceRow {
+  readonly event_id: string;
+  readonly event_sequence: string;
+  readonly event_type: EngineeringControlStageEventRow["event_type"];
+  readonly case_id: string;
+  readonly owner_id: string;
+  readonly run_id: string;
+  readonly checkpoint_revision: number;
+  readonly operation_id: string;
+  readonly operation_kind: string;
+  readonly effect_class: EngineeringControlEffectClass;
+  readonly integration_scope_digest: string;
+  readonly input_digest: string;
+  readonly config_digest: string;
+  readonly schema_digest: string;
+  readonly stage: EngineeringStage;
+  readonly stage_attempt: number;
+  readonly artifact_revision_id: string | null;
+  readonly artifact_kind: string | null;
+  readonly completion_id: string | null;
+  readonly completion_outcome: "SUCCEEDED" | "FAILED" | "AMBIGUOUS" | null;
+  readonly reconciliation_id: string | null;
+  readonly reconciliation_resolution: "CONFIRMED" | "ABSENT" | "UNRESOLVED" | null;
+  readonly payload_digest: string;
+  readonly recorded_at: Date;
+}
+
 export type EngineeringControlRecoveryClassification =
   "RECOVERED" | "DIRTY" | "AMBIGUOUS" | "BLOCKED" | "CANCELLED";
 
@@ -180,6 +224,10 @@ export interface EngineeringControlRunStatusRow {
   updated_at: Date;
 }
 
+export interface EngineeringControlRunControlState {
+  readonly cancelled: boolean;
+}
+
 export interface EngineeringControlOperatorResult {
   event: EngineeringControlStageEventRow;
   plan: EngineeringControlResumePlan;
@@ -202,6 +250,33 @@ export interface EngineeringControlOperationCompletion {
     receipt: unknown;
   }> | null;
   readonly completion_observed: boolean;
+}
+
+function validateArtifactRowBinding(
+  row: EngineeringControlArtifactRevisionRow,
+  expected?: EngineeringControlOperationRow,
+): EngineeringControlArtifactRevisionRow {
+  const artifact = parseInput(engineeringArtifact, row.payload, "engineering artifact ledger row");
+  if (
+    artifact.case_id !== row.case_id ||
+    artifact.run_id !== row.run_id ||
+    artifact.revision !== row.checkpoint_revision ||
+    row.revision !== row.checkpoint_revision ||
+    artifact.artifact_kind !== row.artifact_kind ||
+    !isEngineeringArtifactKindAllowedForStage(row.stage, artifact.artifact_kind) ||
+    engineeringArtifactDigest(artifact) !== row.payload_digest ||
+    (expected !== undefined &&
+      (row.operation_id !== expected.operation_id ||
+        row.case_id !== expected.case_id ||
+        row.owner_id !== expected.owner_id ||
+        row.run_id !== expected.run_id ||
+        row.stage !== expected.stage ||
+        row.stage_attempt !== expected.stage_attempt ||
+        row.checkpoint_revision !== expected.checkpoint_revision))
+  ) {
+    throw new EngineeringControlStateError("engineering artifact ledger binding is corrupted");
+  }
+  return { ...row, payload: artifact };
 }
 
 interface EngineeringControlRecoverySourceRow extends EngineeringControlOperationRow {
@@ -447,8 +522,15 @@ export class EngineeringControlPlaneRepository {
     return db
       .withTransaction(async (tx) => {
         const operation = await this.#assertOperationLease(tx, lease, input.operationId);
-        if (artifact.case_id !== operation.case_id || artifact.run_id !== operation.run_id) {
-          throw new EngineeringControlStateError("artifact crosses its operation case or run");
+        if (
+          artifact.case_id !== operation.case_id ||
+          artifact.run_id !== operation.run_id ||
+          artifact.revision !== operation.checkpoint_revision ||
+          !isEngineeringArtifactKindAllowedForStage(operation.stage, artifact.artifact_kind)
+        ) {
+          throw new EngineeringControlStateError(
+            "artifact crosses its operation case, run, checkpoint, or stage kind",
+          );
         }
 
         const digest = engineeringArtifactDigest(artifact);
@@ -512,7 +594,7 @@ export class EngineeringControlPlaneRepository {
             payload_digest: row.payload_digest,
           },
         });
-        return row;
+        return validateArtifactRowBinding(row, operation);
       })
       .catch((error: unknown) => {
         throw translatePgError(error) ?? error;
@@ -589,21 +671,9 @@ export class EngineeringControlPlaneRepository {
         LIMIT 1`,
       [operation.operation_id],
     );
-    const artifact = artifactResult.rows[0] ?? null;
-    if (artifact !== null) {
-      const parsed = parseInput(
-        engineeringArtifact,
-        artifact.payload,
-        "recovered engineering artifact",
-      );
-      if (
-        parsed.case_id !== operation.case_id ||
-        parsed.run_id !== operation.run_id ||
-        engineeringArtifactDigest(parsed) !== artifact.payload_digest
-      ) {
-        throw new EngineeringControlStateError("recovered artifact provenance mismatch");
-      }
-    }
+    const artifactRow = artifactResult.rows[0] ?? null;
+    const artifact =
+      artifactRow === null ? null : validateArtifactRowBinding(artifactRow, operation);
     return {
       operation,
       started: state.rows[0]?.started ?? false,
@@ -738,15 +808,85 @@ export class EngineeringControlPlaneRepository {
       [input.runId],
     );
     return result.rows.map((row) => {
-      const artifact = parseInput(engineeringArtifact, row.payload, "engineering run artifact");
-      if (
-        artifact.run_id !== input.runId ||
-        artifact.case_id !== row.case_id ||
-        engineeringArtifactDigest(artifact) !== row.payload_digest
-      ) {
-        throw new EngineeringControlStateError("run artifact provenance mismatch");
+      if (row.run_id !== input.runId)
+        throw new EngineeringControlStateError("run artifact query crossed run authority");
+      return validateArtifactRowBinding(row);
+    });
+  }
+
+  /** Metadata-only, exact-authority trace; deliberately never selects body/receipt/descriptor. */
+  public async listRunTrace(
+    q: Queryable,
+    rawInput: unknown,
+  ): Promise<readonly EngineeringControlRunTraceRow[]> {
+    const input = parseInput(runTraceIdentity, rawInput, "engineering run trace identity");
+    const result = await q.query<
+      EngineeringControlRunTraceRow & {
+        artifact_bound: boolean;
+        completion_bound: boolean;
+        reconciliation_bound: boolean;
       }
-      return { ...row, payload: artifact };
+    >(
+      `SELECT e.event_id, e.event_sequence, e.event_type,
+              e.case_id, e.owner_id, e.run_id, e.checkpoint_revision,
+              e.operation_id, o.operation_kind, o.effect_class,
+              o.integration_scope_digest, o.input_digest, o.config_digest, o.schema_digest,
+              e.stage, e.stage_attempt,
+              e.artifact_revision_id, a.artifact_kind,
+              e.completion_id, completion.outcome AS completion_outcome,
+              e.reconciliation_id, reconciliation.resolution AS reconciliation_resolution,
+              e.payload_digest, e.recorded_at,
+              (e.artifact_revision_id IS NULL OR a.artifact_revision_id IS NOT NULL) AS artifact_bound,
+              (e.completion_id IS NULL OR completion.completion_id IS NOT NULL) AS completion_bound,
+              (e.reconciliation_id IS NULL OR reconciliation.reconciliation_id IS NOT NULL)
+                AS reconciliation_bound
+         FROM engineering_stage_events e
+         JOIN engineering_operations o
+           ON o.operation_id = e.operation_id
+          AND o.intent_id = e.intent_id AND o.job_id = e.job_id
+          AND o.case_id = e.case_id AND o.owner_id = e.owner_id AND o.run_id = e.run_id
+          AND o.stage = e.stage AND o.stage_attempt = e.stage_attempt
+          AND o.checkpoint_revision = e.checkpoint_revision
+         JOIN agent_runs r
+           ON r.run_id = e.run_id AND r.case_id = e.case_id AND r.owner_id = e.owner_id
+         JOIN cases c ON c.case_id = e.case_id AND c.owner_id = e.owner_id
+         LEFT JOIN engineering_artifact_revisions a
+           ON a.artifact_revision_id = e.artifact_revision_id
+          AND a.operation_id = e.operation_id AND a.intent_id = e.intent_id AND a.job_id = e.job_id
+          AND a.case_id = e.case_id AND a.owner_id = e.owner_id AND a.run_id = e.run_id
+          AND a.stage = e.stage AND a.stage_attempt = e.stage_attempt
+          AND a.checkpoint_revision = e.checkpoint_revision AND a.revision = e.checkpoint_revision
+         LEFT JOIN job_completions completion
+           ON completion.completion_id = e.completion_id
+          AND completion.intent_id = e.intent_id AND completion.job_id = e.job_id
+         LEFT JOIN job_reconciliations reconciliation
+           ON reconciliation.reconciliation_id = e.reconciliation_id
+          AND reconciliation.intent_id = e.intent_id AND reconciliation.job_id = e.job_id
+        WHERE e.case_id = $1 AND e.owner_id = $2 AND e.run_id = $3
+          AND e.checkpoint_revision = $4
+        ORDER BY e.event_sequence ASC`,
+      [input.caseId, input.ownerId, input.runId, input.checkpointRevision],
+    );
+    return result.rows.map((row) => {
+      if (
+        !row.artifact_bound ||
+        !row.completion_bound ||
+        !row.reconciliation_bound ||
+        (row.completion_id === null) !== (row.completion_outcome === null) ||
+        (row.reconciliation_id === null) !== (row.reconciliation_resolution === null) ||
+        (row.artifact_kind !== null &&
+          !isEngineeringArtifactKindAllowedForStage(
+            row.stage,
+            row.artifact_kind as EngineeringArtifact["artifact_kind"],
+          ))
+      ) {
+        throw new EngineeringControlStateError("engineering run trace relationship is corrupted");
+      }
+      const trace = { ...row } as Partial<typeof row>;
+      delete trace.artifact_bound;
+      delete trace.completion_bound;
+      delete trace.reconciliation_bound;
+      return trace as EngineeringControlRunTraceRow;
     });
   }
 
@@ -936,6 +1076,40 @@ export class EngineeringControlPlaneRepository {
       [input.runId, input.ownerId],
     );
     return result.rows[0] ?? null;
+  }
+
+  /**
+   * Read execution control from authoritative run/case rows and the immutable event ledger.
+   * The disposable projection is deliberately excluded: a crash may follow the cancellation
+   * event commit but precede projection repair.
+   */
+  public async readRunControlState(
+    q: Queryable,
+    rawInput: unknown,
+  ): Promise<EngineeringControlRunControlState> {
+    const input = parseInput(runControlIdentity, rawInput, "engineering run control identity");
+    const result = await q.query<{ case_status: string; cancellation_requested: boolean }>(
+      `SELECT c.status AS case_status,
+              EXISTS (
+                SELECT 1
+                FROM engineering_stage_events e
+                WHERE e.run_id = r.run_id
+                  AND e.case_id = r.case_id
+                  AND e.owner_id = r.owner_id
+                  AND e.checkpoint_revision = r.checkpoint_revision
+                  AND e.event_type = 'OPERATOR_CANCEL_REQUESTED'
+              ) AS cancellation_requested
+       FROM agent_runs r
+       JOIN cases c ON c.case_id = r.case_id AND c.owner_id = r.owner_id
+       WHERE r.run_id = $1 AND r.case_id = $2 AND r.owner_id = $3
+         AND r.checkpoint_revision = $4`,
+      [input.runId, input.caseId, input.ownerId, input.checkpointRevision],
+    );
+    const state = result.rows[0];
+    if (state === undefined) throw new NotFoundError("engineering_run_control", input.runId);
+    return Object.freeze({
+      cancelled: state.cancellation_requested || state.case_status === "CANCELLED",
+    });
   }
 
   /** Record operator knowledge without changing the recovered outcome. */
@@ -1322,13 +1496,13 @@ export class EngineeringControlPlaneRepository {
       `SELECT c.status, c.integration_scope,
               EXISTS (
                 SELECT 1 FROM engineering_stage_events e
-                WHERE e.operation_id = $2
+                WHERE e.run_id = $2
                   AND e.event_type = 'OPERATOR_CANCEL_REQUESTED'
               ) AS cancelled
        FROM cases c
        WHERE c.case_id = $1 AND c.owner_id = $3
        FOR SHARE`,
-      [operation.case_id, operation.operation_id, operation.owner_id],
+      [operation.case_id, operation.run_id, operation.owner_id],
     );
     const control = current.rows[0];
     if (control === undefined) {

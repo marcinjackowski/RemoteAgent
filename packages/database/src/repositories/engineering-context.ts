@@ -159,6 +159,9 @@ interface ArtifactRow extends QueryResultRow {
   readonly artifact_kind: string;
   readonly payload: unknown;
   readonly payload_digest: string;
+  readonly stage: string;
+  readonly stage_attempt: number;
+  readonly checkpoint_revision: number;
   readonly recorded_at: Date;
 }
 
@@ -475,7 +478,8 @@ export class EngineeringContextRepository {
 
       const artifacts = await tx.query<ArtifactRow>(
         `SELECT ar.artifact_revision_id, ar.artifact_key, ar.revision,
-                ar.artifact_kind, ar.payload, ar.payload_digest, ar.recorded_at
+                ar.artifact_kind, ar.payload, ar.payload_digest, ar.stage,
+                ar.stage_attempt, ar.checkpoint_revision, ar.recorded_at
            FROM engineering_artifact_revisions ar
            JOIN engineering_operations op
              ON op.operation_id = ar.operation_id
@@ -493,7 +497,37 @@ export class EngineeringContextRepository {
       );
       for (const row of artifacts.rows) {
         const parsedArtifact = engineeringArtifact.safeParse(row.payload);
-        if (!parsedArtifact.success || !(row.artifact_kind in artifactSourceType)) dataError();
+        if (!parsedArtifact.success) dataError();
+        // These two artifacts are stage-local server provenance consumed through orderedArtifacts.
+        // ContextManifest is also complete in the immutable stage intent. Rendering either into
+        // the next prompt would recursively duplicate evidence. The closed list is intentional:
+        // every other unsupported artifact kind remains corruption.
+        if (
+          (row.artifact_kind === "ContextManifest" &&
+            parsedArtifact.data.artifact_kind === "ContextManifest" &&
+            row.stage === "DISCOVERY" &&
+            row.stage_attempt === 1 &&
+            parsedArtifact.data.revision === row.checkpoint_revision &&
+            row.checkpoint_revision === authority.checkpoint_revision) ||
+          (row.artifact_kind === "SliceImplementationReceipt" &&
+            parsedArtifact.data.artifact_kind === "SliceImplementationReceipt" &&
+            row.stage === "SLICE_IMPLEMENTATION" &&
+            parsedArtifact.data.attempt === row.stage_attempt &&
+            parsedArtifact.data.work_unit_id === authority.work_unit_id &&
+            parsedArtifact.data.revision === row.checkpoint_revision &&
+            row.checkpoint_revision === authority.checkpoint_revision)
+        ) {
+          if (
+            parsedArtifact.data.case_id !== authority.case_id ||
+            parsedArtifact.data.run_id !== authority.run_id ||
+            parsedArtifact.data.revision !== row.revision ||
+            engineeringArtifactDigest(parsedArtifact.data) !== row.payload_digest
+          ) {
+            dataError();
+          }
+          continue;
+        }
+        if (!(row.artifact_kind in artifactSourceType)) dataError();
         const kind = row.artifact_kind as keyof typeof artifactSourceType;
         if (
           parsedArtifact.data.artifact_kind !== row.artifact_kind ||

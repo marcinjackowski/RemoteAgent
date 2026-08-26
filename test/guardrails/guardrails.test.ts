@@ -64,12 +64,20 @@ describe("engineering workflow control-plane guardrail", () => {
       join(repoRoot, "apps/agent-worker/src/engineering-workflow.ts"),
       "utf8",
     );
+    const engineeringExecution = readFileSync(
+      join(repoRoot, "apps/agent-worker/src/engineering-execution.ts"),
+      "utf8",
+    );
     const worker = readFileSync(join(repoRoot, "apps/agent-worker/src/worker.ts"), "utf8");
     expect(handlers.match(/new SupervisorRuntime\s*\(/gu)).toHaveLength(1);
     expect(handlers).toContain("{ engineering }");
     expect(engineering).not.toMatch(/new SupervisorRuntime|class .*Runtime(?!Port)/u);
     expect(worker).not.toContain("new SupervisorRuntime");
-    expect(worker).toContain("engineeringAuthorizationFromLease(lease)");
-    expect(worker).toContain("{ authorization }");
+    expect(worker).toContain("createProductionEngineeringRuntimePort({");
+    expect(worker).not.toContain("engineeringApprovalCandidateFromLease");
+    expect(engineeringExecution).toContain(
+      "const approvalCandidate = engineeringApprovalCandidateFromLease(input.lease)",
+    );
+    expect(engineeringExecution).toContain("{ approvalCandidate }");
   });
 });

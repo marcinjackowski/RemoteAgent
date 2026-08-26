@@ -140,6 +140,8 @@ class MemoryStagePort implements EngineeringRuntimePort {
   public terminalStage: string | null = null;
   public terminalStatus: "WAITING_FOR_USER" | "TERMINAL" = "WAITING_FOR_USER";
   public modelCallCost = 1;
+  public cancelled = false;
+  public controlReads = 0;
   public readonly session: EngineeringRuntimeSession;
 
   public constructor(processClass: "SMALL" | "MEDIUM" | "LARGE_OR_HIGH_RISK") {
@@ -165,6 +167,10 @@ class MemoryStagePort implements EngineeringRuntimePort {
 
   public async open(): Promise<EngineeringRuntimeSession> {
     return this.session;
+  }
+  public async readControlState(): Promise<{ readonly cancelled: boolean }> {
+    this.controlReads += 1;
+    return { cancelled: this.cancelled };
   }
   public async recoverStage(binding: EngineeringStageBinding): Promise<EngineeringRecoveredStage> {
     return this.recovered.get(binding.stage) ?? { status: "NOT_STARTED" };
@@ -351,6 +357,44 @@ describe("SupervisorRuntime engineering stage driver", () => {
     expect(store.ambiguous).toBe(1);
   });
 
+  it("refreshes durable cancellation between stages and stops before the next STARTED", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (input.binding.stage === EngineeringStage.DISCOVERY) port.cancelled = true;
+      return result;
+    };
+
+    await runtime(store, port).pumpOnce();
+
+    expect(port.calls).toEqual([EngineeringStage.DISCOVERY]);
+    expect(port.started).toEqual([EngineeringStage.DISCOVERY]);
+    expect(port.controlReads).toBeGreaterThanOrEqual(2);
+    expect(store.state.completion).toMatchObject({
+      status: "CANCELLED",
+      summary: expect.stringContaining("CANCELLED"),
+    });
+  });
+
+  it("recovers an unknown started effect before cancellation can terminate the run", async () => {
+    const store = new MemoryRuntimeStore("RUNNING");
+    const port = new MemoryStagePort("SMALL");
+    port.cancelled = true;
+    port.recovered.set(EngineeringStage.DISCOVERY, {
+      status: "AMBIGUOUS",
+      detail: "STARTED without receipt",
+    });
+
+    const result = await runtime(store, port).pumpOnce();
+
+    expect(result.ambiguous).toEqual(["unit-1"]);
+    expect(store.ambiguous).toBe(1);
+    expect(store.state.completion).toBeNull();
+    expect(port.calls).toEqual([]);
+  });
+
   it("persists a question as a terminal old run and never advances later stages", async () => {
     const store = new MemoryRuntimeStore();
     const port = new MemoryStagePort("SMALL");
@@ -406,6 +450,48 @@ describe("SupervisorRuntime engineering stage driver", () => {
     await runtime(modelStore, modelPort).pumpOnce();
     expect(modelPort.calls).toEqual([EngineeringStage.DISCOVERY]);
     expect(modelStore.state.completion?.summary).toContain("CALL_LIMIT_EXHAUSTED");
+  });
+
+  it("samples structural progress at review boundaries so A/B corrections oscillate", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (result.status !== "COMPLETED") return result;
+      const tree = input.binding.attempt % 2 === 1 ? sha("a") : sha("b");
+      return {
+        ...result,
+        evidence: {
+          structuralState: {
+            treeDigest: tree,
+            designRevisions: {},
+            sliceRevision: 1,
+            failedGateIds: [],
+            unresolvedFindingIds: ["finding-stable"],
+          },
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: [],
+            directive:
+              input.binding.stage === EngineeringStage.SLICE_REVIEW
+                ? ("CORRECT_SLICE" as const)
+                : ("CONTINUE" as const),
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      summary: expect.stringContaining("OSCILLATION"),
+    });
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.SLICE_REVIEW),
+    ).toHaveLength(6);
   });
 
   it("executes two slices in ProgramDesign order before verification and local commit", async () => {

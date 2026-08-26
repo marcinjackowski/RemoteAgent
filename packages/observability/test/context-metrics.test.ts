@@ -71,6 +71,8 @@ describe("context metrics", () => {
     });
     expect(metrics.counter(MetricName.ENGINEERING_STAGE_TRANSITIONS)).toBe(1);
     expect(metrics.counter(MetricName.ENGINEERING_TERMINALS)).toBe(1);
-    expect(JSON.stringify(metrics.snapshot())).not.toMatch(/case_id|owner_id|run_id|work_unit_id/u);
+    expect(JSON.stringify(metrics.snapshot())).not.toMatch(
+      /case_id|owner_id|run_id|work_unit_id|operation_id|checkpoint_revision/u,
+    );
   });
 });

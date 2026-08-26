@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import {
   canonicalDigest,
+  assertEngineeringPathsWithinWriteAllowlist,
   engineeringLocalCommitReceipt,
   engineeringReviewDecision,
   engineeringSliceImplementationReceipt,
@@ -117,6 +118,7 @@ export type ExecuteVerticalSliceInput = Readonly<{
   checkpointRevision: number;
   writer: VerticalSliceWriterFence;
   slice: EngineeringSliceContract;
+  writePathAllowlist: readonly string[];
   attempt: number;
   implement: VerticalSliceImplementer;
   /** Prior server-observed agent paths, never model supplied. */
@@ -211,6 +213,7 @@ export type ExecuteVerticalSliceGateInput = Readonly<{
   checkpointRevision: number;
   writer: VerticalSliceWriterFence;
   slice: EngineeringSliceContract;
+  writePathAllowlist: readonly string[];
   attempt: number;
   baseline: BaselineWorkspaceReference;
   actual: VerticalSliceActualEvidence;
@@ -251,6 +254,7 @@ export type ExecuteVerticalSliceReviewInput = Readonly<{
   checkpointRevision: number;
   writer: VerticalSliceWriterFence;
   slice: EngineeringSliceContract;
+  writePathAllowlist: readonly string[];
   attempt: number;
   baseline: BaselineWorkspaceReference;
   actual: VerticalSliceActualEvidence;
@@ -606,6 +610,7 @@ export async function executeVerticalSlice(
   input: ExecuteVerticalSliceInput,
 ): Promise<VerticalSliceExecutionResult> {
   const slice = engineeringSliceContract.parse(input.slice);
+  assertEngineeringPathsWithinWriteAllowlist(slice.allowed_paths, input.writePathAllowlist);
   if (
     slice.case_id !== input.caseId ||
     slice.run_id !== input.runId ||
@@ -760,6 +765,7 @@ export async function observeSliceImplementationReceipt(input: {
   workspaceConfig: WorkspaceConfig;
   receipt: EngineeringSliceImplementationReceipt;
   slice: EngineeringSliceContract;
+  writePathAllowlist: readonly string[];
   baselineStore?: BaselineWorkspaceStore;
 }): Promise<{
   baseline: BaselineWorkspaceReference;
@@ -768,6 +774,9 @@ export async function observeSliceImplementationReceipt(input: {
 }> {
   const receipt = engineeringSliceImplementationReceipt.parse(input.receipt);
   const slice = engineeringSliceContract.parse(input.slice);
+  const writePathAllowlist = input.writePathAllowlist;
+  assertEngineeringPathsWithinWriteAllowlist(slice.allowed_paths, writePathAllowlist);
+  assertEngineeringPathsWithinWriteAllowlist(receipt.cumulative_paths, writePathAllowlist);
   validateWriter(input.writer, receipt.case_id);
   if (
     slice.case_id !== receipt.case_id ||
@@ -887,8 +896,10 @@ export async function observeSliceImplementationForCommit(input: {
   writer: VerticalSliceWriterFence;
   workspaceConfig: WorkspaceConfig;
   receipt: EngineeringSliceImplementationReceipt;
+  writePathAllowlist: readonly string[];
 }): Promise<VerticalSliceActualEvidence> {
   const receipt = engineeringSliceImplementationReceipt.parse(input.receipt);
+  assertEngineeringPathsWithinWriteAllowlist(receipt.cumulative_paths, input.writePathAllowlist);
   validateWriter(input.writer, receipt.case_id);
   const repository = input.workspaceConfig.repositories[receipt.repository_id];
   if (repository === undefined)
@@ -957,6 +968,9 @@ export async function executeVerticalSliceGates(
   input: ExecuteVerticalSliceGateInput,
 ): Promise<VerticalSliceGateResult> {
   const slice = engineeringSliceContract.parse(input.slice);
+  const writePathAllowlist = input.writePathAllowlist;
+  assertEngineeringPathsWithinWriteAllowlist(slice.allowed_paths, writePathAllowlist);
+  assertEngineeringPathsWithinWriteAllowlist(input.actual.cumulativeAgentPaths, writePathAllowlist);
   if (
     slice.case_id !== input.caseId ||
     slice.run_id !== input.runId ||
@@ -1123,6 +1137,9 @@ export async function executeVerticalSliceReview(
   input: ExecuteVerticalSliceReviewInput,
 ): Promise<VerticalSliceReviewResult> {
   const slice = engineeringSliceContract.parse(input.slice);
+  const writePathAllowlist = input.writePathAllowlist;
+  assertEngineeringPathsWithinWriteAllowlist(slice.allowed_paths, writePathAllowlist);
+  assertEngineeringPathsWithinWriteAllowlist(input.actual.cumulativeAgentPaths, writePathAllowlist);
   if (
     slice.case_id !== input.caseId ||
     slice.run_id !== input.runId ||

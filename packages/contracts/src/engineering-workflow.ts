@@ -17,6 +17,56 @@ export const engineeringProcessClass = z.enum([
   processClassValues.LARGE_OR_HIGH_RISK,
 ]);
 
+export const engineeringWriteAuthorizationScopeV1 = z.strictObject({
+  schema_version: z.literal(1),
+  purpose: z.literal("ENGINEERING_WORKFLOW_WRITE"),
+  case_id: idString,
+  owner_id: idString,
+  checkpoint_revision: z.int().nonnegative(),
+  work_unit_id: idString,
+  run_id: idString,
+  process_class: engineeringProcessClass,
+  authoritative_scope: z.strictObject({
+    connection_ids: z.array(idString).max(64),
+    repo_allowlist: z.array(idString).max(64),
+    can_write_workspace: z.literal(true),
+  }),
+});
+
+type ParsedEngineeringWriteAuthorizationScopeV1 = z.infer<
+  typeof engineeringWriteAuthorizationScopeV1
+>;
+export type EngineeringWriteAuthorizationScopeV1 = Readonly<
+  Omit<ParsedEngineeringWriteAuthorizationScopeV1, "authoritative_scope"> & {
+    readonly authoritative_scope: Readonly<{
+      readonly connection_ids: readonly string[];
+      readonly repo_allowlist: readonly string[];
+      readonly can_write_workspace: true;
+    }>;
+  }
+>;
+
+/** Canonical server-owned approval scope; caller ordering and duplicates add no authority. */
+export function normalizeEngineeringWriteAuthorizationScope(
+  input: unknown,
+): Readonly<EngineeringWriteAuthorizationScopeV1> {
+  const parsed = engineeringWriteAuthorizationScopeV1.parse(input);
+  const uniqueSorted = (values: readonly string[]) => Object.freeze([...new Set(values)].sort());
+  return Object.freeze({
+    ...parsed,
+    authoritative_scope: Object.freeze({
+      connection_ids: uniqueSorted(parsed.authoritative_scope.connection_ids),
+      repo_allowlist: uniqueSorted(parsed.authoritative_scope.repo_allowlist),
+      can_write_workspace: true as const,
+    }),
+  });
+}
+
+/** Always recomputes the digest from the normalized strict scope. */
+export function engineeringWriteAuthorizationScopeDigest(input: unknown): string {
+  return canonicalDigest(normalizeEngineeringWriteAuthorizationScope(input));
+}
+
 export const EngineeringStage = {
   DISCOVERY: "DISCOVERY",
   OUTCOME_DEFINITION: "OUTCOME_DEFINITION",
@@ -458,9 +508,62 @@ export const engineeringArtifact = z.discriminatedUnion("artifact_kind", [
   engineeringTerminalReason,
 ]);
 export type EngineeringArtifact = z.infer<typeof engineeringArtifact>;
+export type EngineeringArtifactKind = EngineeringArtifact["artifact_kind"];
 export const engineeringArtifactSchema = engineeringArtifact;
 export function engineeringArtifactDigest(input: unknown): string {
   return canonicalDigest(engineeringArtifact.parse(input));
+}
+
+const artifactKinds = <T extends readonly EngineeringArtifactKind[]>(...values: T): Readonly<T> =>
+  Object.freeze(values);
+
+/** Closed, code-owned authority for which durable artifact kinds each stage may emit. */
+export const engineeringArtifactKindsByStage = Object.freeze({
+  [EngineeringStage.DISCOVERY]: artifactKinds("ContextManifest"),
+  [EngineeringStage.OUTCOME_DEFINITION]: artifactKinds("OutcomeContract"),
+  [EngineeringStage.SYSTEM_DESIGN]: artifactKinds("SystemDesign"),
+  [EngineeringStage.PROGRAM_DESIGN]: artifactKinds("ProgramDesign"),
+  [EngineeringStage.DESIGN_APPROVAL]: artifactKinds("DesignDecision"),
+  [EngineeringStage.SLICE_PLANNING]: artifactKinds("SliceContract"),
+  [EngineeringStage.SLICE_IMPLEMENTATION]: artifactKinds(
+    "SliceImplementationReceipt",
+    "TerminalReason",
+  ),
+  [EngineeringStage.GATE_EXECUTION]: artifactKinds("EvidenceBundle", "TerminalReason"),
+  [EngineeringStage.SLICE_REVIEW]: artifactKinds("ReviewDecision", "TerminalReason"),
+  [EngineeringStage.MEMORY_PROJECTION]: artifactKinds("MemoryUpdate"),
+  [EngineeringStage.FINAL_VERIFICATION]: artifactKinds("VerificationDecision"),
+  [EngineeringStage.LOCAL_COMMIT]: artifactKinds("LocalCommitReceipt", "TerminalReason"),
+}) satisfies Readonly<Record<EngineeringStage, readonly EngineeringArtifactKind[]>>;
+
+export function isEngineeringArtifactKindAllowedForStage(
+  stage: EngineeringStage,
+  artifactKind: EngineeringArtifactKind,
+): boolean {
+  return (engineeringArtifactKindsByStage[stage] as readonly EngineeringArtifactKind[]).includes(
+    artifactKind,
+  );
+}
+
+/** Canonicalize the server-owned repository write cap before digesting or enforcing it. */
+export function normalizeEngineeringWritePathAllowlist(input: unknown): readonly string[] {
+  const parsed = z.array(relativeRepositoryPath).min(1).max(256).parse(input);
+  return Object.freeze([...new Set(parsed)].sort());
+}
+
+/** Segment-aware containment: `src/x` is under `src`, while `src2/x` is not. */
+export function assertEngineeringPathsWithinWriteAllowlist(
+  pathsInput: unknown,
+  allowlistInput: unknown,
+): readonly string[] {
+  const paths = z.array(relativeRepositoryPath).max(512).parse(pathsInput);
+  const allowlist = normalizeEngineeringWritePathAllowlist(allowlistInput);
+  for (const path of paths) {
+    if (!allowlist.some((allowed) => path === allowed || path.startsWith(`${allowed}/`))) {
+      throw new Error(`repository path is outside the server-owned write allowlist: ${path}`);
+    }
+  }
+  return Object.freeze([...paths]);
 }
 
 const processRiskFactsShape = {

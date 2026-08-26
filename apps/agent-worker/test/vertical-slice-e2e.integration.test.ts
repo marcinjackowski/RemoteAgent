@@ -303,6 +303,7 @@ describeIntegration(
         repositoryId: "repo",
         baselineRoot,
         artifactRoot,
+        writePathAllowlist: Object.freeze(["src"]),
         catalog,
         configDigest: canonicalDigest({ repo: "repo", catalog: catalog.config_digest }),
       });

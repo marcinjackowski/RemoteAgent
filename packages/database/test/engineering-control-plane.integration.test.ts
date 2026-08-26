@@ -169,7 +169,7 @@ describeIntegration(
       artifact_kind: "SliceContract",
       case_id: "case-1",
       run_id: "run-1",
-      revision: 1,
+      revision: 0,
       slice_id: "slice-1",
       objective: "bounded objective",
       observable_result: "bounded result",
@@ -312,6 +312,36 @@ describeIntegration(
       ).rejects.toThrow();
       const replay = await controlPlane.requestCancellation(db, input);
       expect(replay.event.event_id).toBe(first.event.event_id);
+    });
+
+    it("carries a run cancellation forward to the next operation before STARTED", async () => {
+      await bind();
+      const digest = (await prepare()).projection_digest;
+      await controlPlane.requestCancellation(db, operatorInput(digest, "cancel-run"));
+      await db.query("DELETE FROM engineering_run_projections WHERE run_id = 'run-1'");
+      await expect(
+        controlPlane.readRunControlState(db, {
+          runId: "run-1",
+          caseId: "case-1",
+          ownerId: "owner-1",
+          checkpointRevision: 0,
+        }),
+      ).resolves.toEqual({ cancelled: true });
+      await controlPlane.bindOperationIntent(
+        db,
+        lease,
+        operationInput("operation-2", {
+          stage: "GATE_EXECUTION",
+          stageAttempt: 2,
+          operationKind: "engineering.stage.gate_execution",
+          effectClass: "COMMAND",
+          descriptor: { gate: "required" },
+        }),
+      );
+
+      await expect(
+        controlPlane.commitOperationStarted(db, lease, { operationId: "operation-2" }),
+      ).rejects.toThrow(/cancellation state/);
     });
 
     it("cancellation does not erase an unknown mutating write", async () => {
@@ -728,7 +758,12 @@ describeIntegration(
     });
 
     it("strictly appends artifacts, replays exactly, and records one artifact event", async () => {
-      await bind();
+      await prepareRepositoryPath();
+      await controlPlane.bindOperationIntent(
+        db,
+        lease,
+        operationInput("operation-1", { stage: "SLICE_PLANNING" }),
+      );
       const input = { operationId: "operation-1", artifactKey: "slice-1/contract", artifact };
       const first = await controlPlane.appendArtifactRevision(db, lease, input);
       const replay = await controlPlane.appendArtifactRevision(db, lease, input);
@@ -739,6 +774,26 @@ describeIntegration(
           artifact: { ...artifact, objective: "tampered" },
         }),
       ).rejects.toThrow();
+      await expect(
+        controlPlane.appendArtifactRevision(db, lease, {
+          ...input,
+          artifact: { ...artifact, revision: 1 },
+        }),
+      ).rejects.toThrow(/checkpoint/);
+      await expect(
+        controlPlane.appendArtifactRevision(db, lease, {
+          ...input,
+          artifact: {
+            schema_version: 1,
+            artifact_kind: "TerminalReason",
+            case_id: "case-1",
+            run_id: "run-1",
+            revision: 0,
+            reason: "BLOCKED",
+            detail: "wrong stage kind",
+          },
+        }),
+      ).rejects.toThrow(/stage kind/);
       await expect(
         controlPlane.appendArtifactRevision(db, lease, {
           ...input,
@@ -756,6 +811,155 @@ describeIntegration(
           )
         ).rows[0]!.n,
       ).toBe("1");
+    });
+
+    it("lists an exact metadata-only trace in event sequence order and isolates foreign scope", async () => {
+      await prepareRepositoryPath();
+      const operation = await controlPlane.bindOperationIntent(
+        db,
+        lease,
+        operationInput("operation-1", {
+          stage: "SLICE_PLANNING",
+          descriptor: { prompt: "PROMPT_SECRET", host_path: "/private/secret" },
+        }),
+      );
+      await controlPlane.commitOperationStarted(db, lease, { operationId: "operation-1" });
+      await controlPlane.appendArtifactRevision(db, lease, {
+        operationId: "operation-1",
+        artifactKey: "slice-1/contract",
+        artifact: { ...artifact, objective: "PAYLOAD_SECRET" },
+      });
+      const completionId = await jobs.recordCompletion(db, {
+        intentId: operation.intent_id,
+        jobId: lease.jobId,
+        outcome: "SUCCEEDED",
+        receipt: { receipt_secret: "RECEIPT_SECRET", patch: "PATCH_SECRET" },
+        lease,
+      });
+      await controlPlane.observeOperationCompletion(db, {
+        operationId: "operation-1",
+        completionId,
+      });
+      await db.query(
+        "ALTER TABLE engineering_stage_events DISABLE TRIGGER engineering_stage_events_append_only",
+      );
+      try {
+        await db.query(
+          `UPDATE engineering_stage_events
+              SET recorded_at = CASE WHEN event_sequence = 1 THEN now() + interval '1 day'
+                                     ELSE now() - interval '1 day' END`,
+        );
+      } finally {
+        await db.query(
+          "ALTER TABLE engineering_stage_events ENABLE TRIGGER engineering_stage_events_append_only",
+        );
+      }
+
+      const trace = await controlPlane.listRunTrace(db, {
+        caseId: "case-1",
+        ownerId: "owner-1",
+        runId: "run-1",
+        checkpointRevision: 0,
+      });
+      expect(trace.map((event) => Number(event.event_sequence))).toEqual([1, 2, 3, 4]);
+      expect(trace.map((event) => event.event_type)).toEqual([
+        "INTENT_BOUND",
+        "STARTED",
+        "ARTIFACT_RECORDED",
+        "COMPLETION_OBSERVED",
+      ]);
+      expect(trace[2]).toMatchObject({ artifact_kind: "SliceContract", stage: "SLICE_PLANNING" });
+      expect(trace[3]).toMatchObject({
+        operation_kind: "MODEL_CALL",
+        effect_class: "MODEL_CALL",
+        integration_scope_digest: expect.stringMatching(/^sha256:/),
+        input_digest: expect.stringMatching(/^sha256:/),
+        config_digest: DIGEST,
+        schema_digest: DIGEST,
+        completion_outcome: "SUCCEEDED",
+        reconciliation_resolution: null,
+      });
+      expect(Object.keys(trace[0]!).sort()).toEqual(
+        [
+          "event_id",
+          "event_sequence",
+          "event_type",
+          "case_id",
+          "owner_id",
+          "run_id",
+          "checkpoint_revision",
+          "operation_id",
+          "operation_kind",
+          "effect_class",
+          "integration_scope_digest",
+          "input_digest",
+          "config_digest",
+          "schema_digest",
+          "stage",
+          "stage_attempt",
+          "artifact_revision_id",
+          "artifact_kind",
+          "completion_id",
+          "completion_outcome",
+          "reconciliation_id",
+          "reconciliation_resolution",
+          "payload_digest",
+          "recorded_at",
+        ].sort(),
+      );
+      expect(JSON.stringify(trace)).not.toMatch(
+        /PROMPT_SECRET|PAYLOAD_SECRET|RECEIPT_SECRET|PATCH_SECRET|\/private\/secret/,
+      );
+      await expect(
+        controlPlane.listRunTrace(db, {
+          caseId: "case-1",
+          ownerId: "owner-foreign",
+          runId: "run-1",
+          checkpointRevision: 0,
+        }),
+      ).resolves.toEqual([]);
+      await expect(
+        controlPlane.listRunTrace(db, {
+          caseId: "case-1",
+          ownerId: "owner-1",
+          runId: "run-1",
+          checkpointRevision: 1,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("fails closed when a historical artifact row is directly corrupted", async () => {
+      await prepareRepositoryPath();
+      await controlPlane.bindOperationIntent(
+        db,
+        lease,
+        operationInput("operation-1", { stage: "SLICE_PLANNING" }),
+      );
+      await controlPlane.appendArtifactRevision(db, lease, {
+        operationId: "operation-1",
+        artifactKey: "slice-1/contract",
+        artifact,
+      });
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      try {
+        await db.query(
+          `UPDATE engineering_artifact_revisions
+              SET artifact_kind = 'TerminalReason'
+            WHERE operation_id = 'operation-1'`,
+        );
+      } finally {
+        await db.query(
+          "ALTER TABLE engineering_artifact_revisions ENABLE TRIGGER engineering_artifact_revisions_append_only",
+        );
+      }
+      await expect(controlPlane.listRunArtifactRevisions(db, { runId: "run-1" })).rejects.toThrow(
+        /ledger binding is corrupted/,
+      );
+      await expect(
+        controlPlane.readOperationRecovery(db, { operationId: "operation-1" }),
+      ).rejects.toThrow(/ledger binding is corrupted/);
     });
 
     it("observes only the exact durable completion and never copies its receipt", async () => {

@@ -368,6 +368,8 @@ export interface EngineeringRuntimePort {
     readonly unit: import("../supervisor/runtime.js").RuntimeUnit;
     readonly run: import("../supervisor/runtime.js").RuntimeRun;
   }) => Promise<EngineeringRuntimeSession>;
+  /** Fresh durable control state. Recovery of the current stage always runs before this check. */
+  readonly readControlState: () => Promise<Readonly<{ cancelled: boolean }>>;
   readonly recoverStage: (binding: EngineeringStageBinding) => Promise<EngineeringRecoveredStage>;
   readonly prepareContext: (binding: EngineeringStageBinding) => Promise<unknown>;
   readonly commitStarted: (binding: EngineeringStageBinding) => Promise<void>;

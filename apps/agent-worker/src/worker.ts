@@ -52,7 +52,6 @@ import { createEngineeringRoleContextReader } from "./context.js";
 import {
   createBedrockEngineeringStageExecutor,
   createBedrockPreCommitReviewSessionFactory,
-  engineeringAuthorizationFromLease,
 } from "./engineering-workflow.js";
 import {
   createProductionEngineeringRuntimePort,
@@ -352,7 +351,6 @@ export async function main(): Promise<void> {
             "engineering execution is not configured: RA_ENGINEERING_CONFIG_PATH is required",
           );
         }
-        const authorization = engineeringAuthorizationFromLease(lease);
         return createProductionEngineeringRuntimePort({
           db,
           lease,
@@ -380,7 +378,6 @@ export async function main(): Promise<void> {
               concurrency: true,
               external_side_effect: false,
             },
-            ...(authorization === undefined ? {} : { authorization }),
           },
         });
       },
