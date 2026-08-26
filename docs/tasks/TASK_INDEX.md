@@ -70,8 +70,10 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 41 | [RA-041](RA-041.md) Workflow stages w istniejącym SupervisorRuntime | DONE | RA-037, RA-038, RA-039, RA-040 | M8 |
 | 42 | [RA-042](RA-042.md) Deterministyczny gate runner i evidence binding | DONE | RA-037, RA-038 | M8 |
 | 43 | [RA-043](RA-043.md) Vertical-slice executor, GitLifecycle i review loop | DONE | RA-041, RA-042 | M8 |
-| 44 | [RA-044](RA-044.md) Kwalifikacja core Engineering Control Plane | READY | RA-043 | M8 |
-| 45 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | BLOCKED_BY_DEPENDENCIES | RA-044 | M9 |
+| 44 | [RA-044](RA-044.md) Kwalifikacja core Engineering Control Plane | DONE | RA-043 | M8 |
+| 45 | [RA-046](RA-046.md) Engineering approval ingress: Discord → grant → writer job | READY | RA-044 | M8 |
+| 46 | [RA-047](RA-047.md) Stage-aware cross-fence recovery i continuation | BLOCKED_BY_DEPENDENCIES | RA-046 | M8 |
+| 47 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | BLOCKED_BY_DEPENDENCIES | RA-047 | M9 |
 
 ## Milestone gates
 
@@ -85,7 +87,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 - **M7 Runnable:** composition roots — procesy, health, Dockerfile.
 - **M8 Engineering Control Plane:** jeden human-steered control plane rozszerzający istniejący
   `SupervisorRuntime`: risk-proportional product/system/program design, fresh context, vertical
-  slices, durable recovery, deterministyczne gates i review (`ADR-0011`); zastępuje RA-034.
+  slices, durable recovery, deterministyczne gates i review (`ADR-0011`); operacyjny approval
+  ingress i stage-aware cross-fence continuation (`ADR-0014`); zastępuje RA-034.
 - **M9 iOS Qualification:** jawnie uruchamiany live smoke M8 na macOS/Xcode i `sondermind-ios`;
   brak środowiska live nie blokuje kwalifikacji core.
 

@@ -31,3 +31,6 @@ Aktualne decyzje:
 - `ADR-0013` — Sol/Luna wykonują sekwencję RA-037..RA-045 ciągle; audyt, commit,
   `/clear` i granica taska nie są pauzą, a uprawnienia zewnętrzne pozostają bez
   zmian.
+- `ADR-0014` — bezpieczny core dostaje brakujący produkcyjny approval ingress i stage-aware
+  cross-fence reconciliation (`RA-046`, `RA-047`) przed live smoke RA-045; generic decisions,
+  external actions i swobodny fence rollover nie zastępują tych granic.

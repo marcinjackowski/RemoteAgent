@@ -369,8 +369,9 @@ nie są poleceniem zatrzymania.
 
 ### Aktywny ciągły cel M8/M9
 
-Decyzja właściciela `2026-08-25`: po rozpoczęciu RA-037 prowadź kolejno
-RA-037..RA-045 aż każdy będzie `DONE`. Sol planuje i audytuje; jeden
+Decyzja właściciela `2026-08-25`, uzupełniona `ADR-0014` po kwalifikacji core:
+po rozpoczęciu RA-037 prowadź kolejno RA-037..RA-044, RA-046, RA-047 i RA-045,
+aż każdy będzie `DONE`. Sol planuje i audytuje; jeden
 `luna_implementer` wykonuje bounded work units, a `luna_explorer` jest używany
 tylko do potrzebnej eksploracji. Po każdym tasku stosuj pełne domknięcie powyżej
 i automatycznie przechodź do następnego odblokowanego taska.
