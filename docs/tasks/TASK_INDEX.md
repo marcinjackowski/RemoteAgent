@@ -72,8 +72,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 43 | [RA-043](RA-043.md) Vertical-slice executor, GitLifecycle i review loop | DONE | RA-041, RA-042 | M8 |
 | 44 | [RA-044](RA-044.md) Kwalifikacja core Engineering Control Plane | DONE | RA-043 | M8 |
 | 45 | [RA-046](RA-046.md) Engineering approval ingress: Discord → grant → writer job | DONE | RA-044 | M8 |
-| 46 | [RA-047](RA-047.md) Stage-aware cross-fence recovery i continuation | READY | RA-046 | M8 |
-| 47 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | BLOCKED_BY_DEPENDENCIES | RA-047 | M9 |
+| 46 | [RA-047](RA-047.md) Stage-aware cross-fence recovery i continuation | DONE | RA-046 | M8 |
+| 47 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | READY | RA-047 | M9 |
 
 ## Milestone gates
 
