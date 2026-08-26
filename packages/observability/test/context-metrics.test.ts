@@ -58,4 +58,19 @@ describe("context metrics", () => {
     });
     expect(JSON.stringify(metrics.snapshot().counters)).not.toContain("opaque-canary-no-shape");
   });
+
+  it("keeps engineering telemetry on closed stage/outcome dimensions", () => {
+    const metrics = new MetricRegistry();
+    metrics.increment(MetricName.ENGINEERING_STAGE_TRANSITIONS, 1, {
+      kind: "SLICE_REVIEW",
+      outcome: "ARTIFACT_RECORDED",
+    });
+    metrics.increment(MetricName.ENGINEERING_TERMINALS, 1, {
+      kind: "workflow",
+      outcome: "NO_PROGRESS",
+    });
+    expect(metrics.counter(MetricName.ENGINEERING_STAGE_TRANSITIONS)).toBe(1);
+    expect(metrics.counter(MetricName.ENGINEERING_TERMINALS)).toBe(1);
+    expect(JSON.stringify(metrics.snapshot())).not.toMatch(/case_id|owner_id|run_id|work_unit_id/u);
+  });
 });

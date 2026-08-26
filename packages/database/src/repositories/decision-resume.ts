@@ -1,5 +1,5 @@
-import { decisionAnswer, idString } from "@remoteagent/contracts";
-import type { DecisionAnswer } from "@remoteagent/contracts";
+import { AgentRole, decisionAnswer, idString } from "@remoteagent/contracts";
+import type { DecisionAnswer, WorkUnit } from "@remoteagent/contracts";
 import * as z from "zod";
 
 import type { Database, Transaction } from "../client.js";
@@ -10,7 +10,10 @@ import {
   UniqueViolationError,
 } from "../errors.js";
 import { JobStore, type JobRow } from "../queue/job-store.js";
+import { JobType } from "../queue/dispatch.js";
+import type { IdGenerator } from "../queue/runtime.js";
 import { DecisionRepository, type DecisionAnswerRow } from "./decision.js";
+import { WorkUnitRepository } from "./work-unit.js";
 
 const inputSchema = z.strictObject({ answerId: idString, answer: decisionAnswer });
 
@@ -43,7 +46,20 @@ function sameAnswer(
   );
 }
 
-function samePayload(job: JobRow, answerId: string, answer: DecisionAnswer): boolean {
+interface ResumeParent {
+  readonly runId: string;
+  readonly workUnitId: string;
+  readonly role: "SUPERVISOR" | "PLANNER" | "IMPLEMENTER" | "REVIEWER" | "VERIFICATION";
+  readonly objective: string;
+  readonly authoritativeScope: WorkUnit["authoritative_scope"];
+}
+
+function samePayload(
+  job: JobRow,
+  answerId: string,
+  answer: DecisionAnswer,
+  parent: ResumeParent | null,
+): boolean {
   const payload = job.payload;
   if (
     payload === null ||
@@ -52,25 +68,35 @@ function samePayload(job: JobRow, answerId: string, answer: DecisionAnswer): boo
     Object.getPrototypeOf(payload) !== Object.prototype
   )
     return false;
-  return (
-    job.job_type === "case.resume" &&
+  const baseMatches =
+    job.job_type ===
+      (parent?.role === AgentRole.IMPLEMENTER ? "agent.implementer" : "case.resume") &&
     job.provider === null &&
     job.case_id === answer.case_id &&
     job.serialization_key === answer.case_id &&
     payload.answerId === answerId &&
     payload.decisionId === answer.decision_id &&
     payload.caseId === answer.case_id &&
-    payload.checkpointRevision === answer.checkpoint_revision &&
-    Object.keys(payload).length === 4
+    payload.checkpointRevision === answer.checkpoint_revision;
+  if (!baseMatches) return false;
+  if (parent === null) return Object.keys(payload).length === 4;
+  return (
+    payload.reason === "decision_answer" &&
+    payload.parentRunId === parent.runId &&
+    typeof payload.workUnitId === "string" &&
+    typeof payload.runId === "string" &&
+    Object.keys(payload).length === 8
   );
 }
 
 export class DecisionResumeRepository {
   private readonly decisions = new DecisionRepository();
+  private readonly units = new WorkUnitRepository();
 
   public constructor(
     private readonly db: Database,
     private readonly jobs: JobStore,
+    private readonly ids: IdGenerator,
   ) {}
 
   /** Answer a waiting decision and enqueue its one-shot resume atomically. */
@@ -115,6 +141,54 @@ export class DecisionResumeRepository {
     const caseRow = caseResult.rows[0];
     if (!caseRow) throw new DecisionResumeStateError("decision case does not exist");
 
+    const parentEvents = await tx.query<{ source_run_id: string }>(
+      `SELECT payload->>'sourceRunId' AS source_run_id
+         FROM outbox
+        WHERE event_type = 'decision.requested'
+          AND aggregate = 'case'
+          AND aggregate_id = $1
+          AND payload->>'decisionId' = $2
+          AND payload->>'checkpointRevision' = $3::text
+        FOR UPDATE`,
+      [decision.case_id, decision.decision_id, decision.checkpoint_revision],
+    );
+    if (parentEvents.rows.length > 1) {
+      throw new DecisionResumeConflictError(answer.decision_id);
+    }
+    const parentRunId = parentEvents.rows[0]?.source_run_id;
+    let parent: ResumeParent | null = null;
+    if (parentRunId !== undefined) {
+      const parentResult = await tx.query<{
+        run_id: string;
+        work_unit_id: string;
+        role: ResumeParent["role"];
+        objective: string;
+        authoritative_scope: WorkUnit["authoritative_scope"];
+      }>(
+        `SELECT r.run_id, r.work_unit_id, r.role, w.objective, w.authoritative_scope
+           FROM agent_runs r
+           JOIN work_units w
+             ON w.work_unit_id = r.work_unit_id
+            AND w.case_id = r.case_id
+            AND w.run_id = r.run_id
+          WHERE r.run_id = $1 AND r.case_id = $2 AND r.safety_state = 'SUCCEEDED'`,
+        [parentRunId, decision.case_id],
+      );
+      const row = parentResult.rows[0];
+      // Only an engineering writer needs the new exact claimed-run continuation. Other roles
+      // remain on the audited four-field case.resume contract consumed by CaseRecoveryRepository;
+      // widening that payload would make otherwise valid legacy recovery fail closed.
+      if (row?.role === AgentRole.IMPLEMENTER) {
+        parent = {
+          runId: row.run_id,
+          workUnitId: row.work_unit_id,
+          role: row.role,
+          objective: row.objective,
+          authoritativeScope: row.authoritative_scope,
+        };
+      }
+    }
+
     const answerCollisions = await tx.query<{ decision_id: string; answer_id: string }>(
       `SELECT decision_id, answer_id FROM decision_answers
        WHERE decision_id = $1 OR answer_id = $2
@@ -131,12 +205,12 @@ export class DecisionResumeRepository {
               last_heartbeat_at, last_error, dead_lettered_at, dlq_reason,
               finished_at, created_at, updated_at
        FROM jobs
-       WHERE job_type = 'case.resume'
+       WHERE job_type IN ('case.resume', 'agent.implementer')
          AND (payload->>'decisionId' = $1 OR payload->>'answerId' = $2)
        FOR UPDATE`,
       [answer.decision_id, answerId],
     );
-    const compatible = relatedJobs.rows.filter((job) => samePayload(job, answerId, answer));
+    const compatible = relatedJobs.rows.filter((job) => samePayload(job, answerId, answer, parent));
     if (existing) {
       if (
         !sameAnswer(existing, answerId, answer) ||
@@ -187,8 +261,29 @@ export class DecisionResumeRepository {
     );
     if (transition.rows.length !== 1)
       throw new DecisionResumeStateError("case transition guard failed");
+    let resumeIdentity:
+      | { readonly workUnitId: string; readonly runId: string; readonly parentRunId: string }
+      | undefined;
+    if (parent !== null) {
+      const workUnitId = this.ids.next("work-unit");
+      const runId = this.ids.next("run");
+      await this.units.insert(tx, {
+        workUnitId,
+        caseId: answer.case_id,
+        role: parent.role,
+        objective: parent.objective,
+        authoritativeScope: parent.authoritativeScope,
+      });
+      await this.units.claimInTransaction(tx, {
+        workUnitId,
+        runId,
+        checkpointRevision: answer.checkpoint_revision,
+      });
+      resumeIdentity = { workUnitId, runId, parentRunId: parent.runId };
+    }
     const job = await this.jobs.enqueue(tx, {
-      jobType: "case.resume",
+      jobType:
+        parent?.role === AgentRole.IMPLEMENTER ? JobType.AGENT_IMPLEMENTER : JobType.CASE_RESUME,
       caseId: answer.case_id,
       serializationKey: answer.case_id,
       payload: {
@@ -196,6 +291,14 @@ export class DecisionResumeRepository {
         decisionId: answer.decision_id,
         caseId: answer.case_id,
         checkpointRevision: answer.checkpoint_revision,
+        ...(resumeIdentity === undefined
+          ? {}
+          : {
+              reason: "decision_answer",
+              parentRunId: resumeIdentity.parentRunId,
+              workUnitId: resumeIdentity.workUnitId,
+              runId: resumeIdentity.runId,
+            }),
       },
     });
     return { replayed: false, answerId, jobId: job.job_id };

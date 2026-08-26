@@ -35,16 +35,14 @@ describeIntegration(
       const created = await createTestDatabase();
       db = created.db;
       drop = created.drop;
-      repo = new DecisionResumeRepository(
-        db,
-        new JobStore({ clock: new SystemClock(), ids: new SequentialIdGenerator() }),
-      );
+      const ids = new SequentialIdGenerator();
+      repo = new DecisionResumeRepository(db, new JobStore({ clock: new SystemClock(), ids }), ids);
     });
     afterAll(async () => drop());
 
     beforeEach(async () => {
       await db.query(
-        "TRUNCATE outbox_dispatch, outbox, jobs, decision_answers, decisions, cases, connections, owners RESTART IDENTITY CASCADE",
+        "TRUNCATE outbox_dispatch, outbox, jobs, decision_answers, decisions, agent_runs, work_units, cases, connections, owners RESTART IDENTITY CASCADE",
       );
       await db.query("INSERT INTO owners (owner_id, display_name) VALUES ('owner-1', 'Owner')");
       await db.query(
@@ -108,6 +106,113 @@ describeIntegration(
         (await db.query("SELECT status FROM cases WHERE case_id = 'case-1'")).rows[0]!.status,
       ).toBe("PLANNING");
       expect((await repo.answer({ answerId: "answer-1", answer: answer() })).replayed).toBe(true);
+    });
+
+    it("materializes a fresh claimed writer run with exact decision/parent/revision causality", async () => {
+      await db.query(
+        `INSERT INTO work_units
+           (schema_version, work_unit_id, case_id, role, status, objective, authoritative_scope, run_id)
+         VALUES (1, 'parent-unit', 'case-1', 'IMPLEMENTER', 'PENDING', 'continue design',
+                 '{"connection_ids":[],"repo_allowlist":["repo-1"],"can_write_workspace":true}'::jsonb,
+                 NULL)`,
+      );
+      await db.query(
+        `INSERT INTO agent_runs
+           (run_id, case_id, owner_id, work_unit_id, role, safety_state, checkpoint_revision, finished_at)
+         VALUES ('parent-run','case-1','owner-1','parent-unit','IMPLEMENTER','SUCCEEDED',2,
+                 '2026-08-20T11:00:00Z')`,
+      );
+      await db.query(
+        "UPDATE work_units SET status='COMPLETED', run_id='parent-run' WHERE work_unit_id='parent-unit'",
+      );
+      await db.query(
+        `INSERT INTO outbox (outbox_id, aggregate, aggregate_id, event_type, payload)
+         VALUES ('decision-event','case','case-1','decision.requested',
+                 '{"decisionId":"decision-1","caseId":"case-1","checkpointRevision":3,"sourceRunId":"parent-run"}'::jsonb)`,
+      );
+
+      const first = await repo.answer({ answerId: "causal-answer", answer: answer() });
+      const job = (
+        await db.query<{ job_type: string; payload: Record<string, unknown> }>(
+          "SELECT job_type, payload FROM jobs WHERE job_id=$1",
+          [first.jobId],
+        )
+      ).rows[0]!;
+      expect(job.job_type).toBe("agent.implementer");
+      expect(job.payload).toMatchObject({
+        reason: "decision_answer",
+        decisionId: "decision-1",
+        answerId: "causal-answer",
+        caseId: "case-1",
+        checkpointRevision: 3,
+        parentRunId: "parent-run",
+      });
+      expect(job.payload.workUnitId).toEqual(expect.any(String));
+      expect(job.payload.runId).toEqual(expect.any(String));
+      expect(Object.keys(job.payload)).toHaveLength(8);
+      expect(
+        (
+          await db.query(
+            `SELECT w.status, w.run_id, r.trigger_event_id, r.checkpoint_revision
+               FROM work_units w JOIN agent_runs r ON r.run_id=w.run_id
+              WHERE w.work_unit_id=$1`,
+            [job.payload.workUnitId],
+          )
+        ).rows[0],
+      ).toEqual({
+        status: "DISPATCHED",
+        run_id: job.payload.runId,
+        trigger_event_id: null,
+        checkpoint_revision: 3,
+      });
+
+      expect(await repo.answer({ answerId: "causal-answer", answer: answer() })).toEqual({
+        ...first,
+        replayed: true,
+      });
+      expect((await db.query("SELECT 1 FROM jobs")).rows).toHaveLength(1);
+      expect((await db.query("SELECT 1 FROM work_units")).rows).toHaveLength(2);
+    });
+
+    it("preserves the strict legacy case.resume payload for a non-writer parent", async () => {
+      await db.query(
+        `INSERT INTO work_units
+           (schema_version, work_unit_id, case_id, role, status, objective, authoritative_scope, run_id)
+         VALUES (1, 'parent-unit', 'case-1', 'SUPERVISOR', 'PENDING', 'answer the owner',
+                 '{"connection_ids":[],"repo_allowlist":[],"can_write_workspace":false}'::jsonb,
+                 NULL)`,
+      );
+      await db.query(
+        `INSERT INTO agent_runs
+           (run_id, case_id, owner_id, work_unit_id, role, safety_state, checkpoint_revision, finished_at)
+         VALUES ('parent-run','case-1','owner-1','parent-unit','SUPERVISOR','SUCCEEDED',2,now())`,
+      );
+      await db.query(
+        "UPDATE work_units SET status='COMPLETED', run_id='parent-run' WHERE work_unit_id='parent-unit'",
+      );
+      await db.query(
+        `INSERT INTO outbox (outbox_id, aggregate, aggregate_id, event_type, payload)
+         VALUES ('decision-event','case','case-1','decision.requested',
+                 '{"decisionId":"decision-1","caseId":"case-1","checkpointRevision":3,"sourceRunId":"parent-run"}'::jsonb)`,
+      );
+
+      const result = await repo.answer({ answerId: "legacy-answer", answer: answer() });
+      const job = (
+        await db.query<{ job_type: string; payload: Record<string, unknown> }>(
+          "SELECT job_type, payload FROM jobs WHERE job_id=$1",
+          [result.jobId],
+        )
+      ).rows[0]!;
+      expect(job).toEqual({
+        job_type: "case.resume",
+        payload: {
+          answerId: "legacy-answer",
+          decisionId: "decision-1",
+          caseId: "case-1",
+          checkpointRevision: 3,
+        },
+      });
+      expect((await db.query("SELECT 1 FROM work_units")).rows).toHaveLength(1);
     });
 
     it("rejects stale and conflicting answers without writes", async () => {

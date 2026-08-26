@@ -6,6 +6,7 @@ import {
   WriterLeaseGuard,
   prepareCompletion,
   type RuntimeRoles,
+  type EngineeringRuntimePort,
 } from "@remoteagent/agent-orchestrator";
 import {
   JobType,
@@ -46,8 +47,42 @@ export interface HandlerDependencies {
   /** Needed only by the implementer path, to assert the durable writer lease. */
   readonly db: Database;
   readonly jobs: JobStore;
+  /** Exact leased stage adapter; only the writer handler may construct it. */
+  readonly engineering?: (lease: JobLease) => EngineeringRuntimePort;
   /** Bounded per pump pass; a runaway role cannot hold a job lease indefinitely. */
   readonly maxSteps?: number;
+  /** Test seam; production renews every ten seconds, well inside the thirty-second lease. */
+  readonly heartbeatIntervalMs?: number;
+}
+
+const HEARTBEAT_INTERVAL_MS = 10_000;
+
+async function withLeaseHeartbeat<T>(
+  heartbeat: () => Promise<void>,
+  work: () => Promise<T>,
+  intervalMs: number,
+): Promise<T> {
+  let pending: Promise<void> | null = null;
+  let failure: unknown;
+  const timer = setInterval(() => {
+    if (pending !== null || failure !== undefined) return;
+    pending = heartbeat()
+      .catch((error: unknown) => {
+        failure = error;
+      })
+      .finally(() => {
+        pending = null;
+      });
+  }, intervalMs);
+  timer.unref();
+  try {
+    const result = await work();
+    if (pending !== null) await pending;
+    if (failure !== undefined) throw failure;
+    return result;
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 /**
@@ -63,6 +98,11 @@ function runtimeFor(deps: HandlerDependencies, writerLease?: JobLease): Supervis
   const guard = new WriterLeaseGuard<Database>({
     assertCurrentLease: (query, lease) => deps.jobs.assertCurrentLease(query, lease),
   });
+  const executionTarget = writerLease === undefined ? undefined : writerTarget(writerLease);
+  const engineering =
+    writerLease === undefined || deps.engineering === undefined
+      ? undefined
+      : deps.engineering(writerLease);
   return new SupervisorRuntime({
     persistence: {
       listCaseIds: () => deps.persistence.listCaseIds(),
@@ -82,6 +122,8 @@ function runtimeFor(deps: HandlerDependencies, writerLease?: JobLease): Supervis
       acquire: () => scheduler.acquire(),
     },
     makeRunId: () => deps.persistence.nextRunId(),
+    ...(executionTarget === undefined ? {} : { executionTarget }),
+    ...(engineering === undefined ? {} : { engineering }),
     // AC3. Supplied ONLY when this pass runs under an `agent.implementer` job lease. A
     // `case.resume` pass has no writer lease, so an IMPLEMENTER unit reached from it fails
     // closed with "IMPLEMENTER requires writer authority" rather than writing without a
@@ -113,6 +155,27 @@ function runtimeFor(deps: HandlerDependencies, writerLease?: JobLease): Supervis
           },
         }),
   });
+}
+
+function writerTarget(lease: JobLease): {
+  readonly caseId: string;
+  readonly workUnitId: string;
+  readonly runId: string;
+} {
+  const payload = lease.payload;
+  const workUnitId = payload.workUnitId;
+  const runId = payload.runId;
+  if (
+    lease.caseId === null ||
+    payload.caseId !== lease.caseId ||
+    typeof workUnitId !== "string" ||
+    workUnitId.trim().length === 0 ||
+    typeof runId !== "string" ||
+    runId.trim().length === 0
+  ) {
+    throw new Error("implementer job lacks an exact claimed work-unit/run binding");
+  }
+  return { caseId: lease.caseId, workUnitId, runId };
 }
 
 /**
@@ -177,6 +240,10 @@ async function persistThroughAuditedPath(
  */
 export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = false) {
   return async (lease: JobLease, heartbeat: () => Promise<void>): Promise<void> => {
+    const heartbeatIntervalMs = deps.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    if (!Number.isSafeInteger(heartbeatIntervalMs) || heartbeatIntervalMs < 1) {
+      throw new Error("heartbeatIntervalMs must be a positive safe integer");
+    }
     const runtime = runtimeFor(deps, asWriter ? lease : undefined);
     await runtime.recover();
     await heartbeat();
@@ -194,7 +261,11 @@ export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = fa
         });
       }
     }
-    const result = await runtime.pumpOnce();
+    const result = await withLeaseHeartbeat(
+      heartbeat,
+      () => runtime.pumpOnce(),
+      heartbeatIntervalMs,
+    );
     deps.logger.info("case.resume pass complete", {
       job_id: lease.jobId,
       case_id: lease.caseId,

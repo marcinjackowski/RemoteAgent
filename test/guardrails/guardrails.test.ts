@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -53,5 +54,22 @@ describe("dependency-boundary guardrail", () => {
     ]);
     expect(result.status).not.toBe(0);
     expect(result.output).toContain("boundaries/dependencies");
+  });
+});
+
+describe("engineering workflow control-plane guardrail", () => {
+  it("keeps SupervisorRuntime as the only agent-worker workflow driver", () => {
+    const handlers = readFileSync(join(repoRoot, "apps/agent-worker/src/handlers.ts"), "utf8");
+    const engineering = readFileSync(
+      join(repoRoot, "apps/agent-worker/src/engineering-workflow.ts"),
+      "utf8",
+    );
+    const worker = readFileSync(join(repoRoot, "apps/agent-worker/src/worker.ts"), "utf8");
+    expect(handlers.match(/new SupervisorRuntime\s*\(/gu)).toHaveLength(1);
+    expect(handlers).toContain("{ engineering }");
+    expect(engineering).not.toMatch(/new SupervisorRuntime|class .*Runtime(?!Port)/u);
+    expect(worker).not.toContain("new SupervisorRuntime");
+    expect(worker).toContain("engineeringAuthorizationFromLease(lease)");
+    expect(worker).toContain("{ authorization }");
   });
 });

@@ -21,6 +21,7 @@ export * from "./decisions/prepare.js";
 export * from "./decisions/errors.js";
 export * from "./recovery.js";
 export * from "./engineering/registry.js";
+export * from "./engineering/workflow.js";
 export * from "./roles/types.js";
 export * from "./roles/prompts.js";
 export * from "./roles/registry.js";

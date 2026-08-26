@@ -64,6 +64,12 @@ export const MetricName = {
   CONTEXT_COMPACTIONS: "context.compactions",
   /** Prompt-cache observations, including an explicit absence of provider signal. */
   CONTEXT_CACHE_OBSERVATIONS: "context.cache_observations",
+  /** Durable engineering stage transitions (bounded stage/outcome labels only). */
+  ENGINEERING_STAGE_TRANSITIONS: "engineering.stage_transitions",
+  /** Engineering recovery classifications. */
+  ENGINEERING_RECOVERIES: "engineering.recoveries",
+  /** Distinct workflow terminal reasons. */
+  ENGINEERING_TERMINALS: "engineering.terminals",
   /** External writes that produced a confirmed receipt. */
   ACTIONS_SUCCEEDED: "actions.succeeded",
   /** External writes whose outcome could not be established. */

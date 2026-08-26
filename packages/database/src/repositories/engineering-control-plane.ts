@@ -185,6 +185,13 @@ export interface EngineeringControlOperatorResult {
   plan: EngineeringControlResumePlan;
 }
 
+export interface EngineeringControlOperationRecovery {
+  readonly operation: EngineeringControlOperationRow;
+  readonly started: boolean;
+  readonly completion_outcome: "SUCCEEDED" | "FAILED" | "AMBIGUOUS" | null;
+  readonly artifact: EngineeringControlArtifactRevisionRow | null;
+}
+
 interface EngineeringControlRecoverySourceRow extends EngineeringControlOperationRow {
   intent_fencing_token: string;
   current_fencing_token: string;
@@ -504,6 +511,97 @@ export class EngineeringControlPlaneRepository {
         completionId: observed.completion_id,
         payload: { completion_id: observed.completion_id, outcome: observed.outcome },
       });
+    });
+  }
+
+  /** Read one exact operation for stage-level recovery; no run-wide "latest" inference. */
+  public async readOperationRecovery(
+    q: Queryable,
+    rawInput: unknown,
+  ): Promise<EngineeringControlOperationRecovery | null> {
+    const input = parseInput(operationIdentity, rawInput, "engineering operation identity");
+    const operationResult = await q.query<EngineeringControlOperationRow>(
+      `SELECT ${OPERATION_COLUMNS} FROM engineering_operations WHERE operation_id = $1`,
+      [input.operationId],
+    );
+    const operation = operationResult.rows[0];
+    if (operation === undefined) return null;
+    const state = await q.query<{
+      started: boolean;
+      completion_outcome: "SUCCEEDED" | "FAILED" | "AMBIGUOUS" | null;
+    }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM engineering_stage_events
+          WHERE operation_id = $1 AND event_type = 'STARTED'
+       ) AS started,
+       (
+         SELECT c.outcome FROM job_completions c
+          WHERE c.intent_id = $2 AND c.job_id = $3
+       ) AS completion_outcome`,
+      [operation.operation_id, operation.intent_id, operation.job_id],
+    );
+    const artifactResult = await q.query<EngineeringControlArtifactRevisionRow>(
+      `SELECT a.*
+         FROM engineering_artifact_revisions a
+         JOIN engineering_stage_events e
+           ON e.artifact_revision_id = a.artifact_revision_id
+          AND e.operation_id = a.operation_id
+          AND e.event_type = 'ARTIFACT_RECORDED'
+        WHERE a.operation_id = $1
+        ORDER BY e.event_sequence DESC
+        LIMIT 1`,
+      [operation.operation_id],
+    );
+    const artifact = artifactResult.rows[0] ?? null;
+    if (artifact !== null) {
+      const parsed = parseInput(
+        engineeringArtifact,
+        artifact.payload,
+        "recovered engineering artifact",
+      );
+      if (
+        parsed.case_id !== operation.case_id ||
+        parsed.run_id !== operation.run_id ||
+        engineeringArtifactDigest(parsed) !== artifact.payload_digest
+      ) {
+        throw new EngineeringControlStateError("recovered artifact provenance mismatch");
+      }
+    }
+    return {
+      operation,
+      started: state.rows[0]?.started ?? false,
+      completion_outcome: state.rows[0]?.completion_outcome ?? null,
+      artifact,
+    };
+  }
+
+  /** Strictly validated immutable artifacts for one exact run, in durable event order. */
+  public async listRunArtifactRevisions(
+    q: Queryable,
+    rawInput: unknown,
+  ): Promise<readonly EngineeringControlArtifactRevisionRow[]> {
+    const input = parseInput(resumeInput, rawInput, "engineering run identity");
+    const result = await q.query<EngineeringControlArtifactRevisionRow>(
+      `SELECT a.*
+         FROM engineering_artifact_revisions a
+         JOIN engineering_stage_events e
+           ON e.artifact_revision_id = a.artifact_revision_id
+          AND e.operation_id = a.operation_id
+          AND e.event_type = 'ARTIFACT_RECORDED'
+        WHERE a.run_id = $1
+        ORDER BY e.event_sequence ASC, a.artifact_revision_id ASC`,
+      [input.runId],
+    );
+    return result.rows.map((row) => {
+      const artifact = parseInput(engineeringArtifact, row.payload, "engineering run artifact");
+      if (
+        artifact.run_id !== input.runId ||
+        artifact.case_id !== row.case_id ||
+        engineeringArtifactDigest(artifact) !== row.payload_digest
+      ) {
+        throw new EngineeringControlStateError("run artifact provenance mismatch");
+      }
+      return { ...row, payload: artifact };
     });
   }
 

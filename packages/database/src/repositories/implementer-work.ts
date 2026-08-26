@@ -58,7 +58,12 @@ export interface EnqueueImplementerWorkInput {
 }
 
 export type EnqueueImplementerWorkResult =
-  | { readonly status: "accepted"; readonly workUnitId: string; readonly jobId: string }
+  | {
+      readonly status: "accepted";
+      readonly workUnitId: string;
+      readonly runId: string;
+      readonly jobId: string;
+    }
   | { readonly status: "ignored"; readonly reason: string };
 
 interface TxDb {
@@ -81,8 +86,8 @@ export class ImplementerWorkRepository {
   ): Promise<EnqueueImplementerWorkResult> {
     const parsed = inputSchema.parse(input);
     return db.withTransaction(async (tx) => {
-      const caseRow = await tx.query<{ status: string }>(
-        `SELECT status FROM cases WHERE case_id = $1 FOR UPDATE`,
+      const caseRow = await tx.query<{ status: string; checkpoint_revision: number }>(
+        `SELECT status, checkpoint_revision FROM cases WHERE case_id = $1 FOR UPDATE`,
         [parsed.caseId],
       );
       if (caseRow.rows.length === 0) return { status: "ignored", reason: "case_not_found" };
@@ -100,6 +105,7 @@ export class ImplementerWorkRepository {
       if (active.rows.length > 0) return { status: "ignored", reason: "writer_active" };
 
       const workUnitId = this.#ids.next("work-unit");
+      const runId = this.#ids.next("run");
       await this.#units.insert(tx, {
         workUnitId,
         caseId: parsed.caseId,
@@ -112,6 +118,11 @@ export class ImplementerWorkRepository {
           repo_allowlist: [parsed.repoId],
         },
       });
+      await this.#units.claimInTransaction(tx, {
+        workUnitId,
+        runId,
+        checkpointRevision: caseRow.rows[0]!.checkpoint_revision,
+      });
       const job = await this.#jobs.enqueue(tx, {
         jobType: JobType.AGENT_IMPLEMENTER,
         caseId: parsed.caseId,
@@ -119,10 +130,11 @@ export class ImplementerWorkRepository {
           reason: "implementer_work",
           caseId: parsed.caseId,
           workUnitId,
+          runId,
           repoId: parsed.repoId,
         },
       });
-      return { status: "accepted", workUnitId, jobId: job.job_id };
+      return { status: "accepted", workUnitId, runId, jobId: job.job_id };
     });
   }
 }

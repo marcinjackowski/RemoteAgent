@@ -119,12 +119,5 @@ function hasWriterBinding(
   workUnitId: string,
   runId: string,
 ): boolean {
-  const keys = Object.keys(payload);
-  return (
-    keys.length === 2 &&
-    keys.includes("workUnitId") &&
-    keys.includes("runId") &&
-    payload.workUnitId === workUnitId &&
-    payload.runId === runId
-  );
+  return payload.workUnitId === workUnitId && payload.runId === runId;
 }

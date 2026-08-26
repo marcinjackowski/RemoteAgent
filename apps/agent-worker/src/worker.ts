@@ -49,6 +49,11 @@ import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.j
 import { WorkerPersistence } from "./persistence.js";
 import { createRoles, roleConfigFromEnv } from "./roles.js";
 import { createEngineeringRoleContextReader } from "./context.js";
+import {
+  createBedrockEngineeringStageExecutor,
+  createPostgresEngineeringRuntimePort,
+  engineeringAuthorizationFromLease,
+} from "./engineering-workflow.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -301,29 +306,66 @@ export async function main(): Promise<void> {
   const modelId = await resolveModelId(db);
   const awsRegion = process.env.AWS_REGION?.trim();
   const persistence = new WorkerPersistence(db, runtime);
+  const jobs = new JobStore(runtime);
+  const transport = new AwsBedrockTransport({
+    ...(bearerToken !== undefined && bearerToken !== "" ? { bearerToken } : {}),
+    ...(awsRegion !== undefined && awsRegion !== "" ? { region: awsRegion } : {}),
+  });
+  const modelConfig = roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId });
+  const readContext = createEngineeringRoleContextReader({
+    db,
+    metrics,
+    knownSecrets,
+    beforeRead: async (caseId) => {
+      await persistence.ensureBaselineCheckpoint(caseId);
+    },
+  });
+  const engineeringExecutor = createBedrockEngineeringStageExecutor({
+    transport,
+    config: modelConfig,
+  });
   const handlers = createWorkerHandlers(
     {
       persistence,
       roles: createRoles(WORKER_ROLES, {
         // Bedrock API key (bearer) auth when set — no IAM keys; else the SDK's default chain.
-        transport: new AwsBedrockTransport({
-          ...(bearerToken !== undefined && bearerToken !== "" ? { bearerToken } : {}),
-          ...(awsRegion !== undefined && awsRegion !== "" ? { region: awsRegion } : {}),
-        }),
-        config: roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId }),
-        readContext: createEngineeringRoleContextReader({
-          db,
-          metrics,
-          knownSecrets,
-          beforeRead: async (caseId) => {
-            await persistence.ensureBaselineCheckpoint(caseId);
-          },
-        }),
+        transport,
+        config: modelConfig,
+        readContext,
         metrics,
       }),
       logger,
       db,
-      jobs: new JobStore(runtime),
+      jobs,
+      engineering: (lease) => {
+        const authorization = engineeringAuthorizationFromLease(lease);
+        return createPostgresEngineeringRuntimePort({
+          db,
+          lease,
+          jobs,
+          readContext,
+          executor: engineeringExecutor,
+          metrics,
+          policy: {
+            // Conservative deployment default. No model output can downgrade this class, and the
+            // missing owner/policy grant stops before implementation until a durable grant exists.
+            riskFacts: {
+              authority: "SERVER_OWNED",
+              security_or_policy: false,
+              migration: false,
+              irreversible_side_effect: false,
+              broad_public_contract_change: false,
+              multi_module: true,
+              new_architecture: false,
+              deterministic_oracle: false,
+              user_data: false,
+              concurrency: true,
+              external_side_effect: false,
+            },
+            ...(authorization === undefined ? {} : { authorization }),
+          },
+        });
+      },
     },
     extra,
   );

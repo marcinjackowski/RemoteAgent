@@ -203,69 +203,73 @@ export class WorkUnitRepository {
   /** Atomically claims one pending unit and binds exactly one fresh PLANNED run. */
   public async claim(db: WorkUnitTxDb, input: ClaimWorkUnit): Promise<WorkUnitClaim | null> {
     const parsed = this.parseClaim(input);
-    return db.withTransaction(async (tx) => {
-      const candidate = await tx.query<Record<string, unknown>>(
-        `SELECT ${workUnitColumns} FROM work_units w
+    return db.withTransaction((tx) => this.claimInTransaction(tx, parsed));
+  }
+
+  /** Compose a claim with another transaction (for example unit + run + durable job enqueue). */
+  public async claimInTransaction(tx: Transaction, input: ClaimWorkUnit): Promise<WorkUnitClaim> {
+    const parsed = this.parseClaim(input);
+    const candidate = await tx.query<Record<string, unknown>>(
+      `SELECT ${workUnitColumns} FROM work_units w
          WHERE w.work_unit_id = $1
          FOR UPDATE`,
-        [parsed.workUnitId],
-      );
-      const selected = candidate.rows[0];
-      if (!selected) throw new WorkUnitStateError("work unit does not exist");
-      const unit = mapRow(selected);
-      if (unit.run_id !== null) {
-        if (unit.run_id !== parsed.runId)
-          throw new WorkUnitStateError("work unit is already bound to another run");
-        if (unit.status !== "DISPATCHED" && unit.status !== "RUNNING")
-          throw new WorkUnitStateError("terminal work unit cannot be claimed");
-        const existingRun = await tx.query<WorkUnitClaim["run"]>(
-          `SELECT run_id, case_id, work_unit_id, role, safety_state, checkpoint_revision,
+      [parsed.workUnitId],
+    );
+    const selected = candidate.rows[0];
+    if (!selected) throw new WorkUnitStateError("work unit does not exist");
+    const unit = mapRow(selected);
+    if (unit.run_id !== null) {
+      if (unit.run_id !== parsed.runId)
+        throw new WorkUnitStateError("work unit is already bound to another run");
+      if (unit.status !== "DISPATCHED" && unit.status !== "RUNNING")
+        throw new WorkUnitStateError("terminal work unit cannot be claimed");
+      const existingRun = await tx.query<WorkUnitClaim["run"]>(
+        `SELECT run_id, case_id, work_unit_id, role, safety_state, checkpoint_revision,
                   trigger_event_id, model
            FROM agent_runs WHERE run_id = $1`,
-          [parsed.runId],
-        );
-        if (!existingRun.rows[0]) throw new WorkUnitStateError("work unit binding run is missing");
-        if (
-          existingRun.rows[0].case_id !== unit.case_id ||
-          existingRun.rows[0].work_unit_id !== unit.work_unit_id ||
-          existingRun.rows[0].role !== unit.role ||
-          existingRun.rows[0].checkpoint_revision !== parsed.checkpointRevision ||
-          existingRun.rows[0].safety_state !== "PLANNED" ||
-          existingRun.rows[0].trigger_event_id !== (parsed.triggerEventId ?? null) ||
-          stable(existingRun.rows[0].model) !== stable(parsed.model ?? null)
-        )
-          throw new WorkUnitConflictError(parsed.workUnitId);
-        return { workUnit: unit, run: existingRun.rows[0] };
-      }
-      if (unit.status !== "PENDING") throw new WorkUnitStateError("work unit is not claimable");
-      const run = await tx.query<WorkUnitClaim["run"]>(
-        `INSERT INTO agent_runs
+        [parsed.runId],
+      );
+      if (!existingRun.rows[0]) throw new WorkUnitStateError("work unit binding run is missing");
+      if (
+        existingRun.rows[0].case_id !== unit.case_id ||
+        existingRun.rows[0].work_unit_id !== unit.work_unit_id ||
+        existingRun.rows[0].role !== unit.role ||
+        existingRun.rows[0].checkpoint_revision !== parsed.checkpointRevision ||
+        existingRun.rows[0].safety_state !== "PLANNED" ||
+        existingRun.rows[0].trigger_event_id !== (parsed.triggerEventId ?? null) ||
+        stable(existingRun.rows[0].model) !== stable(parsed.model ?? null)
+      )
+        throw new WorkUnitConflictError(parsed.workUnitId);
+      return { workUnit: unit, run: existingRun.rows[0] };
+    }
+    if (unit.status !== "PENDING") throw new WorkUnitStateError("work unit is not claimable");
+    const run = await tx.query<WorkUnitClaim["run"]>(
+      `INSERT INTO agent_runs
            (run_id, case_id, owner_id, work_unit_id, role, safety_state, checkpoint_revision,
            trigger_event_id, model)
          VALUES ($1, $2, (SELECT owner_id FROM cases WHERE case_id = $2), $3, $4,
                  'PLANNED', $5, $6, $7::jsonb)
          RETURNING run_id, case_id, work_unit_id, role, safety_state, checkpoint_revision,
                    trigger_event_id, model`,
-        [
-          parsed.runId,
-          unit.case_id,
-          unit.work_unit_id,
-          unit.role,
-          parsed.checkpointRevision,
-          parsed.triggerEventId,
-          parsed.model ? JSON.stringify(parsed.model) : null,
-        ],
-      );
-      const bound = await tx.query<Record<string, unknown>>(
-        `UPDATE work_units
+      [
+        parsed.runId,
+        unit.case_id,
+        unit.work_unit_id,
+        unit.role,
+        parsed.checkpointRevision,
+        parsed.triggerEventId,
+        parsed.model ? JSON.stringify(parsed.model) : null,
+      ],
+    );
+    const bound = await tx.query<Record<string, unknown>>(
+      `UPDATE work_units
          SET status = 'DISPATCHED', run_id = $2
          WHERE work_unit_id = $1 AND status = 'PENDING' AND run_id IS NULL
          RETURNING ${workUnitColumns}`,
-        [unit.work_unit_id, parsed.runId],
-      );
-      if (!bound.rows[0]) throw new WorkUnitStateError("work unit claim guard failed");
-      return { workUnit: mapRow(bound.rows[0]), run: run.rows[0]! };
-    });
+      [unit.work_unit_id, parsed.runId],
+    );
+    if (!bound.rows[0]) throw new WorkUnitStateError("work unit claim guard failed");
+    return { workUnit: mapRow(bound.rows[0]), run: run.rows[0]! };
   }
 
   /** Apply the contract's DISPATCHED -> RUNNING transition for the bound run. */

@@ -26,6 +26,7 @@ export interface RoleContextRequest {
   readonly caseId: string;
   readonly runId: string;
   readonly workUnitId: string;
+  readonly stage?: EngineeringStage;
 }
 
 export interface CompiledRoleContext {
@@ -118,9 +119,10 @@ function compileSnapshot(
   budgetBytes: number,
   compiler: typeof compileEngineeringContext,
   knownSecrets: readonly string[],
+  stage: EngineeringStage,
 ): CompiledEngineeringContext {
   return compiler({
-    stage: EngineeringStage.DISCOVERY,
+    stage,
     authority: {
       caseId: snapshot.authority.caseId,
       ownerId: snapshot.authority.ownerId,
@@ -141,8 +143,16 @@ function fitPacket(
   packetBudgetBytes: number,
   compiler: typeof compileEngineeringContext,
   knownSecrets: readonly string[],
+  stage: EngineeringStage,
 ): { readonly compiled: CompiledEngineeringContext; readonly packet: string } {
-  const candidate = compileSnapshot(snapshot, sources, packetBudgetBytes, compiler, knownSecrets);
+  const candidate = compileSnapshot(
+    snapshot,
+    sources,
+    packetBudgetBytes,
+    compiler,
+    knownSecrets,
+    stage,
+  );
   const sourcesById = new Map(sources.map((source) => [source.sourceId, source]));
   const candidateManifestById = new Map(
     candidate.manifest.sources.map((source) => [source.source_id, source]),
@@ -177,7 +187,14 @@ function fitPacket(
     }
   }
 
-  const compiled = compileSnapshot(snapshot, kept, packetBudgetBytes, compiler, knownSecrets);
+  const compiled = compileSnapshot(
+    snapshot,
+    kept,
+    packetBudgetBytes,
+    compiler,
+    knownSecrets,
+    stage,
+  );
   const byId = new Map(kept.map((source) => [source.sourceId, source]));
   const manifestById = new Map(
     compiled.manifest.sources.map((source) => [source.source_id, source]),
@@ -259,6 +276,7 @@ export function createEngineeringRoleContextReader(
   }
 
   return async (request) => {
+    const stage = request.stage ?? EngineeringStage.DISCOVERY;
     await options.beforeRead?.(request.caseId);
     const snapshot = await repository.readSnapshot(options.db, {
       caseId: request.caseId,
@@ -267,7 +285,7 @@ export function createEngineeringRoleContextReader(
       recentScanBytes,
       relevantScanBytes,
     });
-    const allowed = new Set(engineeringContextSourcePolicy[EngineeringStage.DISCOVERY]);
+    const allowed = new Set(engineeringContextSourcePolicy[stage]);
     const sources = snapshot.sources
       .map(mapSource)
       .filter((source) => allowed.has(source.sourceType));
@@ -277,6 +295,7 @@ export function createEngineeringRoleContextReader(
       packetBudgetBytes,
       compiler,
       options.knownSecrets ?? [],
+      stage,
     );
     const packetBytes = utf8ByteLength(fitted.packet);
     const result: CompiledRoleContext = {

@@ -7,6 +7,15 @@ import {
 } from "@remoteagent/contracts";
 
 import { mergeReadOnlyResults, type ReadOnlyMerge } from "./merge.js";
+import {
+  engineeringStructuralFingerprint,
+  evaluateEngineeringApproval,
+  evaluateEngineeringProgress,
+  type EngineeringRuntimePort,
+  type EngineeringRuntimeStopCode,
+  type EngineeringStageEvidence,
+} from "../engineering/workflow.js";
+import { EngineeringStage, engineeringStageRegistry } from "../engineering/registry.js";
 
 /** The durable identity of a run. Timestamps are deliberately absent. */
 export interface RuntimeRun {
@@ -118,6 +127,15 @@ export interface RuntimeOptions {
   };
   readonly makeRunId: (unit: RuntimeUnit) => string;
   readonly writerAuthority?: RuntimeWriterAuthority;
+  /** Server-owned job target. When present, recovery and execution fail closed outside it. */
+  readonly executionTarget?: {
+    readonly caseId: string;
+    readonly workUnitId: string;
+    readonly runId: string;
+  };
+  /** Optional single-stage port; SupervisorRuntime remains the only workflow driver. */
+  readonly engineering?: EngineeringRuntimePort;
+  readonly clock?: () => number;
   readonly maxSteps?: number;
 }
 
@@ -154,6 +172,9 @@ export class SupervisorRuntime {
   readonly #scheduler: RuntimeOptions["scheduler"];
   readonly #makeRunId: RuntimeOptions["makeRunId"];
   readonly #writerAuthority: RuntimeWriterAuthority | undefined;
+  readonly #executionTarget: RuntimeOptions["executionTarget"];
+  readonly #engineering: EngineeringRuntimePort | undefined;
+  readonly #clock: () => number;
   readonly #maxSteps: number;
   readonly #units = new Map<string, RuntimeUnitState>();
   readonly #checkpointRevisions = new Map<string, number>();
@@ -169,11 +190,24 @@ export class SupervisorRuntime {
     if (!Number.isSafeInteger(options.maxSteps ?? 1) || (options.maxSteps ?? 1) < 1) {
       throw new RuntimeInvariantError("maxSteps must be a positive safe integer");
     }
+    if (
+      options.executionTarget !== undefined &&
+      [
+        options.executionTarget.caseId,
+        options.executionTarget.workUnitId,
+        options.executionTarget.runId,
+      ].some((value) => value.trim().length === 0 || value.length > 512)
+    ) {
+      throw new RuntimeInvariantError("execution target identifiers must be non-empty and bounded");
+    }
     this.#persistence = options.persistence;
     this.#roles = options.roles;
     this.#scheduler = options.scheduler;
     this.#makeRunId = options.makeRunId;
     this.#writerAuthority = options.writerAuthority;
+    this.#executionTarget = options.executionTarget;
+    this.#engineering = options.engineering;
+    this.#clock = options.clock ?? Date.now;
     this.#maxSteps = options.maxSteps ?? 1;
   }
 
@@ -214,33 +248,69 @@ export class SupervisorRuntime {
   }
 
   private async recoverImpl(): Promise<void> {
-    const caseIds = [...(await this.#persistence.listCaseIds())].sort(compareText);
+    const caseIds = this.#executionTarget
+      ? [this.#executionTarget.caseId]
+      : [...(await this.#persistence.listCaseIds())].sort(compareText);
+    let targetFound = false;
     for (const caseId of caseIds) {
       const snapshot = await this.#persistence.recover(caseId);
       if (snapshot.caseId !== caseId)
         throw new RuntimeInvariantError("recovery case binding mismatch");
       if (snapshot.checkpointRevision !== undefined)
         this.#checkpointRevisions.set(caseId, snapshot.checkpointRevision);
-      if (snapshot.writerBlocked === true) this.#blockedCases.add(caseId);
+      const exactEngineeringRecovery =
+        snapshot.writerBlocked === true &&
+        this.#engineering !== undefined &&
+        this.#executionTarget?.caseId === caseId;
+      if (snapshot.writerBlocked === true && !exactEngineeringRecovery)
+        this.#blockedCases.add(caseId);
       for (const state of snapshot.units) {
         if (state.workUnit.case_id !== caseId)
           throw new RuntimeInvariantError("recovery work unit case binding mismatch");
+        if (
+          this.#executionTarget !== undefined &&
+          state.workUnit.work_unit_id !== this.#executionTarget.workUnitId
+        ) {
+          continue;
+        }
+        if (this.#executionTarget !== undefined) {
+          targetFound = true;
+          if (
+            state.run?.runId !== this.#executionTarget.runId ||
+            state.workUnit.run_id !== this.#executionTarget.runId
+          ) {
+            throw new RuntimeInvariantError("execution target run binding mismatch");
+          }
+        }
         this.#remember(state);
         const unit = state.workUnit;
+        const exactEngineeringUnit =
+          exactEngineeringRecovery &&
+          unit.role === "IMPLEMENTER" &&
+          unit.work_unit_id === this.#executionTarget?.workUnitId;
         if (
           (unit.status === "PENDING" || unit.status === "DISPATCHED") &&
-          !(snapshot.writerBlocked === true && unit.role === "IMPLEMENTER")
+          (!(snapshot.writerBlocked === true && unit.role === "IMPLEMENTER") ||
+            exactEngineeringUnit)
         )
           this.#enqueue(state);
         if (
           snapshot.writerBlocked === true &&
           unit.role === "IMPLEMENTER" &&
+          !exactEngineeringUnit &&
           (unit.status === "PENDING" || unit.status === "DISPATCHED")
         ) {
           this.#blockedUnits.add(unit.work_unit_id);
         }
         if (unit.status === "RUNNING" && state.completion !== null) {
           await this.finalizeConfirmed(state);
+        } else if (
+          unit.status === "RUNNING" &&
+          state.run !== null &&
+          this.#engineering !== undefined &&
+          unit.role === "IMPLEMENTER"
+        ) {
+          this.#enqueue(state);
         } else if (unit.status === "RUNNING" && state.run !== null) {
           this.#ambiguous.add(unit.work_unit_id);
           if (this.#persistence.markAmbiguous) {
@@ -256,6 +326,9 @@ export class SupervisorRuntime {
           }
         }
       }
+    }
+    if (this.#executionTarget !== undefined && !targetFound) {
+      throw new RuntimeInvariantError("execution target work unit does not exist");
     }
   }
 
@@ -465,9 +538,6 @@ export class SupervisorRuntime {
           completion: state.completion,
         };
       }
-      const role = this.#roles[state.workUnit.role];
-      if (!role)
-        throw new RuntimeInvariantError(`no role implementation for ${state.workUnit.role}`);
       if (state.workUnit.role === "IMPLEMENTER") {
         if (state.workUnit.authoritative_scope.can_write_workspace !== true)
           throw new RuntimeInvariantError("IMPLEMENTER scope is not write-enabled");
@@ -478,9 +548,35 @@ export class SupervisorRuntime {
       } else if (ROLE_CAN_WRITE_WORKSPACE[state.workUnit.role]) {
         throw new RuntimeInvariantError("non-Implementer role is write-enabled");
       }
-      const parsed = agentCompletion.safeParse(
-        await role.invoke({ unit: state, run: state.run, ...(writerFence ? { writerFence } : {}) }),
-      );
+      const runningState: RuntimeUnitState & { readonly run: RuntimeRun } = {
+        ...state,
+        run: state.run,
+      };
+      const rawCompletion =
+        this.#engineering !== undefined && state.workUnit.role === "IMPLEMENTER"
+          ? await this.runEngineeringWorkflow(runningState, writerFence!)
+          : await this.invokeLegacyRole(runningState, writerFence);
+      if (rawCompletion === null) {
+        this.#ambiguous.add(unitId);
+        this.#blockedCases.add(state.workUnit.case_id);
+        if (this.#persistence.markAmbiguous) {
+          await this.#persistence.markAmbiguous({
+            workUnitId: state.workUnit.work_unit_id,
+            runId: state.run.runId,
+            reason: "engineering stage STARTED without confirmed receipt/artifact",
+          });
+        }
+        return {
+          unitId,
+          progressed: true,
+          ambiguous: true,
+          blocked: false,
+          waiting: false,
+          unit: state,
+          completion: null,
+        };
+      }
+      const parsed = agentCompletion.safeParse(rawCompletion);
       if (!parsed.success) throw new RuntimeInvariantError("role returned an invalid completion");
       const completion = parsed.data;
       if (completion.case_id !== state.workUnit.case_id || completion.run_id !== state.run.runId)
@@ -545,6 +641,107 @@ export class SupervisorRuntime {
         }
       }
     }
+  }
+
+  private async invokeLegacyRole(
+    state: RuntimeUnitState & { readonly run: RuntimeRun },
+    writerFence: RuntimeWriterFence | undefined,
+  ): Promise<unknown> {
+    const role = this.#roles[state.workUnit.role];
+    if (!role) throw new RuntimeInvariantError(`no role implementation for ${state.workUnit.role}`);
+    return role.invoke({ unit: state, run: state.run, ...(writerFence ? { writerFence } : {}) });
+  }
+
+  private async runEngineeringWorkflow(
+    state: RuntimeUnitState & { readonly run: RuntimeRun },
+    writerFence: RuntimeWriterFence,
+  ): Promise<unknown | null> {
+    const port = this.#engineering;
+    if (!port) throw new RuntimeInvariantError("engineering runtime port is not configured");
+    const session = await port.open({ unit: state, run: state.run });
+    const fingerprints = [...session.fingerprints];
+    let stageCalls = session.stageCalls;
+    let modelCalls = session.modelCalls;
+
+    const stop = async (code: EngineeringRuntimeStopCode, detail: string): Promise<unknown> =>
+      port.completion({ unit: state, run: state.run, code, detail });
+    const progress = (): ReturnType<typeof evaluateEngineeringProgress> =>
+      evaluateEngineeringProgress({
+        fingerprints,
+        stageCalls,
+        maxStageCalls: session.maxStageCalls,
+        modelCalls,
+        maxModelCalls: session.maxModelCalls,
+        consecutiveRepeatLimit: session.consecutiveRepeatLimit,
+        oscillationLimit: session.oscillationLimit,
+        nowMs: this.#clock(),
+        deadlineMs: session.deadlineMs,
+        cancelled: session.cancelled,
+      });
+    const stopForProgress = async (): Promise<unknown | undefined> => {
+      const disposition = progress();
+      if (disposition === "CONTINUE") return undefined;
+      return stop(disposition, `engineering workflow stopped: ${disposition}`);
+    };
+    const acceptEvidence = async (
+      stage: import("@remoteagent/contracts").EngineeringStage,
+      evidence: EngineeringStageEvidence,
+    ): Promise<unknown | undefined> => {
+      if (stage === EngineeringStage.DESIGN_APPROVAL) {
+        if (evidence.approval === undefined)
+          return stop("APPROVAL_BLOCKED", "design approval lacks deterministic evidence");
+        const approval = evaluateEngineeringApproval(evidence.approval);
+        if (approval.disposition !== "APPROVED")
+          return stop("APPROVAL_BLOCKED", approval.reasons.join(","));
+      }
+      fingerprints.push(engineeringStructuralFingerprint(evidence.structuralState));
+      return undefined;
+    };
+
+    for (const stage of session.plan.stages) {
+      const stopped = await stopForProgress();
+      if (stopped !== undefined) return stopped;
+      const binding = {
+        caseId: state.workUnit.case_id,
+        workUnitId: state.workUnit.work_unit_id,
+        runId: state.run.runId,
+        checkpointRevision: state.run.checkpointRevision,
+        stage,
+        attempt: 1,
+      } as const;
+      const recovered = await port.recoverStage(binding);
+      if (recovered.status === "AMBIGUOUS") return null;
+      if (recovered.status === "RECOVERED") {
+        const terminal = await acceptEvidence(stage, recovered.evidence);
+        if (terminal !== undefined) return terminal;
+        continue;
+      }
+      await writerFence.assertCurrent();
+      const context = await port.prepareContext(binding);
+      try {
+        await port.commitStarted(binding);
+        const result = await port.invokeAndRecord({
+          binding,
+          context,
+          definition: engineeringStageRegistry[stage],
+        });
+        if (!Number.isSafeInteger(result.modelCalls) || result.modelCalls < 0) {
+          throw new RuntimeInvariantError("stage modelCalls must be a non-negative safe integer");
+        }
+        stageCalls += 1;
+        modelCalls += result.modelCalls;
+        await writerFence.assertCurrent();
+        if (result.status === "WAITING_FOR_USER" || result.status === "TERMINAL")
+          return result.completion;
+        const terminal = await acceptEvidence(stage, result.evidence);
+        if (terminal !== undefined) return terminal;
+      } catch {
+        // commitStarted may have committed even when the caller observed an error. Recovery must
+        // inspect the durable operation instead of replaying a possibly mutating/model effect.
+        return null;
+      }
+    }
+    return stop("COMPLETED", "all required engineering stages completed");
   }
 
   private async finalizeConfirmed(state: RuntimeUnitState): Promise<RuntimeUnitState> {

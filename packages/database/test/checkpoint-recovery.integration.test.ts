@@ -203,6 +203,7 @@ describeIntegration(
       const resumeRepo = new DecisionResumeRepository(
         db,
         new JobStore({ clock: new SystemClock(), ids }),
+        ids,
       );
       const answerResult = await resumeRepo.answer({ answerId: "answer-1", answer });
       expect(answerResult.replayed).toBe(false);

@@ -146,9 +146,13 @@ describeIntegration(
       );
     }
 
+    async function claimSeededWriter(unitId: string, runId = "run-1"): Promise<void> {
+      await units.claim(db, { workUnitId: unitId, runId, checkpointRevision: 0 });
+    }
+
     function handlersWith(
       transport: FakeTransport,
-      overrides: { readonly maxSteps?: number } = {},
+      overrides: { readonly maxSteps?: number; readonly heartbeatIntervalMs?: number } = {},
     ) {
       return createWorkerHandlers({
         persistence,
@@ -255,6 +259,43 @@ describeIntegration(
         order.push("heartbeat");
       });
       expect(order).toEqual(["heartbeat", "model"]);
+    });
+
+    it("keeps heartbeating while a model call is in flight", async () => {
+      await seed("case-heartbeat-loop", "unit-heartbeat-loop");
+      let resolveModel!: (
+        value: ReturnType<FakeTransport["converse"]> extends Promise<infer T> ? T : never,
+      ) => void;
+      const inner = new FakeTransport([
+        {
+          model: config.model,
+          content: [{ type: "json", value: completionJson("case-heartbeat-loop", "run-1") }],
+        },
+      ]);
+      const blocked = new Promise<Awaited<ReturnType<FakeTransport["converse"]>>>((resolve) => {
+        resolveModel = resolve;
+      });
+      const transport = {
+        requests: inner.requests,
+        converse: async () => blocked,
+      } as unknown as FakeTransport;
+      let heartbeats = 0;
+      const running = handlersWith(transport, { heartbeatIntervalMs: 2 })["case.resume"]!(
+        lease({ caseId: "case-heartbeat-loop" }),
+        async () => {
+          heartbeats += 1;
+        },
+      );
+      const deadline = Date.now() + 1_000;
+      while (heartbeats < 3 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      expect(heartbeats).toBeGreaterThanOrEqual(3);
+      resolveModel({
+        model: config.model,
+        content: [{ type: "json", value: completionJson("case-heartbeat-loop", "run-1") }],
+      });
+      await running;
     });
 
     it("uses the INJECTED transport exactly once and never reaches AWS", async () => {
@@ -399,10 +440,11 @@ describeIntegration(
       // and its completion is persisted. `WriterLeaseGuard` re-asserts the lease against
       // the `jobs` row, so this only passes if the lease is actually live.
       await seed("case-6", "unit-6", "IMPLEMENTER");
+      await claimSeededWriter("unit-6");
       const enqueued = await jobs.enqueue(db, {
         caseId: "case-6",
         jobType: "agent.implementer",
-        payload: { workUnitId: "unit-6", runId: "run-1" },
+        payload: { caseId: "case-6", workUnitId: "unit-6", runId: "run-1" },
       });
       const claimed = await jobs.claim(db, { owner: "worker-1" });
       expect(claimed?.jobId).toBe(enqueued.job_id);
@@ -417,14 +459,43 @@ describeIntegration(
       expect(completion.rows[0]?.case_id).toBe("case-6");
     });
 
+    it("rejects unclaimed, foreign-run, and other-case writer targets before the model", async () => {
+      await seed("case-8", "unit-8", "IMPLEMENTER");
+      const enqueued = await jobs.enqueue(db, {
+        caseId: "case-8",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-8", workUnitId: "unit-8", runId: "run-1" },
+      });
+      const claimed = await jobs.claim(db, { owner: "worker-1" });
+      expect(claimed?.jobId).toBe(enqueued.job_id);
+      const transport = new FakeTransport([
+        {
+          model: config.model,
+          content: [{ type: "json", value: completionJson("case-8", "run-1") }],
+        },
+      ]);
+      const handler = handlersWith(transport)["agent.implementer"]!;
+
+      await expect(handler(claimed!, noop)).rejects.toThrow(/execution target run binding/);
+      await claimSeededWriter("unit-8");
+      await expect(
+        handler({ ...claimed!, payload: { ...claimed!.payload, runId: "run-foreign" } }, noop),
+      ).rejects.toThrow(/execution target run binding/);
+      await expect(
+        handler({ ...claimed!, payload: { ...claimed!.payload, caseId: "case-foreign" } }, noop),
+      ).rejects.toThrow(/exact claimed work-unit\/run binding/);
+      expect(transport.requests).toHaveLength(0);
+    });
+
     it("the writer is refused once its lease is no longer current", async () => {
       // A lease lost mid-pass (expiry, reap, a newer holder) must stop the writer. Asserted
       // by presenting a stale fencing token, which is what a superseded holder would carry.
       await seed("case-7", "unit-7", "IMPLEMENTER");
+      await claimSeededWriter("unit-7");
       await jobs.enqueue(db, {
         caseId: "case-7",
         jobType: "agent.implementer",
-        payload: { workUnitId: "unit-7", runId: "run-1" },
+        payload: { caseId: "case-7", workUnitId: "unit-7", runId: "run-1" },
       });
       const claimed = await jobs.claim(db, { owner: "worker-1" });
       const transport = new FakeTransport([
