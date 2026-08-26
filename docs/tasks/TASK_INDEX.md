@@ -67,7 +67,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 38 | [RA-038](RA-038.md) Trwałe operacje, eventy i recovery control plane | DONE | RA-037 | M8 |
 | 39 | [RA-039](RA-039.md) Generyczne structured output dla etapów Bedrock | DONE | RA-037 | M8 |
 | 40 | [RA-040](RA-040.md) Context compiler i trzywarstwowa pamięć | DONE | RA-037, RA-038 | M8 |
-| 41 | [RA-041](RA-041.md) Workflow stages w istniejącym SupervisorRuntime | READY | RA-037, RA-038, RA-039, RA-040 | M8 |
+| 41 | [RA-041](RA-041.md) Workflow stages w istniejącym SupervisorRuntime | DONE | RA-037, RA-038, RA-039, RA-040 | M8 |
 | 42 | [RA-042](RA-042.md) Deterministyczny gate runner i evidence binding | READY | RA-037, RA-038 | M8 |
 | 43 | [RA-043](RA-043.md) Vertical-slice executor, GitLifecycle i review loop | BLOCKED_BY_DEPENDENCIES | RA-041, RA-042 | M8 |
 | 44 | [RA-044](RA-044.md) Kwalifikacja core Engineering Control Plane | BLOCKED_BY_DEPENDENCIES | RA-043 | M8 |
