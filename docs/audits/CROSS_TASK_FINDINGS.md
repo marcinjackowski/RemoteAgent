@@ -48,6 +48,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-020` | HIGH | **ZAMKNIĘTY** `2026-08-25` — fix zacommitowany `3a0c5ed`, mutacja RED→GREEN | Żaden kod produkcyjny nie tworzył bazowego checkpointu case'a; PIERWSZY completion każdego runu rzucał „has no checkpoint to advance". Naprawione leniwym baseline'em (revision-0, bez bumpu `cases.checkpoint_revision`) w ścieżce completion (`CheckpointRepository.ensureBaseline` → `handlers.ts`). Odblokowało pętlę odpowiedzi RA-031/032 i RA-034. |
 | `CTF-021` | LOW | **ZAMKNIĘTY** `2026-08-25` — fix w `roles.ts` | Worker `createRole` (`apps/agent-worker/src/roles.ts`) NIE używa `RoleRegistry`/`ROLE_PROMPTS` (RA-009), a transport nie ma kanału `system` (`RuntimeMessage` = user/assistant/tool). SUPERVISOR system-prompt nigdy nie docierał do modelu → `summary` wychodziło trzecioosobowe („Owner asked… I provided…"). Fix: dyrektywa konwersacyjna wstrzyknięta w pierwszy user-turn `createRole`. |
 | `CTF-022` | LOW | **ZAMKNIĘTY** `2026-08-25` — RA-038-WU-00, realny `SELECT 1`, integracja 8/8 + mutation RED→GREEN | `env.sh` szanuje explicit config, preferuje 5433 i wykrywa local fallback PG15/5432 jako dyskretne `RA_PG*` |
+| `CTF-023` | LOW | **ZAMKNIĘTY** `2026-08-26` — pełna bramka RA-040 | Root typecheck ujawnił dwa testowe source/dist/inference defects pominięte przez bramki pakietowe; oba naprawione i objęte root `tsc` |
 
 ---
 
@@ -1696,3 +1697,25 @@ Dowód `2026-08-25`:
 - mutation: eksport portu fallbacku zmieniony `5432→5433`; harness — exit `1`,
   test fallbacku RED. Po przywróceniu i przejściu na probe `SELECT 1` finalny
   harness — exit `0`, `8/8`.
+
+## `CTF-023` — root typecheck nie obejmował poprawności dwóch testowych granic typów
+
+- Severity: **LOW** (defekt kompilacji testów; bez wpływu na runtime produkcyjny)
+- Wykryty: `2026-08-26`, podczas pełnej bramki RA-040
+- Dotyczy: root `tsconfig.json`, `test/processes/env-script.test.ts`,
+  `test/context/ra-040-baseline.test.ts`
+- Status: **ZAMKNIĘTY** `2026-08-26` — pełna bramka RA-040
+
+### Dowód, wpływ i zamknięcie
+
+Pierwszy pełny przebieg RA-040 wykonał build `26/26` bez cache i testy `2583/2583`, ale root
+`tsc -p tsconfig.json --noEmit` zakończył exit `2`. Test środowiska z RA-038 miał obiekt `env`
+wywnioskowany jako `{ PATH: string }`, mimo że mutował dowolne klucze `ProcessEnv`. Nowy baseline
+RA-040 łączył source test harness z publicznymi importami pakietu; prywatne pola `Database` i brand
+`Transaction` sprawiły, że równoważne deklaracje source/dist były nominalnie niezgodne.
+
+`env` ma teraz jawny typ `NodeJS.ProcessEnv`. Mostek source/dist jest pojedynczym, opisanym castem
+na granicy setupu wyłącznie w root teście; produkcyjne typy nie zostały osłabione. Celowany root
+`tsc` zakończył exit `0`, test env `8/8`, a realny baseline PostgreSQL `1/1`. Powtórzona pełna
+bramka RA-040 zakończyła exit `0`: build `26/26` i typecheck `38/38` przy `0 cached`, testy
+`2583/2583` w `201` plikach, `workflow:validate OK — 45 tasks` oraz `git diff --check` exit `0`.
