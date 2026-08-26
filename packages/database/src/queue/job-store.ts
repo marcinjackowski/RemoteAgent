@@ -11,7 +11,8 @@
  *
  * Concurrency guarantees:
  *   - Per-case serialization (criterion 4): a job's `serialization_key` (default
- *     = case_id) has AT MOST ONE active (LEASED/RECONCILING) job at a time. This
+ *     = case_id) has AT MOST ONE active (LEASED/RECONCILING/RECOVERY_PENDING)
+ *     job at a time. This
  *     is enforced by a partial UNIQUE index (`jobs_active_serialization_uidx`) as
  *     the hard backstop, plus a claim-time guard that skips a key with an active
  *     job.
@@ -44,7 +45,13 @@ import type { Clock, IdGenerator, LeaseTimeMode } from "./runtime.js";
 export type JobProvider = "jira" | "gmail" | "calendar" | "gitlab" | "discord";
 
 export type JobStatus =
-  "PENDING" | "LEASED" | "SUCCEEDED" | "FAILED" | "DEAD_LETTER" | "RECONCILING";
+  | "PENDING"
+  | "LEASED"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "DEAD_LETTER"
+  | "RECONCILING"
+  | "RECOVERY_PENDING";
 
 export interface EnqueueJob {
   jobType: string;
@@ -241,7 +248,8 @@ export class JobStore {
       // commit/rollback, keeping the critical section exactly this transaction.
       await tx.query("SELECT pg_advisory_xact_lock($1)", [CLAIM_ADVISORY_LOCK_KEY.toString()]);
 
-      // 1. Concurrency caps (active = LEASED or RECONCILING).
+      // 1. Capacity counts executing/reconciling jobs. A parked continuation
+      // still owns its serialization key below, but consumes no worker slot.
       if (options.globalLimit !== undefined) {
         const g = await tx.query<{ n: string }>(
           `SELECT count(*)::text AS n FROM jobs WHERE status IN ('LEASED', 'RECONCILING')`,
@@ -267,6 +275,7 @@ export class JobStore {
            SELECT j.job_id
            FROM jobs j
            WHERE j.status = 'PENDING'
+             AND j.job_type <> 'agent.engineering_recovery'
              AND j.available_at <= ${this.lt.now(1)}
              AND ($2::text IS NULL OR j.provider = $2)
              AND (
@@ -274,7 +283,7 @@ export class JobStore {
                OR NOT EXISTS (
                  SELECT 1 FROM jobs a
                  WHERE a.serialization_key = j.serialization_key
-                   AND a.status IN ('LEASED', 'RECONCILING')
+                   AND a.status IN ('LEASED', 'RECONCILING', 'RECOVERY_PENDING')
                )
              )
            ORDER BY j.available_at ASC, j.created_at ASC
@@ -957,6 +966,15 @@ export class JobStore {
         };
       }
 
+      const recovery = await tx.query<{ one: number }>(
+        `SELECT 1 AS one FROM engineering_recoveries
+          WHERE source_job_id=$1 LIMIT 1`,
+        [input.jobId],
+      );
+      if ((recovery.rowCount ?? 0) > 0) {
+        throw new ReconciliationConflictError(input.intentId, input.attemptKey);
+      }
+
       // A new attempt may only be recorded while the job is RECONCILING.
       if (intent.rows[0].status !== "RECONCILING") {
         throw new NotFoundError(
@@ -1058,12 +1076,20 @@ export class JobStore {
       await tx.query("SELECT pg_advisory_xact_lock($1)", [CLAIM_ADVISORY_LOCK_KEY.toString()]);
       const expired = await tx.query<{
         job_id: string;
+        case_id: string | null;
+        job_type: string;
+        payload: Record<string, unknown>;
         lease_owner: string | null;
         fencing_token: string;
         attempts: number;
       }>(
-        `SELECT job_id, lease_owner, fencing_token, attempts FROM jobs
+        `SELECT job_id, case_id, job_type, payload, lease_owner, fencing_token, attempts FROM jobs
          WHERE status = 'LEASED' AND lease_expires_at <= ${this.lt.now(1)}
+           AND job_type <> 'agent.engineering_recovery'
+           AND (
+             job_type <> 'agent.implementer'
+             OR payload->>'reason' IS DISTINCT FROM 'engineering_approval'
+           )
          ORDER BY lease_expires_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT $2`,

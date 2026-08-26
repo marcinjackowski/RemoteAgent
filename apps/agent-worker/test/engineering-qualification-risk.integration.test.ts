@@ -257,9 +257,8 @@ async function assertContextAndBundleBindings(
       ORDER BY o.recorded_at`,
     [fixture.ids.runId],
   );
-  const nonLocalStageDescriptors = descriptors.rows.filter(({ stage }) => stage !== "LOCAL_COMMIT");
-  expect(nonLocalStageDescriptors.length).toBeGreaterThan(0);
-  for (const row of nonLocalStageDescriptors) {
+  expect(descriptors.rows.length).toBeGreaterThan(0);
+  for (const row of descriptors.rows) {
     const manifest = row.descriptor.context_manifest;
     expect(manifest).toMatchObject({
       artifact_kind: "ContextManifest",
@@ -272,8 +271,7 @@ async function assertContextAndBundleBindings(
     expect(JSON.stringify(manifest)).not.toMatch(/qualification-model|\/Users\//u);
   }
   const localCommitDescriptor = descriptors.rows.find(({ stage }) => stage === "LOCAL_COMMIT");
-  expect(localCommitDescriptor?.descriptor).not.toHaveProperty("context_manifest");
-  expect(localCommitDescriptor?.descriptor).toHaveProperty("operation_id");
+  expect(localCommitDescriptor?.descriptor).toHaveProperty("commit.operation_id");
   const bundles = (await artifactRows(fixture)).filter(
     ({ artifact_kind }) => artifact_kind === "EvidenceBundle",
   );

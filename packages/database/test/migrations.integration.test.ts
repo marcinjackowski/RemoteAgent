@@ -10,9 +10,11 @@ import {
   ConnectionRepository,
   DiscordBindingRepository,
   EngineeringApprovalIngressRepository,
+  EngineeringRecoveryRepository,
   OwnerRepository,
+  WorkUnitRepository,
 } from "../src/repositories/index.js";
-import { ManualClock, SequentialIdGenerator } from "../src/queue/index.js";
+import { JobStore, ManualClock, SequentialIdGenerator } from "../src/queue/index.js";
 import { loadMigrations, migrateDown, migrateUp, migrationStatus } from "../src/migrate.js";
 import { createEmptyDatabase } from "./harness.js";
 import type { Database } from "../src/client.js";
@@ -274,7 +276,7 @@ describeIntegration(
           await seedEngineeringIngress(rollbackDb, proposalStatus);
           const before = await engineeringIngressSnapshot(rollbackDb);
 
-          await expect(migrateDown(rollbackDb)).rejects.toThrow(
+          await expect(migrateDown(rollbackDb, { to: 35 })).rejects.toThrow(
             /cannot revert migration 036 while engineering ingress rows exist/,
           );
 
@@ -303,6 +305,9 @@ describeIntegration(
       let writer: Promise<void> | null = null;
       try {
         await migrateUp(rollbackDb);
+        // Remove 037 while empty so this controlled race remains load-bearing
+        // specifically for the 036 ingress rollback lock.
+        expect((await migrateDown(rollbackDb)).reverted).toEqual([37]);
         await new OwnerRepository().insert(rollbackDb, {
           ownerId: "rollback-race-owner",
           displayName: "rollback-race-owner",
@@ -339,7 +344,7 @@ describeIntegration(
         });
         const writerPid = await writerHasLock;
 
-        const down = migrateDown(rollbackDb);
+        const down = migrateDown(rollbackDb, { to: 35 });
         const downSettled = down.then(
           () => true,
           () => true,
@@ -389,6 +394,134 @@ describeIntegration(
       } finally {
         cancelLockObservation = true;
         releaseWriter();
+        await writer?.catch(() => undefined);
+        await created.drop();
+      }
+    });
+
+    it("refuses to revert 037 with durable recovery authority and preserves its source chain", async () => {
+      const created = await createEmptyDatabase();
+      const rollbackDb = created.db;
+      try {
+        await migrateUp(rollbackDb);
+        await seedEngineeringIngress(rollbackDb, "GRANTED");
+        const proposal = await rollbackDb.query<{
+          case_id: string;
+          work_unit_id: string;
+          run_id: string;
+          job_id: string;
+        }>(
+          `SELECT case_id,work_unit_id,run_id,job_id
+             FROM engineering_write_proposals WHERE status='GRANTED'`,
+        );
+        const authority = proposal.rows[0]!;
+        await new WorkUnitRepository().start(rollbackDb, {
+          workUnitId: authority.work_unit_id,
+          runId: authority.run_id,
+        });
+        const clock = new ManualClock(Date.now() + 60_000);
+        await rollbackDb.query(
+          `UPDATE agent_runs SET safety_state='STARTED',started_at=to_timestamp($2/1000.0)
+            WHERE run_id=$1`,
+          [authority.run_id, clock.now()],
+        );
+        const jobs = new JobStore({
+          clock,
+          ids: new SequentialIdGenerator(),
+          leaseTime: "injected",
+        });
+        const lease = await jobs.claim(rollbackDb, { owner: "rollback-writer", leaseMs: 1_000 });
+        if (lease === null || lease.jobId !== authority.job_id) {
+          throw new Error("rollback recovery writer fixture was not claimed");
+        }
+        clock.advance(2_000);
+        const recoveries = new EngineeringRecoveryRepository({
+          clock,
+          ids: new SequentialIdGenerator(),
+          leaseTime: "injected",
+        });
+        const materialized = await recoveries.materializeExpired(rollbackDb, {
+          workflowDeadlineMs: 900_000,
+        });
+        expect(materialized.recoveries).toHaveLength(1);
+        const before = await rollbackDb.query<Record<string, string>>(
+          `SELECT
+             (SELECT count(*) FROM engineering_recoveries)::text recoveries,
+             (SELECT count(*) FROM engineering_recovery_events)::text events,
+             (SELECT count(*) FROM jobs WHERE job_type='agent.engineering_recovery')::text jobs,
+             (SELECT count(*) FROM jobs WHERE status='RECONCILING')::text sources`,
+        );
+
+        await expect(migrateDown(rollbackDb)).rejects.toThrow(
+          /cannot revert migration 037 while engineering recovery rows exist/,
+        );
+        expect((await migrationStatus(rollbackDb)).find((row) => row.version === 37)?.applied).toBe(
+          true,
+        );
+        expect(
+          await rollbackDb.query<Record<string, string>>(
+            `SELECT
+               (SELECT count(*) FROM engineering_recoveries)::text recoveries,
+               (SELECT count(*) FROM engineering_recovery_events)::text events,
+               (SELECT count(*) FROM jobs WHERE job_type='agent.engineering_recovery')::text jobs,
+               (SELECT count(*) FROM jobs WHERE status='RECONCILING')::text sources`,
+          ),
+        ).toMatchObject({ rows: before.rows });
+      } finally {
+        await created.drop();
+      }
+    });
+
+    it("refuses to revert 037 while a concurrent recovery writer holds a table lock", async () => {
+      const created = await createEmptyDatabase();
+      const rollbackDb = created.db;
+      let releaseWriter!: () => void;
+      const writerMayFinish = new Promise<void>((resolve) => {
+        releaseWriter = resolve;
+      });
+      let writerLocked!: (pid: number) => void;
+      const writerHasLock = new Promise<number>((resolve) => {
+        writerLocked = resolve;
+      });
+      let cancelLockObservation = false;
+      let writer: Promise<void> | null = null;
+      try {
+        await migrateUp(rollbackDb);
+        writer = rollbackDb.withTransaction(async (tx) => {
+          await tx.query("LOCK TABLE engineering_recovery_events IN ROW EXCLUSIVE MODE");
+          const backend = await tx.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+          writerLocked(backend.rows[0]!.pid);
+          await writerMayFinish;
+        });
+        const writerPid = await writerHasLock;
+        const down = migrateDown(rollbackDb);
+        const downSettled = down.then(
+          () => true,
+          () => true,
+        );
+        const firstBoundary = await Promise.race([
+          downSettled.then(() => "down-settled" as const),
+          waitForBlockedByWriter(rollbackDb, writerPid, () => cancelLockObservation).then(
+            (blocked) => (blocked ? ("drop-blocked" as const) : ("observation-cancelled" as const)),
+          ),
+        ]);
+        cancelLockObservation = true;
+        releaseWriter();
+        await writer;
+        const outcome = await down.then(
+          (result) => ({ status: "resolved" as const, result }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        expect(firstBoundary).toBe("down-settled");
+        expect(outcome.status).toBe("rejected");
+        if (outcome.status !== "rejected") throw new Error("migration unexpectedly reverted");
+        expect((outcome.error as Error).message).toMatch(/could not obtain lock/i);
+        expect((await migrationStatus(rollbackDb)).find((row) => row.version === 37)?.applied).toBe(
+          true,
+        );
+      } finally {
+        cancelLockObservation = true;
+        releaseWriter?.();
         await writer?.catch(() => undefined);
         await created.drop();
       }

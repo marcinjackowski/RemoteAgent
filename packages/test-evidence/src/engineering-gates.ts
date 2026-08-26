@@ -671,6 +671,13 @@ export type VerificationGateExecutionInput = Readonly<{
   store: ArtifactStore;
   signal?: AbortSignal;
   control_plane?: EngineeringControlPlaneRepository;
+  /** Dedicated cross-fence observation repair; it cannot create or dispatch a gate operation. */
+  recovery_observe_completion?: (input: {
+    operationId: string;
+    completionId: string;
+  }) => Promise<void>;
+  /** Receipt-only mode: absence of a durable operation is AMBIGUOUS, never permission to execute. */
+  recovery_only?: boolean;
   platform_adapter?: VerificationGatePlatformAdapter;
   now?: () => number;
 }>;
@@ -923,10 +930,17 @@ async function recoverDurableGateReceipt(
     throw new VerificationGateContractError("gate observation completion is not SUCCEEDED");
   }
   if (!recovered.completion_observed) {
-    await control.observeOperationCompletion(input.db, {
-      operationId,
-      completionId: recovered.completion.completion_id,
-    });
+    if (input.recovery_observe_completion !== undefined) {
+      await input.recovery_observe_completion({
+        operationId,
+        completionId: recovered.completion.completion_id,
+      });
+    } else {
+      await control.observeOperationCompletion(input.db, input.lease, {
+        operationId,
+        completionId: recovered.completion.completion_id,
+      });
+    }
     recovered = await control.readOperationCompletion(input.db, { operationId });
   }
   if (
@@ -1001,7 +1015,9 @@ export async function executeVerificationGate(
 
   const prior = await recoverDurableGateReceipt(input, control, operationId, expected);
   if (prior !== null) return prior;
-
+  if (input.recovery_only === true) {
+    return { status: "AMBIGUOUS", operation_id: operationId, receipt: null };
+  }
   const operation = await control.bindOperationIntent(input.db, input.lease, {
     operationId,
     runId: input.run_id,
@@ -1115,7 +1131,10 @@ export async function executeVerificationGate(
       receipt,
       lease: input.lease,
     });
-    await control.observeOperationCompletion(input.db, { operationId, completionId });
+    await control.observeOperationCompletion(input.db, input.lease, {
+      operationId,
+      completionId,
+    });
   } catch {
     const recovered = await recoverDurableGateReceipt(input, control, operationId, expected);
     if (recovered !== null) return recovered;
@@ -1170,6 +1189,8 @@ export type VerificationGateBatchExecutionInput = Readonly<{
   signal?: AbortSignal;
   control_plane?: EngineeringControlPlaneRepository;
   platform_adapter?: VerificationGatePlatformAdapter;
+  recovery_observe_completion?: VerificationGateExecutionInput["recovery_observe_completion"];
+  recovery_only?: boolean;
   now?: () => number;
 }>;
 
@@ -1302,6 +1323,10 @@ export async function executeVerificationGateBatch(
         ...(input.platform_adapter === undefined
           ? {}
           : { platform_adapter: input.platform_adapter }),
+        ...(input.recovery_observe_completion === undefined
+          ? {}
+          : { recovery_observe_completion: input.recovery_observe_completion }),
+        ...(input.recovery_only === undefined ? {} : { recovery_only: input.recovery_only }),
         ...(input.now === undefined ? {} : { now: input.now }),
       });
       if (execution.status === "AMBIGUOUS") {

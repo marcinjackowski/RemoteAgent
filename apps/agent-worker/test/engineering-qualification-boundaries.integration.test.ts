@@ -472,16 +472,20 @@ describeIntegration(
           .filter(({ artifact_kind }) => artifact_kind === "MemoryUpdate")
           .map(({ stage_attempt }) => stage_attempt),
       ).toEqual([2]);
-      const commit = await fixture.db.query<{ descriptor: { accepted: unknown[] } }>(
+      const commit = await fixture.db.query<{
+        descriptor: { commit: { accepted: unknown[] } };
+      }>(
         `SELECT i.descriptor FROM engineering_operations o
            JOIN job_intents i ON i.intent_id=o.intent_id
           WHERE o.run_id=$1 AND o.stage='LOCAL_COMMIT'`,
         [fixture.ids.runId],
       );
-      expect(commit.rows[0]?.descriptor.accepted).toEqual([
+      expect(commit.rows[0]?.descriptor.commit.accepted).toEqual([
         expect.objectContaining({ slice_id: "slice-1", attempt: 2 }),
       ]);
-      expect(JSON.stringify(commit.rows[0]?.descriptor.accepted)).not.toContain('"attempt":1');
+      expect(JSON.stringify(commit.rows[0]?.descriptor.commit.accepted)).not.toContain(
+        '"attempt":1',
+      );
     });
 
     it("re-enters the full handler on the same current lease after retry-safe MODEL_CALL STARTED", async () => {

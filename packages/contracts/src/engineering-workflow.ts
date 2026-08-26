@@ -329,6 +329,124 @@ export const engineeringStage = z.enum([
   EngineeringStage.LOCAL_COMMIT,
 ]);
 
+export const engineeringRecoveryClassification = z.enum([
+  "RETRY_MODEL",
+  "RETRY_READ_ONLY",
+  "REPAIR_ARTIFACT_COMPLETION",
+  "REPAIR_COMPLETION",
+  "REPAIR_OBSERVATION",
+  "RECOVER_GATE_RECEIPTS",
+  "OBSERVE_LOCAL_COMMIT",
+  "CONTINUE_NEXT_STAGE",
+  "AMBIGUOUS",
+  "BLOCKED",
+  "CANCELLED",
+]);
+
+/**
+ * Server-owned decision envelope for one exact cross-fence recovery lease.
+ * Context digests are mandatory whenever an operation exists, so a retry cannot
+ * silently compile or render a different packet after a process restart.
+ */
+export const engineeringRecoveryPlanV1 = z
+  .strictObject({
+    schema_version: z.literal(1),
+    recovery_id: idString,
+    root_recovery_id: idString,
+    source_job_id: idString,
+    source_fencing_token: z.int().positive(),
+    recovery_job_id: idString,
+    recovery_fencing_token: z.int().positive(),
+    case_id: idString,
+    owner_id: idString,
+    work_unit_id: idString,
+    run_id: idString,
+    checkpoint_revision: z.int().nonnegative(),
+    repository_id: idString,
+    workflow_deadline_at: isoTimestamp,
+    classification: engineeringRecoveryClassification,
+    operation: z
+      .strictObject({
+        operation_id: idString,
+        intent_id: idString,
+        stage: engineeringStage,
+        stage_attempt: z.int().positive(),
+        effect_class: z.enum(["READ_ONLY", "MODEL_CALL", "COMMAND", "MUTATING_SIDE_EFFECT"]),
+        input_digest: sha256Digest,
+        config_digest: sha256Digest,
+        schema_digest: sha256Digest,
+        scope_digest: sha256Digest,
+        deadline_at: isoTimestamp,
+        context_manifest_digest: sha256Digest,
+        context_snapshot_digest: sha256Digest,
+        context_packet_digest: sha256Digest,
+      })
+      .nullable(),
+    evidence_digest: sha256Digest,
+    budget_reservation: z.strictObject({
+      stage_attempts: z.int().nonnegative(),
+      model_calls: z.int().nonnegative(),
+      input_tokens: z.int().nonnegative(),
+      output_tokens: z.int().nonnegative(),
+    }),
+  })
+  .superRefine((value, context) => {
+    const operation = value.operation;
+    const requiresOperation = [
+      "RETRY_MODEL",
+      "RETRY_READ_ONLY",
+      "REPAIR_ARTIFACT_COMPLETION",
+      "REPAIR_COMPLETION",
+      "REPAIR_OBSERVATION",
+      "RECOVER_GATE_RECEIPTS",
+      "OBSERVE_LOCAL_COMMIT",
+    ].includes(value.classification);
+    if (requiresOperation && operation === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["operation"],
+        message: `${value.classification} requires an exact source operation`,
+      });
+      return;
+    }
+    if (value.classification === "RETRY_MODEL" && operation?.effect_class !== "MODEL_CALL") {
+      context.addIssue({
+        code: "custom",
+        path: ["operation", "effect_class"],
+        message: "RETRY_MODEL requires MODEL_CALL",
+      });
+    }
+    if (value.classification === "RETRY_READ_ONLY" && operation?.effect_class !== "READ_ONLY") {
+      context.addIssue({
+        code: "custom",
+        path: ["operation", "effect_class"],
+        message: "RETRY_READ_ONLY requires READ_ONLY",
+      });
+    }
+    if (value.classification === "RECOVER_GATE_RECEIPTS" && operation?.stage !== "GATE_EXECUTION") {
+      context.addIssue({
+        code: "custom",
+        path: ["operation", "stage"],
+        message: "RECOVER_GATE_RECEIPTS requires GATE_EXECUTION",
+      });
+    }
+    if (
+      value.classification === "OBSERVE_LOCAL_COMMIT" &&
+      (operation?.stage !== "LOCAL_COMMIT" || operation.effect_class !== "MUTATING_SIDE_EFFECT")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["operation"],
+        message: "OBSERVE_LOCAL_COMMIT requires a mutating LOCAL_COMMIT operation",
+      });
+    }
+  });
+export type EngineeringRecoveryPlanV1 = Readonly<z.infer<typeof engineeringRecoveryPlanV1>>;
+
+export function engineeringRecoveryPlanV1Digest(input: unknown): string {
+  return canonicalDigest(engineeringRecoveryPlanV1.parse(input));
+}
+
 const binding = { case_id: idString, run_id: idString, revision: z.int().nonnegative() };
 const artifactBase = { ...binding };
 const nonEmptyText = text.min(1).refine((value) => value.trim().length > 0, "must not be blank");

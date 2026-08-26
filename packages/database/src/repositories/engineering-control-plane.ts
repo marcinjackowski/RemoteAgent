@@ -604,6 +604,7 @@ export class EngineeringControlPlaneRepository {
   /** Observe an already-durable queue completion; receipt content is never accepted here. */
   public async observeOperationCompletion(
     db: TxDb,
+    lease: JobLease,
     rawInput: unknown,
   ): Promise<EngineeringControlStageEventRow> {
     const input = parseInput(
@@ -612,7 +613,7 @@ export class EngineeringControlPlaneRepository {
       "engineering completion observation",
     );
     return db.withTransaction(async (tx) => {
-      const operation = await this.#operationById(tx, input.operationId);
+      const operation = await this.#assertOperationLease(tx, lease, input.operationId);
       const completion = await tx.query<{ completion_id: string; outcome: string }>(
         `SELECT completion_id, outcome
          FROM job_completions

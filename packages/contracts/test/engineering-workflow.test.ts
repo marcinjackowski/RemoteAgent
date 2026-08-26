@@ -19,6 +19,8 @@ import {
   engineeringOutcomeContract,
   engineeringProgramDesign,
   engineeringReviewDecision,
+  engineeringRecoveryPlanV1,
+  engineeringRecoveryPlanV1Digest,
   engineeringSliceContract,
   engineeringSliceImplementationReceipt,
   engineeringSystemDesign,
@@ -72,6 +74,86 @@ const risk = (patch: Partial<EngineeringProcessRiskFacts> = {}): EngineeringProc
 });
 
 describe("engineering workflow contracts", () => {
+  it("strictly binds a cross-fence recovery plan including rendered context and budget", () => {
+    const plan = {
+      schema_version: 1 as const,
+      recovery_id: "recovery-1",
+      root_recovery_id: "recovery-1",
+      source_job_id: "job-source",
+      source_fencing_token: 4,
+      recovery_job_id: "job-recovery",
+      recovery_fencing_token: 2,
+      case_id: "case",
+      owner_id: "owner",
+      work_unit_id: "unit",
+      run_id: "run",
+      checkpoint_revision: 3,
+      repository_id: "repo",
+      workflow_deadline_at: "2026-08-26T12:00:00.000Z",
+      classification: "RETRY_MODEL" as const,
+      operation: {
+        operation_id: "operation",
+        intent_id: "intent",
+        stage: EngineeringStage.SLICE_PLANNING,
+        stage_attempt: 2,
+        effect_class: "MODEL_CALL" as const,
+        input_digest: digest,
+        config_digest: digest,
+        schema_digest: digest,
+        scope_digest: digest,
+        deadline_at: "2026-08-26T12:00:00.000Z",
+        context_manifest_digest: digest,
+        context_snapshot_digest: digest,
+        context_packet_digest: digest,
+      },
+      evidence_digest: digest,
+      budget_reservation: {
+        stage_attempts: 1,
+        model_calls: 1,
+        input_tokens: 10,
+        output_tokens: 10,
+      },
+    };
+    expect(engineeringRecoveryPlanV1.parse(plan)).toEqual(plan);
+    expect(engineeringRecoveryPlanV1Digest(plan)).toBe(canonicalDigest(plan));
+    expect(() =>
+      engineeringRecoveryPlanV1.parse({
+        ...plan,
+        operation: { ...plan.operation, context_packet_digest: undefined },
+      }),
+    ).toThrow();
+    expect(() => engineeringRecoveryPlanV1.parse({ ...plan, caller_scope: ["repo"] })).toThrow(
+      /unrecognized/i,
+    );
+    expect(() => engineeringRecoveryPlanV1.parse({ ...plan, operation: null })).toThrow(
+      /requires an exact source operation/iu,
+    );
+    expect(() =>
+      engineeringRecoveryPlanV1.parse({ ...plan, classification: "RETRY_READ_ONLY" }),
+    ).toThrow(/requires READ_ONLY/iu);
+    expect(() =>
+      engineeringRecoveryPlanV1.parse({ ...plan, classification: "RECOVER_GATE_RECEIPTS" }),
+    ).toThrow(/requires GATE_EXECUTION/iu);
+    expect(() =>
+      engineeringRecoveryPlanV1.parse({ ...plan, classification: "OBSERVE_LOCAL_COMMIT" }),
+    ).toThrow(/requires a mutating LOCAL_COMMIT/iu);
+    expect(engineeringRecoveryPlanV1Digest({ ...plan, classification: "BLOCKED" })).not.toBe(
+      engineeringRecoveryPlanV1Digest(plan),
+    );
+    expect(
+      engineeringRecoveryPlanV1Digest({
+        ...plan,
+        operation: { ...plan.operation, context_packet_digest: `sha256:${"b".repeat(64)}` },
+      }),
+    ).not.toBe(engineeringRecoveryPlanV1Digest(plan));
+    expect(
+      engineeringRecoveryPlanV1Digest({
+        ...plan,
+        budget_reservation: { ...plan.budget_reservation, model_calls: 2 },
+      }),
+    ).not.toBe(engineeringRecoveryPlanV1Digest(plan));
+  });
+
   it("projects the exact deployment write policy from execution config v2", () => {
     const executionConfig = {
       schema_version: 2,

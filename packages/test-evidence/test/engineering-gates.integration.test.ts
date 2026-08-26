@@ -411,6 +411,23 @@ describeIntegration("durable engineering gate executor", () => {
     expect((await db.query("SELECT 1 FROM job_completions")).rowCount).toBe(0);
   });
 
+  it("refuses to create or dispatch a missing command during receipt-only recovery", async () => {
+    const platformRun = vi.fn<VerificationGatePlatformAdapter["run"]>();
+
+    const result = await executeVerificationGate(
+      executorInput({
+        recovery_only: true,
+        platform_adapter: { run: platformRun },
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "AMBIGUOUS", receipt: null });
+    expect(platformRun).not.toHaveBeenCalled();
+    expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
+    expect((await db.query("SELECT 1 FROM job_intents")).rowCount).toBe(0);
+    expect((await db.query("SELECT 1 FROM job_completions")).rowCount).toBe(0);
+  });
+
   it("observes an exact existing completion then re-reads its strict receipt", async () => {
     const bound = await exactBinding(2);
     const log = await store.put({

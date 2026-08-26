@@ -28,6 +28,16 @@ import type { Clock } from "./runtime.js";
  */
 export type JobHandler = (lease: JobLease, heartbeat: () => Promise<void>) => Promise<void>;
 
+/** Code-owned lane for jobs that generic claim/reap deliberately cannot touch. */
+export interface SchedulerContinuationLane {
+  /** Materialize/classify at most one recovery before generic reap. */
+  readonly prepare: () => Promise<void>;
+  /** Dedicated claim of one already-classified continuation. */
+  readonly claim: () => Promise<JobLease | null>;
+  /** Fail closed without routing the continuation through generic PENDING retry. */
+  readonly suspend: (lease: JobLease, error: string) => Promise<void>;
+}
+
 export interface SchedulerDeps {
   db: Queryable & { withTransaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> };
   jobs: JobStore;
@@ -35,6 +45,7 @@ export interface SchedulerDeps {
   clock: Clock;
   sink: OutboxSink;
   handler: JobHandler;
+  continuation?: SchedulerContinuationLane;
   claim?: ClaimOptions;
   /**
    * Relay pass options. `aggregates` (ADR-0009) scopes this process's relay to the outbox
@@ -71,10 +82,12 @@ export class Scheduler {
   public async tick(): Promise<TickResult> {
     const { db, jobs, outbox, sink, handler } = this.deps;
 
+    await this.deps.continuation?.prepare();
     const reaped = await jobs.reapExpired(db, this.deps.reap);
     const relay = await outbox.relayOnce(db, sink, this.deps.relay);
 
-    const lease = await jobs.claim(db, this.deps.claim);
+    const continuationLease = (await this.deps.continuation?.claim()) ?? null;
+    const lease = continuationLease ?? (await jobs.claim(db, this.deps.claim));
     if (lease === null) {
       return { reaped, relay, claimedJobId: null, jobOutcome: null };
     }
@@ -96,7 +109,12 @@ export class Scheduler {
       handlerSucceeded = true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      jobOutcome = await jobs.fail(db, lease, message);
+      if (continuationLease !== null && this.deps.continuation !== undefined) {
+        await this.deps.continuation.suspend(lease, message);
+        jobOutcome = "RECONCILING";
+      } else {
+        jobOutcome = await jobs.fail(db, lease, message);
+      }
       return { reaped, relay, claimedJobId: lease.jobId, jobOutcome };
     }
     // Handler succeeded: finalize. A failure here must NOT retry the handler; the

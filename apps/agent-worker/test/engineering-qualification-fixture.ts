@@ -40,7 +40,7 @@ import type { EngineeringRuntimePort } from "@remoteagent/agent-orchestrator";
 
 import { makeCheckpoint } from "../../../packages/database/test/fixtures.js";
 import { createTestDatabase } from "../../../packages/database/test/harness.js";
-import { createEngineeringRoleContextReader } from "../src/context.js";
+import { createEngineeringRoleContextReader, type RoleContextReader } from "../src/context.js";
 import {
   createBedrockEngineeringStageExecutor,
   createBedrockPreCommitReviewSessionFactory,
@@ -260,6 +260,7 @@ export interface EngineeringQualificationFixture {
   }>;
   readonly config: EngineeringExecutionConfig;
   readonly modelConfig: ReturnType<typeof createRuntimeConfig>;
+  readonly readContext: RoleContextReader;
   readonly sourcePath: string;
   readonly baseSha: string;
   readonly claimImplementer: (payload?: Readonly<Record<string, unknown>>) => Promise<JobLease>;
@@ -451,6 +452,7 @@ export async function createEngineeringQualificationFixture(
     ids,
     config,
     modelConfig,
+    readContext,
     sourcePath,
     baseSha,
     claimImplementer: async (payload = {}) => {

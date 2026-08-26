@@ -653,8 +653,9 @@ describeIntegration(
         stage_attempt: 2,
         effect_class: "MUTATING_SIDE_EFFECT",
       });
-      // Migration 036 is now the newest layer. Revert it first, then prove that the
+      // Migrations 037 and 036 are now the newest layers. Revert them first, then prove that the
       // load-bearing migration-035 guard still refuses to erase LOCAL_COMMIT provenance.
+      await expect(migrateDown(db)).resolves.toEqual({ applied: [], reverted: [37] });
       await expect(migrateDown(db)).resolves.toEqual({ applied: [], reverted: [36] });
       await expect(migrateDown(db)).rejects.toThrow(/LOCAL_COMMIT rows exist/);
       expect(
@@ -841,7 +842,7 @@ describeIntegration(
         receipt: { receipt_secret: "RECEIPT_SECRET", patch: "PATCH_SECRET" },
         lease,
       });
-      await controlPlane.observeOperationCompletion(db, {
+      await controlPlane.observeOperationCompletion(db, lease, {
         operationId: "operation-1",
         completionId,
       });
@@ -974,19 +975,35 @@ describeIntegration(
          SELECT 'completion-1', intent_id, job_id, 'SUCCEEDED', '{"secret":"no-event"}'::jsonb
          FROM engineering_operations WHERE operation_id = 'operation-1'`,
       );
-      const observed = await controlPlane.observeOperationCompletion(db, {
+      await expect(
+        controlPlane.observeOperationCompletion(
+          db,
+          { ...lease, fencingToken: lease.fencingToken + 1 },
+          {
+            operationId: "operation-1",
+            completionId: "completion-1",
+          },
+        ),
+      ).rejects.toBeInstanceOf(StaleFencingTokenError);
+      expect(
+        await db.query(
+          `SELECT event_id FROM engineering_stage_events
+            WHERE operation_id='operation-1' AND event_type='COMPLETION_OBSERVED'`,
+        ),
+      ).toMatchObject({ rowCount: 0 });
+      const observed = await controlPlane.observeOperationCompletion(db, lease, {
         operationId: "operation-1",
         completionId: "completion-1",
       });
       expect(observed.payload).toEqual({ completion_id: "completion-1", outcome: "SUCCEEDED" });
       expect(JSON.stringify(observed.payload)).not.toContain("no-event");
-      const replay = await controlPlane.observeOperationCompletion(db, {
+      const replay = await controlPlane.observeOperationCompletion(db, lease, {
         operationId: "operation-1",
         completionId: "completion-1",
       });
       expect(replay.event_id).toBe(observed.event_id);
       await expect(
-        controlPlane.observeOperationCompletion(db, {
+        controlPlane.observeOperationCompletion(db, lease, {
           operationId: "operation-1",
           completionId: "completion-wrong",
         }),
@@ -1042,7 +1059,7 @@ describeIntegration(
       expect(before!.operation).not.toHaveProperty("completion_receipt");
       expect(before!.operation).not.toHaveProperty("completion_id");
 
-      await controlPlane.observeOperationCompletion(db, {
+      await controlPlane.observeOperationCompletion(db, lease, {
         operationId: "operation-1",
         completionId: "completion-exact",
       });

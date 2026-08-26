@@ -504,8 +504,10 @@ export function createEngineeringExecution(input: {
   modelConfig: RuntimeConfig;
   taskBrief: string;
   createReviewerSession: import("@remoteagent/review-loop").PreCommitReviewSessionFactory;
+  /** Recovery-only observation fence; never supplied by the normal writer path. */
+  recoveryWriter?: VerticalSliceWriterFence;
 }) {
-  const writer = writerFence(input.db, input.jobs, input.lease);
+  const writer = input.recoveryWriter ?? writerFence(input.db, input.jobs, input.lease);
   const baselines = new BaselineWorkspaceStore({ root: input.config.baselineRoot });
   const artifacts = new LocalArtifactStore({ root: input.config.artifactRoot });
   const implementationExecutor: EngineeringSliceImplementationStageExecutor = {
@@ -598,12 +600,19 @@ export function createEngineeringExecution(input: {
     orderedArtifacts,
     decisionIds,
     deadlineAt,
+    recoveryObserveCompletion,
+    recoveryOnly,
   }: {
     binding: import("@remoteagent/agent-orchestrator").EngineeringStageBinding;
     contextManifestDigest: string;
     orderedArtifacts: readonly EngineeringControlArtifactRevisionRow[];
     decisionIds: readonly string[];
     deadlineAt: string;
+    recoveryObserveCompletion?: (input: {
+      operationId: string;
+      completionId: string;
+    }) => Promise<void>;
+    recoveryOnly?: boolean;
   }) => {
     if (binding.stage !== EngineeringStage.GATE_EXECUTION)
       throw new Error("generic system executor is gate-only");
@@ -640,6 +649,8 @@ export function createEngineeringExecution(input: {
       contextDigest: contextManifestDigest,
       decisions: decisionIds,
       baselineStore: baselines,
+      ...(recoveryObserveCompletion === undefined ? {} : { recoveryObserveCompletion }),
+      ...(recoveryOnly === undefined ? {} : { recoveryOnly }),
     });
     return result;
   };
@@ -686,6 +697,8 @@ export function createEngineeringExecution(input: {
       orderedArtifacts,
       decisionIds,
       deadlineAt,
+      recoveryObserveCompletion,
+      recoveryOnly,
     }) => {
       const result = await executeGates({
         binding,
@@ -693,6 +706,8 @@ export function createEngineeringExecution(input: {
         orderedArtifacts,
         decisionIds,
         deadlineAt,
+        ...(recoveryObserveCompletion === undefined ? {} : { recoveryObserveCompletion }),
+        ...(recoveryOnly === undefined ? {} : { recoveryOnly }),
       });
       if (result.status === "BLOCKED" && result.reason === "AMBIGUOUS") {
         return Object.freeze({

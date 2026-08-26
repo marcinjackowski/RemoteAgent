@@ -67,3 +67,35 @@ it("worker relay never claims a discord_case row — it stays PENDING for the di
     attempts: 0,
   });
 });
+
+it("worker process drives the dedicated continuation lane before ordinary queue polling", async () => {
+  const calls: string[] = [];
+  const process = createWorkerProcess({
+    db,
+    config: { port: 0, intervalMs: 10, owner: "continuation-worker", drainMs: 1000 },
+    handlers: {},
+    sink: async () => undefined,
+    continuation: {
+      prepare: async () => {
+        calls.push("prepare");
+      },
+      claim: async () => {
+        calls.push("claim");
+        return null;
+      },
+      suspend: async () => {
+        throw new Error("suspend must not run without a claimed continuation");
+      },
+    },
+  });
+
+  process.start();
+  const deadline = Date.now() + 1_000;
+  while (calls.length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  process.stopAcceptingWork();
+  await process.drain();
+
+  expect(calls.slice(0, 2)).toEqual(["prepare", "claim"]);
+});

@@ -32,6 +32,7 @@ import {
   type JobHandler,
   type JobTypeHandlers,
   type OutboxSink,
+  type SchedulerContinuationLane,
 } from "@remoteagent/database";
 import {
   MetricRegistry,
@@ -57,6 +58,7 @@ import {
   createProductionEngineeringRuntimePort,
   engineeringExecutionConfigFromEnv,
 } from "./engineering-execution.js";
+import { createProductionEngineeringRecoveryCoordinator } from "./engineering-recovery.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -129,6 +131,7 @@ export function createWorkerProcess(input: {
   readonly handlers: Parameters<typeof createJobDispatch>[0];
   readonly sink: OutboxSink;
   readonly logger?: StructuredLogger;
+  readonly continuation?: SchedulerContinuationLane;
 }): ProcessDefinition {
   const runtime = productionRuntime();
   const jobs = new JobStore(runtime);
@@ -159,6 +162,7 @@ export function createWorkerProcess(input: {
     clock: runtime.clock,
     sink: input.sink,
     handler: trackedHandler,
+    ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
     claim: { owner: input.config.owner },
     intervalMs: input.config.intervalMs,
     // The worker is a job processor, not an outbox deliverer (ADR-0009). It relays NO
@@ -212,6 +216,7 @@ export function bootstrapWorker(input: {
   readonly handlers: Parameters<typeof createJobDispatch>[0];
   readonly sink: OutboxSink;
   readonly logger?: StructuredLogger;
+  readonly continuation?: SchedulerContinuationLane;
 }): ProcessRuntime {
   return new ProcessRuntime(createWorkerProcess(input), {
     port: input.config.port,
@@ -384,6 +389,20 @@ export async function main(): Promise<void> {
     },
     extra,
   );
+  const continuation =
+    engineeringExecutionConfig === null
+      ? undefined
+      : createProductionEngineeringRecoveryCoordinator({
+          db,
+          jobs,
+          owner: config.owner,
+          config: engineeringExecutionConfig,
+          transport,
+          modelConfig,
+          readContext,
+          stageExecutor: engineeringExecutor,
+          createReviewerSession: preCommitReview.createSession,
+        });
   const workerRuntime = bootstrapWorker({
     config,
     db,
@@ -393,6 +412,7 @@ export async function main(): Promise<void> {
       throw new Error(`worker received an outbox message it cannot deliver: ${message.aggregate}`);
     },
     logger,
+    ...(continuation === undefined ? {} : { continuation }),
   });
   await workerRuntime.start();
   logger.info("worker ready", {

@@ -225,6 +225,11 @@ export type ExecuteVerticalSliceGateInput = Readonly<{
   decisions?: readonly string[];
   baselineStore?: BaselineWorkspaceStore;
   platformAdapter?: VerificationGatePlatformAdapter;
+  recoveryObserveCompletion?: (input: {
+    operationId: string;
+    completionId: string;
+  }) => Promise<void>;
+  recoveryOnly?: boolean;
   signal?: AbortSignal;
 }>;
 
@@ -1095,6 +1100,10 @@ export async function executeVerticalSliceGates(
         deadline_at: input.deadlineAt,
         store: input.store,
         ...(input.platformAdapter === undefined ? {} : { platform_adapter: input.platformAdapter }),
+        ...(input.recoveryObserveCompletion === undefined
+          ? {}
+          : { recovery_observe_completion: input.recoveryObserveCompletion }),
+        ...(input.recoveryOnly === undefined ? {} : { recovery_only: input.recoveryOnly }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
     },

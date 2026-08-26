@@ -34,6 +34,7 @@ import type { JobHandler } from "./scheduler.js";
  * `case.resume` — `decision-resume.ts` and `case-recovery.ts`.
  * `jira.webhook.renewal` — `connector-jira/src/webhook/{registration,renewal}.ts`.
  * `agent.implementer` — `WRITER_JOB_TYPE` in `agent-orchestrator`.
+ * `agent.engineering_recovery` — RA-047 case-less recovery coordinator.
  */
 export const JobType = {
   /** An owner answered a decision; the case resumes from its checkpoint. */
@@ -44,6 +45,8 @@ export const JobType = {
   JIRA_RECONCILE: "jira.reconcile",
   /** An agent implementation unit; holds the single-writer lease for its case. */
   AGENT_IMPLEMENTER: "agent.implementer",
+  /** Case-less, read/repair-only classifier for one parked engineering fence. */
+  AGENT_ENGINEERING_RECOVERY: "agent.engineering_recovery",
 } as const;
 
 export type JobType = (typeof JobType)[keyof typeof JobType];

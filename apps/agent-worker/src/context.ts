@@ -5,7 +5,7 @@ import {
   type CompiledEngineeringContext,
   type EngineeringContextSource,
 } from "@remoteagent/agent-orchestrator";
-import { EngineeringStage, canonicalJsonStringify } from "@remoteagent/contracts";
+import { EngineeringStage, canonicalDigest, canonicalJsonStringify } from "@remoteagent/contracts";
 import {
   EngineeringContextRepository,
   type EngineeringContextSnapshot,
@@ -39,6 +39,11 @@ export interface CompiledRoleContext {
 }
 
 export type RoleContextReader = (request: RoleContextRequest) => Promise<CompiledRoleContext>;
+
+/** Exact digest of the rendered packet bytes supplied to a stage model boundary. */
+export function engineeringContextPacketDigest(context: CompiledRoleContext): string {
+  return canonicalDigest({ packet: context.packet, packet_bytes: context.packetBytes });
+}
 
 export interface EngineeringRoleContextOptions {
   readonly db: EngineeringContextSnapshotDatabase;

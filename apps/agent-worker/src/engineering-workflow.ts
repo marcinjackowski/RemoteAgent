@@ -17,6 +17,7 @@ import {
   engineeringWriteAuthorizationScopeV2Digest,
   engineeringWriteDeploymentPolicyV1Digest,
   engineeringProcessClass,
+  engineeringStage,
   normalizeEngineeringWriteAuthorizationScopeV2,
   normalizeEngineeringWriteDeploymentPolicyV1,
   canonicalDigest,
@@ -50,6 +51,7 @@ import {
 } from "@remoteagent/bedrock-runtime";
 import {
   EngineeringControlPlaneRepository,
+  EngineeringRecoveryRepository,
   EngineeringGrantedProposalRepository,
   ApprovalRepository,
   JobStore,
@@ -57,6 +59,7 @@ import {
   type Database,
   type EngineeringControlArtifactRevisionRow,
   type EngineeringControlOperationRow,
+  type EngineeringRecoveryRow,
   type JobLease,
 } from "@remoteagent/database";
 import {
@@ -72,22 +75,36 @@ import {
 } from "@remoteagent/review-loop";
 import * as z from "zod";
 
-import type { CompiledRoleContext, RoleContextReader } from "./context.js";
+import {
+  engineeringContextPacketDigest,
+  type CompiledRoleContext,
+  type RoleContextReader,
+} from "./context.js";
 
 const PROMPT_VERSION = "ra041-engineering-stage-v1";
 const SYSTEM_SCHEMA_DIGEST = canonicalDigest({ contract: "SYSTEM_STAGE", version: 1 });
-const gateExecutionIntentDescriptor = z
+export const engineeringStageContextIntentDescriptor = z
   .object({
     case_id: idString,
     work_unit_id: idString,
     run_id: idString,
     checkpoint_revision: z.number().int().nonnegative(),
-    stage: z.literal(EngineeringStage.GATE_EXECUTION),
+    stage: engineeringStage,
     attempt: z.number().int().positive(),
     process_class: engineeringProcessClass,
     context_snapshot_digest: sha256Digest,
     context_manifest: engineeringContextManifest,
     context_manifest_digest: sha256Digest,
+    context_packet_digest: sha256Digest,
+  })
+  .strict();
+export type EngineeringStageContextIntentDescriptor = z.infer<
+  typeof engineeringStageContextIntentDescriptor
+>;
+
+export const gateExecutionIntentDescriptor = engineeringStageContextIntentDescriptor
+  .extend({
+    stage: z.literal(EngineeringStage.GATE_EXECUTION),
     decision_authority: z.literal("DURABLE_VERIFIED_ANSWERS"),
     decision_ids: z.array(idString).max(512),
     deadline_at: z.string().datetime({ offset: true }),
@@ -108,6 +125,14 @@ const gateExecutionIntentDescriptor = z
     }
   });
 type GateExecutionIntentDescriptor = z.infer<typeof gateExecutionIntentDescriptor>;
+
+export const localCommitIntentDescriptor = engineeringStageContextIntentDescriptor
+  .extend({
+    stage: z.literal(EngineeringStage.LOCAL_COMMIT),
+    commit: gitEvidenceBoundCommitDescriptor,
+  })
+  .strict();
+export type LocalCommitIntentDescriptor = z.infer<typeof localCommitIntentDescriptor>;
 
 function assertGateEvidenceAuthority(input: {
   artifact: EngineeringArtifact;
@@ -444,6 +469,7 @@ export interface EngineeringRuntimePortOptions {
   /** Overall duration from the durable run creation time, not from a retry or lease renewal. */
   readonly workflowDeadlineMs?: number;
   readonly controlPlane?: EngineeringControlPlaneRepository;
+  readonly recoveries?: EngineeringRecoveryRepository;
   readonly metrics?: MetricRegistry;
   /** Zero-model system route. It is accepted for GATE_EXECUTION only. */
   readonly gateExecutor?: EngineeringGateStageExecutor;
@@ -474,6 +500,11 @@ export interface EngineeringGateStageExecutor {
     readonly orderedArtifacts: readonly EngineeringControlArtifactRevisionRow[];
     readonly decisionIds: readonly string[];
     readonly deadlineAt: string;
+    readonly recoveryObserveCompletion?: (input: {
+      operationId: string;
+      completionId: string;
+    }) => Promise<void>;
+    readonly recoveryOnly?: boolean;
   }) => Promise<
     | Readonly<{ status: "RECOVERED"; artifact: EngineeringArtifact }>
     | Readonly<{ status: "AMBIGUOUS"; detail: string }>
@@ -840,6 +871,7 @@ function evidenceFromOrderedArtifacts(
 class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
   readonly #options: EngineeringRuntimePortOptions;
   readonly #control: EngineeringControlPlaneRepository;
+  readonly #recoveries: EngineeringRecoveryRepository;
   readonly #approvals = new ApprovalRepository();
   readonly #grantedProposals = new EngineeringGrantedProposalRepository();
   readonly #writePolicy: EngineeringWriteDeploymentPolicyV1;
@@ -857,6 +889,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     authorizationId: string;
     checkpointRevision: number;
   }> | null = null;
+  #continuation: EngineeringRecoveryRow | null = null;
 
   public constructor(options: EngineeringRuntimePortOptions) {
     if (
@@ -869,6 +902,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     this.#writePolicy = normalizeEngineeringWriteDeploymentPolicyV1(options.writeDeploymentPolicy);
     this.#control =
       options.controlPlane ?? new EngineeringControlPlaneRepository(productionRuntime());
+    this.#recoveries = options.recoveries ?? new EngineeringRecoveryRepository(productionRuntime());
   }
 
   public async open(input: Parameters<EngineeringRuntimePort["open"]>[0]) {
@@ -880,6 +914,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     this.#ownerId = null;
     this.#verifiedDecisionIds = Object.freeze([]);
     this.#verifiedAuthorization = null;
+    this.#continuation = null;
     this.#contexts.clear();
     this.#operations.clear();
     this.#commitDescriptors.clear();
@@ -891,6 +926,10 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     ) {
       throw new Error("engineering port lease/run binding mismatch");
     }
+    this.#continuation = await this.#recoveries.findContinuationForLease(
+      this.#options.db,
+      this.#options.lease,
+    );
     if (
       input.unit.workUnit.authoritative_scope.can_write_workspace !== true ||
       input.unit.workUnit.authoritative_scope.repo_allowlist.length !== 1 ||
@@ -1083,7 +1122,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     this.#assertBinding(binding);
     await this.#assertDurableWritePolicy(binding);
     const recovered = await this.#control.readOperationRecovery(this.#options.db, {
-      operationId: operationId(binding),
+      operationId: this.#operationId(binding),
     });
     if (recovered === null) return { status: "NOT_STARTED" as const };
     if (
@@ -1121,7 +1160,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       }
       if (binding.stage === EngineeringStage.GATE_EXECUTION) {
         const completion = await this.#control.readOperationCompletion(this.#options.db, {
-          operationId: operationId(binding),
+          operationId: this.#operationId(binding),
         });
         if (completion === null) throw new Error("GATE_EXECUTION intent descriptor is missing");
         const descriptor = gateExecutionIntentDescriptor.parse(completion.descriptor);
@@ -1155,7 +1194,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       }
       if (binding.stage === EngineeringStage.LOCAL_COMMIT) {
         const completion = await this.#control.readOperationCompletion(this.#options.db, {
-          operationId: operationId(binding),
+          operationId: this.#operationId(binding),
         });
         if (
           completion === null ||
@@ -1169,9 +1208,9 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         });
         const provenance = localCommitProvenance(rows);
         const descriptor = assertPreparedCommitDescriptor({
-          descriptor: gitEvidenceBoundCommitDescriptor.parse(completion.descriptor),
+          descriptor: localCommitIntentDescriptor.parse(completion.descriptor).commit,
           binding,
-          operationId: operationId(binding),
+          operationId: this.#operationId(binding),
           provenance,
         });
         assertLocalCommitReceiptBinding({
@@ -1184,7 +1223,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         }
       } else {
         const completion = await this.#control.readOperationCompletion(this.#options.db, {
-          operationId: operationId(binding),
+          operationId: this.#operationId(binding),
         });
         if (
           completion === null ||
@@ -1218,7 +1257,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         const executor = this.#options.gateExecutor;
         if (executor !== undefined) {
           const completion = await this.#control.readOperationCompletion(this.#options.db, {
-            operationId: operationId(binding),
+            operationId: this.#operationId(binding),
           });
           if (completion === null || completion.completion !== null) {
             return {
@@ -1284,7 +1323,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         const executor = this.#options.localCommitExecutor;
         if (executor !== undefined) {
           const completion = await this.#control.readOperationCompletion(this.#options.db, {
-            operationId: operationId(binding),
+            operationId: this.#operationId(binding),
           });
           if (completion === null || completion.completion !== null) {
             return {
@@ -1297,9 +1336,9 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
           });
           const provenance = localCommitProvenance(rows);
           const descriptor = assertPreparedCommitDescriptor({
-            descriptor: gitEvidenceBoundCommitDescriptor.parse(completion.descriptor),
+            descriptor: localCommitIntentDescriptor.parse(completion.descriptor).commit,
             binding,
-            operationId: operationId(binding),
+            operationId: this.#operationId(binding),
             provenance,
           });
           const receipt = await executor.recover({ binding, descriptor });
@@ -1369,6 +1408,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       context_snapshot_digest: context.snapshotDigest,
       context_manifest: contextManifest,
       context_manifest_digest: contextManifestDigest,
+      context_packet_digest: engineeringContextPacketDigest(context),
     };
     if (binding.stage === EngineeringStage.GATE_EXECUTION) {
       const exact = gateExecutionIntentDescriptor.parse({
@@ -1391,23 +1431,36 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       const prepared = await executor.prepare({
         binding,
         context,
-        operationId: operationId(binding),
+        operationId: this.#operationId(binding),
         provenance,
       });
       const exact = assertPreparedCommitDescriptor({
         descriptor: prepared,
         binding,
-        operationId: operationId(binding),
+        operationId: this.#operationId(binding),
         provenance,
       });
       this.#commitDescriptors.set(stageAttemptKey(binding), exact);
-      descriptor = exact;
+      descriptor = localCommitIntentDescriptor.parse({
+        case_id: binding.caseId,
+        work_unit_id: binding.workUnitId,
+        run_id: binding.runId,
+        checkpoint_revision: binding.checkpointRevision,
+        stage: binding.stage,
+        attempt: binding.attempt,
+        process_class: this.#session!.plan.processClass,
+        context_snapshot_digest: context.snapshotDigest,
+        context_manifest: contextManifest,
+        context_manifest_digest: contextManifestDigest,
+        context_packet_digest: engineeringContextPacketDigest(context),
+        commit: exact,
+      });
     }
     const operation = await this.#control.bindOperationIntent(
       this.#options.db,
       this.#options.lease,
       {
-        operationId: operationId(binding),
+        operationId: this.#operationId(binding),
         runId: binding.runId,
         stage: binding.stage,
         stageAttempt: binding.attempt,
@@ -1464,7 +1517,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       if (recovered?.started === true && recovered.artifact === null) return;
     }
     await this.#control.commitOperationStarted(this.#options.db, this.#options.lease, {
-      operationId: operationId(binding),
+      operationId: this.#operationId(binding),
     });
     this.#options.metrics?.increment(MetricName.ENGINEERING_STAGE_TRANSITIONS, 1, {
       kind: binding.stage,
@@ -1692,7 +1745,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         },
         lease: this.#options.lease,
       });
-      await this.#control.observeOperationCompletion(this.#options.db, {
+      await this.#control.observeOperationCompletion(this.#options.db, this.#options.lease, {
         operationId: operation.operation_id,
         completionId,
       });
@@ -1721,7 +1774,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
         throw error;
       }
       if (!recovered!.completion_observed) {
-        await this.#control.observeOperationCompletion(this.#options.db, {
+        await this.#control.observeOperationCompletion(this.#options.db, this.#options.lease, {
           operationId: operation.operation_id,
           completionId: recovered!.completion!.completion_id,
         });
@@ -1839,6 +1892,33 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       if (row.payload.artifact_kind === "SliceImplementationReceipt")
         assertEngineeringPathsWithinWriteAllowlist(row.payload.cumulative_paths, cap);
     }
+  }
+
+  #operationId(binding: EngineeringStageBinding): string {
+    const continuation = this.#continuation;
+    const plan = continuation?.plan;
+    const source = plan?.operation;
+    if (
+      continuation !== null &&
+      plan !== null &&
+      plan !== undefined &&
+      source !== null &&
+      source !== undefined &&
+      (plan.classification === "RETRY_MODEL" || plan.classification === "RETRY_READ_ONLY") &&
+      source.stage === binding.stage &&
+      source.stage_attempt === binding.attempt &&
+      plan.checkpoint_revision === binding.checkpointRevision &&
+      plan.run_id === binding.runId &&
+      plan.work_unit_id === binding.workUnitId &&
+      plan.case_id === binding.caseId
+    ) {
+      return `eng-op-${canonicalDigest({
+        operation_id: operationId(binding),
+        recovery_id: continuation.recovery_id,
+        plan_digest: continuation.plan_digest,
+      }).slice(7, 47)}`;
+    }
+    return operationId(binding);
   }
 
   #assertBinding(binding: EngineeringStageBinding): void {

@@ -2097,9 +2097,11 @@ describeIntegration(
       );
       expect(durableDescriptor.rows[0]).toMatchObject({
         descriptor: {
-          operation_id: expect.any(String),
-          accepted: [expect.objectContaining({ slice_id: "slice-1", attempt: 2 })],
-          final_verification_digest: expect.stringMatching(/^sha256:/),
+          commit: {
+            operation_id: expect.any(String),
+            accepted: [expect.objectContaining({ slice_id: "slice-1", attempt: 2 })],
+            final_verification_digest: expect.stringMatching(/^sha256:/),
+          },
         },
         started: false,
       });

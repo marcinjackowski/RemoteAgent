@@ -3103,6 +3103,252 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
     ],
     "type": "object",
   },
+  "EngineeringRecoveryPlan": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "budget_reservation": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "model_calls": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "output_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "stage_attempts": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+        },
+        "required": [
+          "stage_attempts",
+          "model_calls",
+          "input_tokens",
+          "output_tokens",
+        ],
+        "type": "object",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "checkpoint_revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "classification": {
+        "enum": [
+          "RETRY_MODEL",
+          "RETRY_READ_ONLY",
+          "REPAIR_ARTIFACT_COMPLETION",
+          "REPAIR_COMPLETION",
+          "REPAIR_OBSERVATION",
+          "RECOVER_GATE_RECEIPTS",
+          "OBSERVE_LOCAL_COMMIT",
+          "CONTINUE_NEXT_STAGE",
+          "AMBIGUOUS",
+          "BLOCKED",
+          "CANCELLED",
+        ],
+        "type": "string",
+      },
+      "evidence_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "operation": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "config_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "context_manifest_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "context_packet_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "context_snapshot_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "deadline_at": {
+                "type": "string",
+              },
+              "effect_class": {
+                "enum": [
+                  "READ_ONLY",
+                  "MODEL_CALL",
+                  "COMMAND",
+                  "MUTATING_SIDE_EFFECT",
+                ],
+                "type": "string",
+              },
+              "input_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "intent_id": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string",
+              },
+              "operation_id": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string",
+              },
+              "schema_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "scope_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string",
+              },
+              "stage": {
+                "enum": [
+                  "DISCOVERY",
+                  "OUTCOME_DEFINITION",
+                  "SYSTEM_DESIGN",
+                  "PROGRAM_DESIGN",
+                  "DESIGN_APPROVAL",
+                  "SLICE_PLANNING",
+                  "SLICE_IMPLEMENTATION",
+                  "GATE_EXECUTION",
+                  "SLICE_REVIEW",
+                  "MEMORY_PROJECTION",
+                  "FINAL_VERIFICATION",
+                  "LOCAL_COMMIT",
+                ],
+                "type": "string",
+              },
+              "stage_attempt": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer",
+              },
+            },
+            "required": [
+              "operation_id",
+              "intent_id",
+              "stage",
+              "stage_attempt",
+              "effect_class",
+              "input_digest",
+              "config_digest",
+              "schema_digest",
+              "scope_digest",
+              "deadline_at",
+              "context_manifest_digest",
+              "context_snapshot_digest",
+              "context_packet_digest",
+            ],
+            "type": "object",
+          },
+          {
+            "type": "null",
+          },
+        ],
+      },
+      "owner_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "recovery_fencing_token": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer",
+      },
+      "recovery_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "recovery_job_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "repository_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "root_recovery_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "source_fencing_token": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer",
+      },
+      "source_job_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "work_unit_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "workflow_deadline_at": {
+        "type": "string",
+      },
+    },
+    "required": [
+      "schema_version",
+      "recovery_id",
+      "root_recovery_id",
+      "source_job_id",
+      "source_fencing_token",
+      "recovery_job_id",
+      "recovery_fencing_token",
+      "case_id",
+      "owner_id",
+      "work_unit_id",
+      "run_id",
+      "checkpoint_revision",
+      "repository_id",
+      "workflow_deadline_at",
+      "classification",
+      "operation",
+      "evidence_digest",
+      "budget_reservation",
+    ],
+    "type": "object",
+  },
   "EngineeringReviewDecision": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
