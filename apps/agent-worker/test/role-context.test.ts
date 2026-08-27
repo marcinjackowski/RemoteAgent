@@ -8,6 +8,12 @@ import { createRole, roleConfigFromEnv } from "../src/roles.js";
 
 const config = roleConfigFromEnv({ RA_MODEL_ID: "test-model" } as NodeJS.ProcessEnv);
 
+it("defaults to the operator-selected Opus 4.8 inference profile", () => {
+  expect(roleConfigFromEnv({} as NodeJS.ProcessEnv).model.model_id).toBe(
+    "us.anthropic.claude-opus-4-8",
+  );
+});
+
 const invocation = {
   unit: {
     workUnit: {

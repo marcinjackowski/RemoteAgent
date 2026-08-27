@@ -27,6 +27,7 @@ afterEach(async () => {
 });
 
 it("resolveModelId falls back env-then-default when the DB has no config", async () => {
+  expect(DEFAULT_MODEL_ID).toBe("us.anthropic.claude-opus-4-8");
   expect(await resolveModelId(db, {})).toBe(DEFAULT_MODEL_ID);
   expect(await resolveModelId(db, { RA_MODEL_ID: "from-ra-env" })).toBe("from-ra-env");
   // BEDROCK_MODEL_ID takes precedence over RA_MODEL_ID.

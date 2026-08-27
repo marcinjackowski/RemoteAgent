@@ -29,7 +29,7 @@ const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
 
 function planningArtifact(fixture: EngineeringQualificationFixture) {
   return engineeringArtifact.parse({
-    schema_version: 1,
+    schema_version: 2,
     artifact_kind: "SliceContract",
     case_id: fixture.ids.caseId,
     run_id: fixture.ids.runId,
@@ -38,6 +38,7 @@ function planningArtifact(fixture: EngineeringQualificationFixture) {
     objective: "bounded slice",
     observable_result: "a cancellation-safe boundary",
     allowed_paths: ["apps/agent-worker/src"],
+    test_paths: ["apps/agent-worker/src"],
     gate_ids: ["gate-1"],
     inspection_method: "inspect immutable control events",
     stop_condition: "the next stage is not started",
@@ -95,6 +96,11 @@ describeIntegration(
       const executor: EngineeringStageExecutor = {
         configDigest: sha("5"),
         schemaDigest: () => sha("6"),
+        slicePlanningConstraints: Object.freeze({
+          allowedPaths: Object.freeze(["apps/agent-worker/src"]),
+          allowedTestPaths: Object.freeze(["apps/agent-worker/src"]),
+          requiredGateIds: Object.freeze(["gate-1"]),
+        }),
         execute: async () => ({
           kind: "ARTIFACT",
           artifact: planningArtifact(fixture),

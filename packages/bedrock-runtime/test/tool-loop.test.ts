@@ -11,6 +11,8 @@ import {
 } from "../src/index.js";
 
 const tool = { name: "lookup", inputSchema: { type: "object" } };
+const readTool = { name: "read", inputSchema: { type: "object" } };
+const writeTool = { name: "write", inputSchema: { type: "object" } };
 const config = (maxIterations: number, maxCalls: number) =>
   createRuntimeConfig({
     model: { provider: "test", model_id: "model" },
@@ -19,6 +21,18 @@ const config = (maxIterations: number, maxCalls: number) =>
   });
 const user = { role: "user" as const, content: [{ type: "text" as const, text: "go" }] };
 const use = (id: string, name = "lookup") => ({ type: "tool-use" as const, id, name, input: {} });
+const policyConfig = () =>
+  createRuntimeConfig({
+    model: { provider: "test", model_id: "model" },
+    timeoutMs: 1000,
+    toolLimits: { maxIterations: 6, maxCalls: 12 },
+    toolLoopPolicy: {
+      readonlyToolNames: ["read"],
+      mutationToolNames: ["write"],
+      mutationIterationsReserved: 3,
+      retainRecentToolPairs: 1,
+    },
+  });
 
 describe("runToolLoop", () => {
   it("retries the next model turn without repeating the executor", async () => {
@@ -108,6 +122,7 @@ describe("runToolLoop", () => {
       },
     });
     expect(calls).toHaveLength(1);
+    expect(config(2, 3).toolLoopPolicy).toBeUndefined();
     expect(result).toMatchObject({ requestId: "r", iterations: 1, calls: 1 });
     expect(transport.requests[1]?.messages).toHaveLength(3);
     expect(transport.requests[1]?.messages[1]?.role).toBe("assistant");
@@ -314,5 +329,398 @@ describe("runToolLoop", () => {
     expect(serialized).toContain("TOOL_EXECUTION_FAILED");
     expect(serialized).not.toContain("/Users/private/path");
     expect(serialized).not.toContain("secret-token");
+  });
+
+  it("refuses discovery at the reserve boundary without executing it and keeps mutation available", async () => {
+    const bounded = policyConfig();
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("r1", "read")] },
+      { model: bounded.model, content: [use("r2", "read")] },
+      { model: bounded.model, content: [use("r3", "read")] },
+      { model: bounded.model, content: [use("r4", "read")] },
+      { model: bounded.model, content: [use("w1", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    const executed: string[] = [];
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [readTool, writeTool],
+      execute: async (name) => {
+        executed.push(name);
+        return { raw: `${name}-result` };
+      },
+    });
+
+    expect(executed).toEqual(["read", "read", "read", "write"]);
+    expect(result).toMatchObject({ iterations: 4, calls: 4 });
+    const refusal = transport.requests[4]?.messages
+      .flatMap((message) => message.content)
+      .find((content) => content.type === "tool-result" && content.id === "r4");
+    expect(refusal).toMatchObject({
+      output: {
+        ok: false,
+        error: { code: "TOOL_MUTATION_RESERVE" },
+        progress: {
+          tool_iterations_remaining: 3,
+          mutation_iterations_reserved: 3,
+        },
+      },
+    });
+    const mutation = result.history
+      .flatMap((message) => message.content)
+      .find((content) => content.type === "tool-result" && content.id === "w1");
+    expect(mutation).toMatchObject({
+      output: {
+        progress: { tool_iterations_remaining: 2, tool_calls_remaining: 8 },
+      },
+    });
+  });
+
+  it("preserves initial contracts and compacts old raw pairs to deterministic digests", async () => {
+    const bounded = policyConfig();
+    const useWithRawInput = (id: string, raw: string) => ({
+      type: "tool-use" as const,
+      id,
+      name: "read",
+      input: { raw },
+    });
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [useWithRawInput("r1", "OLD_INPUT_ONE")] },
+      { model: bounded.model, content: [useWithRawInput("r2", "OLD_INPUT_TWO")] },
+      { model: bounded.model, content: [useWithRawInput("r3", "RECENT_INPUT")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    await runToolLoop(transport, bounded, {
+      messages: [
+        user,
+        {
+          role: "user",
+          content: [{ type: "text", text: "INITIAL_CONTRACT_CANARY" }],
+        },
+      ],
+      tools: [readTool, writeTool],
+      execute: async (_name, input) => {
+        if (JSON.stringify(input).includes("OLD_INPUT_ONE")) {
+          throw new ToolInputError([{ path: ["raw"], code: "invalid_value" }]);
+        }
+        return { raw: `OUTPUT_${JSON.stringify(input)}` };
+      },
+    });
+
+    const compacted = JSON.stringify(transport.requests[3]?.messages);
+    expect(compacted).toContain("INITIAL_CONTRACT_CANARY");
+    expect(compacted).toContain("TOOL_HISTORY_PROJECTION");
+    expect(compacted).toContain('"tool_name":"read"');
+    expect(compacted).toContain('"outcome":"SUCCEEDED"');
+    expect(compacted).toContain('"outcome":"FAILED"');
+    expect(compacted).toContain('"error_code":"TOOL_INPUT_INVALID"');
+    expect(compacted).toMatch(/sha256:[0-9a-f]{64}/u);
+    expect(compacted).not.toContain("OLD_INPUT_ONE");
+    expect(compacted).not.toContain("OLD_INPUT_TWO");
+    expect(compacted).toContain("RECENT_INPUT");
+  });
+
+  it("preserves a domain refusal code after the full tool result is compacted", async () => {
+    const bounded = policyConfig();
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("w1", "write")] },
+      { model: bounded.model, content: [use("r2", "read")] },
+      { model: bounded.model, content: [use("r3", "read")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [readTool, writeTool],
+      execute: async (name) =>
+        name === "write"
+          ? {
+              outcome: "FAILED",
+              failure_code: "WRITE_REQUIRES_NEW_FILE",
+              output: { value: "RAW_REFUSAL_DETAIL" },
+            }
+          : { outcome: "SUCCEEDED", output: { value: "RAW_READ_DETAIL" } },
+    });
+
+    const compacted = JSON.stringify(transport.requests[3]?.messages);
+    expect(compacted).toContain('"outcome":"FAILED"');
+    expect(compacted).toContain('"error_code":"WRITE_REQUIRES_NEW_FILE"');
+    expect(compacted).not.toContain("RAW_REFUSAL_DETAIL");
+    expect(compacted).toContain("RAW_READ_DETAIL");
+  });
+
+  it("requires a successful mutation after a domain refusal before accepting the final report", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 4, maxCalls: 4 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("failed-write", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+      { model: bounded.model, content: [use("corrected-write", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    let writes = 0;
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [writeTool],
+      execute: async () => {
+        writes += 1;
+        return writes === 1
+          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
+          : { outcome: "SUCCEEDED", failure_code: null };
+      },
+    });
+
+    expect(writes).toBe(2);
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(result).toMatchObject({ iterations: 2, calls: 2 });
+    expect(JSON.stringify(transport.requests[2]?.messages)).toContain(
+      "FAILED_MUTATION_NOT_RECOVERED",
+    );
+  });
+
+  it("executes exactly one mutation-only recovery batch when the refusal consumed the last normal iteration", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 1, maxCalls: 3 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("failed-write", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+      { model: bounded.model, content: [use("corrected-write", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    let writes = 0;
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [writeTool],
+      execute: async () => {
+        writes += 1;
+        return writes === 1
+          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
+          : { outcome: "SUCCEEDED", failure_code: null };
+      },
+    });
+
+    expect(writes).toBe(2);
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(result).toMatchObject({ iterations: 2, calls: 2 });
+  });
+
+  it("offers another bounded recovery instruction after a new mutation attempt is refused", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 3, maxCalls: 3 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("failed-write-1", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final 1" }] },
+      { model: bounded.model, content: [use("failed-write-2", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final 2" }] },
+      { model: bounded.model, content: [use("corrected-write", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    let writes = 0;
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [writeTool],
+      execute: async () => {
+        writes += 1;
+        return writes < 3
+          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
+          : { outcome: "SUCCEEDED", failure_code: null };
+      },
+    });
+
+    expect(writes).toBe(3);
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(result).toMatchObject({ iterations: 3, calls: 3 });
+    expect(JSON.stringify(transport.requests[4]?.messages)).toContain(
+      "FAILED_MUTATION_NOT_RECOVERED",
+    );
+  });
+
+  it("stops after two refused mutations of the same target even when the model changes the guess", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 6, maxCalls: 6 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const target = "Sources/Localizable.strings";
+    const transport = new FakeTransport([
+      {
+        model: bounded.model,
+        content: [
+          {
+            ...use("failed-write-1", "write"),
+            input: { relative_path: target, content: "first guess" },
+          },
+        ],
+      },
+      {
+        model: bounded.model,
+        content: [
+          {
+            ...use("failed-write-2", "write"),
+            input: { relative_path: target, content: "different guess" },
+          },
+        ],
+      },
+      { model: bounded.model, content: [{ type: "text", text: "must not run" }] },
+    ]);
+    let writes = 0;
+
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [writeTool],
+        execute: async () => {
+          writes += 1;
+          return { outcome: "FAILED", failure_code: "REPLACEMENT_MISMATCH" };
+        },
+      }),
+    ).rejects.toThrow(/Repeated mutation target refusal made no progress/);
+    expect(writes).toBe(2);
+    expect(transport.requests).toHaveLength(2);
+  });
+
+  it("does not consume the one beyond-limit recovery on an earlier in-budget correction", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 3, maxCalls: 4 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("failed-write-1", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final 1" }] },
+      { model: bounded.model, content: [use("corrected-write-1", "write")] },
+      { model: bounded.model, content: [use("failed-write-2", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final 2" }] },
+      { model: bounded.model, content: [use("corrected-write-2", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    let writes = 0;
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [writeTool],
+      execute: async () => {
+        writes += 1;
+        return writes === 1 || writes === 3
+          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
+          : { outcome: "SUCCEEDED", failure_code: null };
+      },
+    });
+
+    expect(writes).toBe(4);
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(result).toMatchObject({ iterations: 4, calls: 4 });
+  });
+
+  it("bounds repeated final reports that do not recover a failed mutation", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 4, maxCalls: 4 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("failed-write", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+      { model: bounded.model, content: [{ type: "text", text: "still premature" }] },
+    ]);
+
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [writeTool],
+        execute: async () => ({ outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }),
+      }),
+    ).rejects.toThrow(/Final report repeated/);
+  });
+
+  it("rejects a duplicate ID after its full pair was compacted", async () => {
+    const bounded = policyConfig();
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("old-id", "read")] },
+      { model: bounded.model, content: [use("r2", "read")] },
+      { model: bounded.model, content: [use("r3", "read")] },
+      { model: bounded.model, content: [use("old-id", "read")] },
+    ]);
+    let executions = 0;
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [readTool, writeTool],
+        execute: async () => {
+          executions += 1;
+          return { ok: true };
+        },
+      }),
+    ).rejects.toThrow(/Duplicate or unknown tool-use id/);
+    expect(executions).toBe(3);
+    expect(JSON.stringify(transport.requests[3]?.messages)).not.toContain('"id":"old-id"');
+  });
+
+  it("keeps prefetched mutation-only sessions valid under the generic policy", async () => {
+    const bounded = policyConfig();
+    const transport = new FakeTransport([
+      { model: bounded.model, content: [use("w1", "write")] },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    let executions = 0;
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [writeTool],
+      execute: async () => {
+        executions += 1;
+        return { written: true };
+      },
+    });
+    expect(executions).toBe(1);
+    expect(result).toMatchObject({ iterations: 1, calls: 1 });
   });
 });

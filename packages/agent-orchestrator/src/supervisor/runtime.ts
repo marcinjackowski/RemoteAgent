@@ -682,6 +682,7 @@ export class SupervisorRuntime {
     if (!port) throw new RuntimeInvariantError("engineering runtime port is not configured");
     const session = await port.open({ unit: state, run: state.run });
     const fingerprints = [...session.fingerprints];
+    let lastGateFailureFingerprint = session.lastGateFailureFingerprint;
     let stageCalls = session.stageCalls;
     let modelCalls = session.modelCalls;
     let cancelled = session.cancelled;
@@ -727,11 +728,26 @@ export class SupervisorRuntime {
           return stop("APPROVAL_BLOCKED", approval.reasons.join(","));
       }
       loopState = evidence.slice;
-      // Progress is sampled at the review boundary. Sampling every implementation/gate/review
-      // stage turns one attempt into A,A,A and the next into B,B,B, which makes a genuine A/B
-      // oscillation invisible to the period-two detector.
-      if (!alreadyCounted && stage === EngineeringStage.SLICE_REVIEW)
+      // Progress is sampled at the two correction boundaries: review findings and a durable
+      // required-gate failure. Sampling every implementation/gate/review stage turns one attempt
+      // into A,A,A and the next into B,B,B, which makes a genuine A/B oscillation invisible. A
+      // passing gate is deliberately not sampled because review owns that attempt's state.
+      if (!alreadyCounted && stage === EngineeringStage.SLICE_REVIEW) {
+        lastGateFailureFingerprint = undefined;
         fingerprints.push(engineeringStructuralFingerprint(evidence.structuralState));
+      } else if (
+        !alreadyCounted &&
+        stage === EngineeringStage.GATE_EXECUTION &&
+        evidence.slice.directive === "CORRECT_SLICE"
+      ) {
+        const fingerprint = engineeringStructuralFingerprint(evidence.structuralState);
+        const repeated = fingerprint === lastGateFailureFingerprint;
+        lastGateFailureFingerprint = fingerprint;
+        fingerprints.push(fingerprint);
+        if (repeated) {
+          return stop("NO_PROGRESS", "engineering workflow stopped: NO_PROGRESS");
+        }
+      }
       return undefined;
     };
 
@@ -794,7 +810,7 @@ export class SupervisorRuntime {
     let cycleAttempt = 1;
     let correcting = false;
     let activeSliceId: string | null = null;
-    while (true) {
+    sliceLoop: while (true) {
       if (!correcting) {
         const planned = await runStage(EngineeringStage.SLICE_PLANNING, cycleAttempt);
         const terminal = unwrap(planned);
@@ -819,6 +835,16 @@ export class SupervisorRuntime {
         if (terminal !== undefined) return terminal;
         if (loopState.activeSliceId !== activeSliceId)
           return stop("SLICE_BLOCKED", "slice identity changed during an active slice attempt");
+        if (stage === EngineeringStage.GATE_EXECUTION) {
+          if (loopState.directive === "STOP") {
+            return stop("SLICE_BLOCKED", "gate failure evidence did not bind the active slice");
+          }
+          if (loopState.directive === "CORRECT_SLICE") {
+            cycleAttempt += 1;
+            correcting = true;
+            continue sliceLoop;
+          }
+        }
       }
 
       if (loopState.directive === "STOP")

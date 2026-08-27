@@ -548,6 +548,85 @@ describeIntegration(
       });
     });
 
+    it("skips only an exact same-attempt GateFailure correction artifact", async () => {
+      const gateFailure: EngineeringArtifact = {
+        schema_version: 1,
+        artifact_kind: "GateFailure",
+        case_id: "case-1",
+        run_id: "run-1",
+        revision: 0,
+        authority: "SERVER_OWNED",
+        slice_id: "slice-1",
+        attempt: 2,
+        tree_digest: `sha256:${"1".repeat(64)}`,
+        diff_digest: `sha256:${"2".repeat(64)}`,
+        context_digest: `sha256:${"3".repeat(64)}`,
+        config_digest: `sha256:${"4".repeat(64)}`,
+        blocking_gate_ids: ["xcode-full"],
+        receipt_ids: ["receipt-xcode"],
+        decision_ids: [],
+        diagnostics: [
+          {
+            gate_id: "xcode-full",
+            outcome: "FAILED",
+            log_digest: `sha256:${"5".repeat(64)}`,
+            trust: TrustLevel.UNTRUSTED_DATA,
+            excerpt: "Assets+Help.swift:8:14: error: cannot find 'Bundle' in scope",
+          },
+        ],
+      };
+      await db.query(
+        `INSERT INTO job_intents
+           (intent_id, job_id, case_id, fencing_token, kind, descriptor, idempotency_key)
+         VALUES ('intent-gate', 'job-1', 'case-1', 1, 'COMMAND',
+                 '{"gate":"xcode-full"}'::jsonb, 'operation-gate')`,
+      );
+      await db.query(
+        `INSERT INTO engineering_operations
+           (operation_id, intent_id, idempotency_key, job_id, case_id, owner_id,
+            run_id, stage, stage_attempt, checkpoint_revision, operation_kind,
+            effect_class, integration_scope_digest, input_digest, config_digest,
+            schema_digest, deadline_at, recorded_at)
+         VALUES ('operation-gate', 'intent-gate', 'operation-gate', 'job-1', 'case-1',
+                 'owner-1', 'run-1', 'GATE_EXECUTION', 2, 0, 'COMMAND',
+                 'COMMAND', $1, $1, $1, $1, $2::timestamptz + interval '1 hour',
+                 $2::timestamptz - interval '30 seconds')`,
+        [DIGEST, RUN_CUTOFF],
+      );
+      await db.query(
+        `INSERT INTO engineering_artifact_revisions
+           (artifact_revision_id, artifact_key, revision, artifact_kind, payload,
+            payload_digest, operation_id, intent_id, job_id, case_id, owner_id,
+            run_id, stage, stage_attempt, checkpoint_revision, recorded_at)
+         VALUES ('artifact-gate-failure', 'gate-failure:2', 0, 'GateFailure',
+                 $1::jsonb, $2, 'operation-gate', 'intent-gate', 'job-1', 'case-1',
+                 'owner-1', 'run-1', 'GATE_EXECUTION', 2, 0,
+                 $3::timestamptz - interval '20 seconds')`,
+        [JSON.stringify(gateFailure), engineeringArtifactDigest(gateFailure), RUN_CUTOFF],
+      );
+
+      const snapshot = await context.readSnapshot(db, request);
+      expect(snapshot.sources.some(({ sourceId }) => sourceId === "artifact-gate-failure")).toBe(
+        false,
+      );
+
+      const mismatchedAttempt = { ...gateFailure, attempt: 1 } as EngineeringArtifact;
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await db.query(
+        `UPDATE engineering_artifact_revisions SET payload=$1::jsonb, payload_digest=$2
+          WHERE artifact_revision_id='artifact-gate-failure'`,
+        [JSON.stringify(mismatchedAttempt), engineeringArtifactDigest(mismatchedAttempt)],
+      );
+      await db.query(
+        "ALTER TABLE engineering_artifact_revisions ENABLE TRIGGER engineering_artifact_revisions_append_only",
+      );
+      await expect(context.readSnapshot(db, request)).rejects.toMatchObject({
+        code: "ENGINEERING_CONTEXT_DATA_INVALID",
+      });
+    });
+
     it("fails closed when a durable artifact payload or digest is corrupt", async () => {
       await db.query(
         "ALTER TABLE engineering_artifact_revisions DISABLE TRIGGER engineering_artifact_revisions_append_only",

@@ -31,7 +31,7 @@ const planReportSchema = engineeringProgramDesign;
 const reviewReportSchema = engineeringReviewDecision;
 const sha = `sha256:${"a".repeat(64)}`;
 const validProgramDesign = {
-  schema_version: 1,
+  schema_version: 2,
   artifact_kind: "ProgramDesign",
   case_id: "case",
   run_id: "run",
@@ -42,6 +42,18 @@ const validProgramDesign = {
   uncertainty_review: ["none"],
   expected_tests: ["feature test"],
   slice_order: ["slice-a"],
+  slice_blueprints: [
+    {
+      slice_id: "slice-a",
+      objective: "implement the feature",
+      observable_result: "the feature is observable",
+      allowed_paths: ["src"],
+      test_paths: ["src/feature.test.ts"],
+      gate_ids: ["feature-test"],
+      inspection_method: "inspect the focused test evidence",
+      stop_condition: "the focused review passes",
+    },
+  ],
   source_digest: sha,
 };
 const validReviewDecision = {
@@ -58,8 +70,8 @@ const validReviewDecision = {
 };
 
 const programDesignDefinition = defineStructuredContract({
-  name: "ProgramDesign_v1",
-  version: 1,
+  name: "ProgramDesign_v2",
+  version: 2,
   schema: planReportSchema,
 });
 
@@ -303,8 +315,8 @@ describe("runStructuredCompletion", () => {
 describe("defineStructuredContract", () => {
   it("derives typed parsers, provider schemas, and canonical digests for distinct contracts", () => {
     const plan = defineStructuredContract({
-      name: "ProgramDesign_v1",
-      version: 1,
+      name: "ProgramDesign_v2",
+      version: 2,
       schema: planReportSchema,
       description: "One versioned program design",
     });
@@ -322,13 +334,13 @@ describe("defineStructuredContract", () => {
     expect(plan.schema).toBe(planReportSchema);
     expect(review.schema).toBe(reviewReportSchema);
     expect(plan.outputSchema).toMatchObject({
-      name: "ProgramDesign_v1",
+      name: "ProgramDesign_v2",
       description: "One versioned program design",
       schema: {
         type: "object",
         additionalProperties: false,
         properties: {
-          schema_version: { type: "number", const: 1 },
+          schema_version: { type: "number", const: 2 },
           artifact_kind: { type: "string", const: "ProgramDesign" },
         },
       },
@@ -365,11 +377,11 @@ describe("defineStructuredContract", () => {
       defineStructuredContract({ name: "contains spaces", version: 1, schema: planReportSchema }),
     ).toThrow("Structured contract name");
     expect(() =>
-      defineStructuredContract({ name: "ProgramDesign_v1", version: 0, schema: planReportSchema }),
+      defineStructuredContract({ name: "ProgramDesign_v2", version: 0, schema: planReportSchema }),
     ).toThrow("positive safe integer");
     expect(() =>
       defineStructuredContract({
-        name: "ProgramDesign_v1",
+        name: "ProgramDesign_v2",
         version: Number.MAX_SAFE_INTEGER + 1,
         schema: planReportSchema,
       }),
@@ -393,8 +405,8 @@ describe("defineStructuredContract", () => {
     ).toThrow("require schema_version");
     expect(() =>
       defineStructuredContract({
-        name: "ProgramDesign_v2",
-        version: 2,
+        name: "ProgramDesign_v1",
+        version: 1,
         schema: planReportSchema,
       }),
     ).toThrow("must equal the declared contract version");
@@ -402,15 +414,15 @@ describe("defineStructuredContract", () => {
 
   it("fails closed when output has a mismatched version or unknown fields", () => {
     const definition = defineStructuredContract({
-      name: "ProgramDesign_v1",
-      version: 1,
+      name: "ProgramDesign_v2",
+      version: 2,
       schema: planReportSchema,
     });
 
     expect(() =>
       definition.parse({
         ...validProgramDesign,
-        schema_version: 2,
+        schema_version: 1,
       }),
     ).toThrow();
     expect(() =>
@@ -428,8 +440,8 @@ describe("defineStructuredContract", () => {
       schema: typeof planReportSchema | typeof reviewReportSchema;
       description: string;
     } = {
-      name: "MutableProgramDesign_v1",
-      version: 1,
+      name: "MutableProgramDesign_v2",
+      version: 2,
       schema: planReportSchema,
       description: "original description",
     };
@@ -442,14 +454,14 @@ describe("defineStructuredContract", () => {
     mutableInput.schema = reviewReportSchema;
     mutableInput.description = "mutated description";
 
-    expect(definition.name).toBe("MutableProgramDesign_v1");
-    expect(definition.version).toBe(1);
+    expect(definition.name).toBe("MutableProgramDesign_v2");
+    expect(definition.version).toBe(2);
     expect(definition.schema).toBe(planReportSchema);
     expect(definition.schemaDigest).toBe(originalDigest);
     expect(definition.outputSchema).toBe(originalOutputSchema);
     expect(definition.outputSchema.description).toBe("original description");
     expect(definition.parse(validProgramDesign)).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       artifact_kind: "ProgramDesign",
     });
     expect(() => definition.parse(validReviewDecision)).toThrow();
@@ -473,8 +485,8 @@ describe("runStructuredContract", () => {
     expect(result).toMatchObject({
       model: config.model,
       stage: EngineeringStage.PROGRAM_DESIGN,
-      schemaName: "ProgramDesign_v1",
-      schemaVersion: 1,
+      schemaName: "ProgramDesign_v2",
+      schemaVersion: 2,
       schemaDigest: programDesignDefinition.schemaDigest,
       promptVersion: "v3",
       requestId: "program-design-request",
@@ -701,7 +713,7 @@ describe("runStructuredContract", () => {
         content: [
           {
             type: "text",
-            text: "Return only one valid JSON object matching ProgramDesign_v1 schema version 1.",
+            text: "Return only one valid JSON object matching ProgramDesign_v2 schema version 2.",
           },
         ],
       },

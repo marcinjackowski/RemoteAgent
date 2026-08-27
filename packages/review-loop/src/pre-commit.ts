@@ -122,16 +122,23 @@ function serverFindings(output: PreCommitReviewOutput, patch: string): readonly 
   const byLocation = new Map<string, PreCommitReviewOutput["findings"][number]>();
   for (const candidate of output.findings) {
     const quote = candidate.evidence.trim().replace(/\s+/gu, " ");
-    if (quote.length > 0 && !normalizedPatch.includes(quote)) {
-      throw new ReviewContractError("pre-commit finding evidence is absent from the actual patch");
-    }
+    const supported = quote.length === 0 || normalizedPatch.includes(quote);
+    const effective =
+      supported || !isBlockingSeverity(candidate.severity)
+        ? candidate
+        : {
+            ...candidate,
+            severity: ReviewSeverity.LOW,
+            summary: "Reviewer finding was not anchored in the actual patch.",
+            required_fix: "",
+          };
     const location = `${candidate.location.relative_path}:${String(candidate.location.line)}`;
     const current = byLocation.get(location);
     if (
       current === undefined ||
-      severityRank(candidate.severity) < severityRank(current.severity)
+      severityRank(effective.severity) < severityRank(current.severity)
     ) {
-      byLocation.set(location, candidate);
+      byLocation.set(location, effective);
     }
   }
   return Object.freeze(

@@ -93,7 +93,7 @@ describe("discordConfigFromEnv (RA-006 composition)", () => {
       await writeFile(
         path,
         JSON.stringify({
-          schema_version: 2,
+          schema_version: 3,
           workspace_root: "/worker/workspaces",
           baseline_root: "/worker/baselines",
           artifact_root: "/worker/artifacts",
@@ -102,6 +102,7 @@ describe("discordConfigFromEnv (RA-006 composition)", () => {
             source_path: "/worker/source",
             base_branch: "main",
             write_path_allowlist: ["packages/contracts", "apps/agent-worker"],
+            test_path_allowlist: ["apps/agent-worker/test"],
           },
           gates: [],
           executable_allowlist: [],

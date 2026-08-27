@@ -12,11 +12,10 @@ import { translatePgError } from "../client.js";
 export const MODEL_ID_KEY = "model_id";
 
 /**
- * Bootstrap default. Uses the `us.` INFERENCE PROFILE id: verified live (2026-08-24) that the bare
- * `anthropic.claude-sonnet-4-5-...` id fails on-demand with a Bedrock ValidationException
- * ("isn't supported ... Retry with the ID or ARN of an inference profile"). The profile id works.
+ * Bootstrap default. Uses the operator-selected Claude Opus 4.8 `us.` inference profile rather
+ * than a bare model id, because Bedrock on-demand invocation requires a profile for this route.
  */
-export const DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+export const DEFAULT_MODEL_ID = "us.anthropic.claude-opus-4-8";
 
 export class AgentConfigRepository {
   public async get(q: Queryable, key: string): Promise<string | null> {

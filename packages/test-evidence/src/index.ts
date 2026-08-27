@@ -24,3 +24,4 @@ export * from "./verification.js";
 export * from "./engineering-gates.js";
 export * from "./disposable-workspace.js";
 export * from "./baseline-workspace.js";
+export * from "./generator.js";

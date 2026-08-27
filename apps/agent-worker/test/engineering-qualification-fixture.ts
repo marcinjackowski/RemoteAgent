@@ -42,11 +42,11 @@ import { makeCheckpoint } from "../../../packages/database/test/fixtures.js";
 import { createTestDatabase } from "../../../packages/database/test/harness.js";
 import { createEngineeringRoleContextReader, type RoleContextReader } from "../src/context.js";
 import {
-  createBedrockEngineeringStageExecutor,
   createBedrockPreCommitReviewSessionFactory,
   type EngineeringWorkflowPolicyOptions,
 } from "../src/engineering-workflow.js";
 import {
+  createConfiguredEngineeringStageExecutor,
   createProductionEngineeringRuntimePort,
   type EngineeringExecutionConfig,
 } from "../src/engineering-execution.js";
@@ -129,9 +129,10 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
         source_digest: sha("2"),
       });
     }
-    if (name === "EngineeringProgramDesign_v1") {
+    if (name === "EngineeringProgramDesign_v2") {
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "ProgramDesign",
         call_flow: [...this.#sliceIds],
         file_tree_delta: [...this.#implementationPaths],
@@ -139,6 +140,16 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
         uncertainty_review: ["review every slice"],
         expected_tests: ["qualification"],
         slice_order: [...this.#sliceIds],
+        slice_blueprints: this.#sliceIds.map((sliceId) => ({
+          slice_id: sliceId,
+          objective: `implement ${sliceId}`,
+          observable_result: `${sliceId} is present in Git evidence`,
+          allowed_paths: ["src"],
+          test_paths: ["src"],
+          gate_ids: ["qualification"],
+          inspection_method: "inspect exact durable evidence",
+          stop_condition: "fresh pre-commit review passes",
+        })),
         source_digest: sha("3"),
       });
     }
@@ -160,16 +171,18 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
         required_changes: [],
       });
     }
-    if (name === "EngineeringSliceContract_v1") {
+    if (name === "EngineeringSliceContract_v2") {
       const sliceId = this.#sliceIds[this.#planning++];
       if (sliceId === undefined) throw new Error("unexpected extra slice planning call");
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "SliceContract",
         slice_id: sliceId,
         objective: `implement ${sliceId}`,
         observable_result: `${sliceId} is present in Git evidence`,
         allowed_paths: ["src"],
+        test_paths: ["src"],
         gate_ids: ["qualification"],
         inspection_method: "inspect exact durable evidence",
         stop_condition: "fresh pre-commit review passes",
@@ -396,6 +409,7 @@ export async function createEngineeringQualificationFixture(
         schema_version: 1,
         gate_id: "qualification",
         gate_class: VerificationGateClass.TEST,
+        gate_tier: "FAST",
         executable,
         argv: ["-e", gateScript],
         relative_cwd: "src",
@@ -421,6 +435,7 @@ export async function createEngineeringQualificationFixture(
     baselineRoot,
     artifactRoot,
     writePathAllowlist: Object.freeze(["src"]),
+    testPathAllowlist: Object.freeze(["src"]),
     writeDeploymentPolicy: Object.freeze({
       schema_version: 1,
       purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
@@ -623,9 +638,10 @@ export async function createEngineeringQualificationFixture(
     },
     makeProduction: (lease, input) => {
       const executionConfig = input.executionConfig ?? config;
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createConfiguredEngineeringStageExecutor({
         transport: input.transport,
-        config: modelConfig,
+        modelConfig,
+        executionConfig,
       });
       const reviewer = createBedrockPreCommitReviewSessionFactory({
         transport: input.transport,

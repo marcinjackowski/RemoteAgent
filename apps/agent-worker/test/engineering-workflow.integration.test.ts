@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, expect, it } from "vitest";
 
 import {
@@ -39,8 +43,11 @@ import type { CompiledRoleContext } from "../src/context.js";
 import {
   createBedrockEngineeringStageExecutor,
   createBedrockPreCommitReviewSessionFactory,
+  assertEngineeringProgramDesignBlueprints,
+  assertGateEvidenceAuthority,
   createPostgresEngineeringRuntimePort as createPostgresEngineeringRuntimePortProduction,
   engineeringApprovalCandidateFromLease,
+  gateExecutionIntentDescriptor,
   type EngineeringStageExecutor,
   type EngineeringSliceImplementationStageExecutor,
   type EngineeringLocalCommitStageExecutor,
@@ -48,6 +55,11 @@ import {
 } from "../src/engineering-workflow.js";
 import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
+import {
+  createEngineeringDebugTransport,
+  EngineeringDebugJournal,
+  runWithEngineeringDebugJournal,
+} from "../src/engineering-debug-journal.js";
 
 const available = await ensurePostgres();
 const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
@@ -58,6 +70,11 @@ const WRITE_POLICY = Object.freeze({
   repository_id: "repo-1",
   write_path_allowlist: Object.freeze(["apps/agent-worker/src"]),
 });
+const SLICE_PLANNING_CONSTRAINTS = Object.freeze({
+  allowedPaths: WRITE_POLICY.write_path_allowlist,
+  allowedTestPaths: WRITE_POLICY.write_path_allowlist,
+  requiredGateIds: Object.freeze(["gate-1"]),
+});
 const createPostgresEngineeringRuntimePort = (
   input: Omit<
     Parameters<typeof createPostgresEngineeringRuntimePortProduction>[0],
@@ -66,6 +83,13 @@ const createPostgresEngineeringRuntimePort = (
 ) =>
   createPostgresEngineeringRuntimePortProduction({
     ...input,
+    executor:
+      input.executor.slicePlanningConstraints === undefined
+        ? Object.freeze({
+            ...input.executor,
+            slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+          })
+        : input.executor,
     writeDeploymentPolicy: WRITE_POLICY,
   });
 const smallRiskFacts = Object.freeze({
@@ -265,11 +289,13 @@ function modelArtifact(stage: EngineeringStage): EngineeringArtifact {
     case EngineeringStage.SLICE_PLANNING:
       return engineeringArtifact.parse({
         ...common,
+        schema_version: 2,
         artifact_kind: "SliceContract",
         slice_id: "slice-1",
         objective: "bounded slice",
         observable_result: "one observable result",
         allowed_paths: ["apps/agent-worker/src"],
+        test_paths: ["apps/agent-worker/src/engineering-workflow.ts"],
         gate_ids: ["gate-1"],
         inspection_method: "inspect the durable receipt",
         stop_condition: "receipt is confirmed",
@@ -310,6 +336,34 @@ function modelArtifact(stage: EngineeringStage): EngineeringArtifact {
     default:
       throw new Error(`unexpected model stage ${stage}`);
   }
+}
+
+function currentProgramDesignArtifact(input: {
+  count: number;
+  gateId?: string;
+  gateIdsByIndex?: readonly (readonly string[])[];
+  allowedPath?: string;
+  testPath?: string;
+}): EngineeringArtifact {
+  const legacy = modelArtifact(EngineeringStage.PROGRAM_DESIGN);
+  if (legacy.artifact_kind !== "ProgramDesign") throw new Error("program fixture mismatch");
+  const allowedPath = input.allowedPath ?? "apps/agent-worker/src";
+  const blueprints = Array.from({ length: input.count }, (_, index) => ({
+    slice_id: `slice-${index + 1}`,
+    objective: `bounded result ${index + 1}`,
+    observable_result: `result ${index + 1} is observable`,
+    allowed_paths: [allowedPath],
+    test_paths: [input.testPath ?? `${allowedPath}/engineering-workflow.ts`],
+    gate_ids: input.gateIdsByIndex?.[index] ?? [input.gateId ?? "gate-1"],
+    inspection_method: `inspect evidence ${index + 1}`,
+    stop_condition: `review ${index + 1} passes`,
+  }));
+  return engineeringArtifact.parse({
+    ...legacy,
+    schema_version: 2,
+    slice_order: blueprints.map((blueprint) => blueprint.slice_id),
+    slice_blueprints: blueprints,
+  });
 }
 
 function systemArtifact(stage: EngineeringStage, attempt = 1): EngineeringArtifact {
@@ -461,6 +515,67 @@ function fakeLocalCommitExecutor(): EngineeringLocalCommitStageExecutor {
     recover: async () => null,
   };
 }
+
+it("binds GateFailure correction evidence to the immutable gate context and decisions", () => {
+  const context = manifest(EngineeringStage.GATE_EXECUTION);
+  const contextDigest = engineeringArtifactDigest(context.compiled.manifest);
+  const descriptor = gateExecutionIntentDescriptor.parse({
+    case_id: "case-1",
+    work_unit_id: "unit-1",
+    run_id: "run-1",
+    checkpoint_revision: 0,
+    stage: EngineeringStage.GATE_EXECUTION,
+    attempt: 2,
+    process_class: "SMALL",
+    context_snapshot_digest: context.snapshotDigest,
+    context_manifest: context.compiled.manifest,
+    context_manifest_digest: contextDigest,
+    context_packet_digest: sha("6"),
+    decision_authority: "DURABLE_VERIFIED_ANSWERS",
+    decision_ids: ["decision-1"],
+    deadline_at: "2026-08-27T12:00:00.000Z",
+  });
+  const artifact = engineeringArtifact.parse({
+    schema_version: 1,
+    artifact_kind: "GateFailure",
+    case_id: "case-1",
+    run_id: "run-1",
+    revision: 0,
+    authority: "SERVER_OWNED",
+    slice_id: "slice-1",
+    attempt: 2,
+    tree_digest: sha("1"),
+    diff_digest: sha("2"),
+    context_digest: contextDigest,
+    config_digest: sha("3"),
+    blocking_gate_ids: ["xcode-full"],
+    receipt_ids: ["receipt-xcode"],
+    decision_ids: ["decision-1"],
+    diagnostics: [
+      {
+        gate_id: "xcode-full",
+        outcome: "FAILED",
+        log_digest: sha("4"),
+        trust: TrustLevel.UNTRUSTED_DATA,
+        excerpt: "error: cannot find Bundle in scope",
+      },
+    ],
+  });
+
+  expect(() => assertGateEvidenceAuthority({ artifact, descriptor })).not.toThrow();
+  expect(() =>
+    assertGateEvidenceAuthority({
+      artifact: { ...artifact, decision_ids: ["foreign-decision"] } as EngineeringArtifact,
+      descriptor,
+    }),
+  ).toThrow(/immutable intent authority/);
+  expect(() =>
+    assertGateEvidenceAuthority({
+      artifact: { ...artifact, context_digest: sha("0") } as EngineeringArtifact,
+      descriptor,
+    }),
+  ).toThrow(/immutable intent authority/);
+});
 
 function runtimeIdentity() {
   const workUnit: WorkUnit = {
@@ -684,6 +799,81 @@ describeIntegration(
         nowMs: session.deadlineMs - 1,
       });
     }
+
+    it("refuses an exhausted implementation budget before binding a mutating STARTED operation", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      if (lease === null) throw new Error("expected qualification lease");
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor: {
+          configDigest: sha("5"),
+          schemaDigest: () => sha("6"),
+          execute: async ({ binding }) => ({
+            kind: "ARTIFACT",
+            artifact: modelArtifact(binding.stage),
+            modelCalls: 1,
+          }),
+        },
+        implementationExecutor: fakeImplementationExecutor(),
+        policy: { riskFacts: smallRiskFacts },
+      });
+      const root = await mkdtemp(join(tmpdir(), "ra048-pre-start-budget-"));
+      const journal = await EngineeringDebugJournal.create({
+        artifactRoot: root,
+        invocationId: "pre-start-budget",
+      });
+      const transport = createEngineeringDebugTransport({
+        async converse(_request, config) {
+          return {
+            model: config.model,
+            usage: { inputTokens: 565_999, outputTokens: 1, totalTokens: 566_000 },
+            content: [],
+          };
+        },
+      });
+      const config = {
+        model: { provider: "bedrock", model_id: "model" },
+        timeoutMs: 1_000,
+        toolLimits: { maxIterations: 1, maxCalls: 1 },
+        retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
+      } as const;
+      try {
+        await runWithEngineeringDebugJournal(journal, async () => {
+          await transport.converse({ messages: [] }, config);
+          await port.open(runtimeIdentity());
+          await expect(
+            port.prepareContext({
+              caseId: "case-1",
+              workUnitId: "unit-1",
+              runId: "run-1",
+              checkpointRevision: 0,
+              stage: EngineeringStage.SLICE_IMPLEMENTATION,
+              attempt: 1,
+            }),
+          ).rejects.toThrow(/reserve would exceed/);
+        });
+        const operations = await db.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM engineering_operations WHERE run_id='run-1' AND stage='SLICE_IMPLEMENTATION'",
+        );
+        expect(operations.rows[0]?.count).toBe("0");
+        await journal.close();
+        expect(await readFile(journal.filePath, "utf8")).toContain(
+          '"decision_code":"MODEL_CALL_REFUSED_BUDGET"',
+        );
+      } finally {
+        await journal.close().catch(() => undefined);
+        await rm(root, { recursive: true, force: true });
+      }
+    });
 
     it("runs the production handler through PG intent/STARTED/artifact boundaries", async () => {
       const jobs = new JobStore(runtime);
@@ -1851,7 +2041,7 @@ describeIntegration(
       });
     });
 
-    it("derives NEXT_SLICE only from exact ProgramDesign.slice_order", async () => {
+    it("clears a historical gate correction after the corrected attempt passes its gates", async () => {
       const jobs = new JobStore(runtime);
       await jobs.enqueue(db, {
         caseId: "case-1",
@@ -1863,15 +2053,155 @@ describeIntegration(
       const executor: EngineeringStageExecutor = {
         configDigest: sha("5"),
         schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => ({
+          kind: "ARTIFACT",
+          artifact: modelArtifact(binding.stage),
+          modelCalls: 1,
+        }),
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease: lease!,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        reviewExecutor: executor,
+        implementationExecutor: fakeImplementationExecutor(),
+        localCommitExecutor: fakeLocalCommitExecutor(),
+        executeSystemStage: async ({ binding, context, decisionIds }) => {
+          const contextDigest = engineeringArtifactDigest(context.compiled.manifest);
+          if (binding.attempt === 1) {
+            return engineeringArtifact.parse({
+              schema_version: 1,
+              artifact_kind: "GateFailure",
+              case_id: binding.caseId,
+              run_id: binding.runId,
+              revision: binding.checkpointRevision,
+              authority: "SERVER_OWNED",
+              slice_id: "slice-1",
+              attempt: binding.attempt,
+              tree_digest: sha("e"),
+              diff_digest: sha("1"),
+              context_digest: contextDigest,
+              config_digest: sha("3"),
+              blocking_gate_ids: ["gate-1"],
+              receipt_ids: ["receipt-failed"],
+              decision_ids: decisionIds,
+              diagnostics: [
+                {
+                  gate_id: "gate-1",
+                  outcome: "FAILED",
+                  log_digest: sha("4"),
+                  trust: TrustLevel.UNTRUSTED_DATA,
+                  excerpt: "bounded gate failure",
+                },
+              ],
+            });
+          }
+          const passed = systemArtifact(EngineeringStage.GATE_EXECUTION);
+          if (passed.artifact_kind !== "EvidenceBundle") throw new Error("gate fixture mismatch");
+          return engineeringArtifact.parse({
+            ...passed,
+            context_digest: contextDigest,
+            decisions: decisionIds,
+          });
+        },
+        policy: { riskFacts: smallRiskFacts },
+      });
+      await port.open(runtimeIdentity());
+
+      const runStage = async (stage: EngineeringStage, attempt: number) => {
+        const binding = {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage,
+          attempt,
+        } as const;
+        const context = await port.prepareContext(binding);
+        await port.commitStarted(binding);
+        return port.invokeAndRecord({
+          binding,
+          context,
+          definition: {
+            role: stage === EngineeringStage.SLICE_IMPLEMENTATION ? "IMPLEMENTER" : "REVIEWER",
+            input_artifacts: [],
+            output_artifacts: [],
+            completion_contract: null,
+            workspace_access:
+              stage === EngineeringStage.SLICE_IMPLEMENTATION ? "WRITE" : "READ_ONLY",
+          },
+        });
+      };
+
+      await runStage(EngineeringStage.SLICE_PLANNING, 1);
+      await runStage(EngineeringStage.SLICE_IMPLEMENTATION, 1);
+      expect(await runStage(EngineeringStage.GATE_EXECUTION, 1)).toMatchObject({
+        status: "COMPLETED",
+        evidence: { slice: { activeSliceId: "slice-1", directive: "CORRECT_SLICE" } },
+      });
+      await runStage(EngineeringStage.SLICE_IMPLEMENTATION, 2);
+      expect(await runStage(EngineeringStage.GATE_EXECUTION, 2)).toMatchObject({
+        status: "COMPLETED",
+        evidence: {
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            directive: "CONTINUE",
+          },
+        },
+      });
+    });
+
+    it("materializes two v2 blueprints in order without model slice planning", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      expect(lease).not.toBeNull();
+      let modelPlanningCalls = 0;
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+        schemaDigest: () => sha("6"),
         execute: async ({ binding }) => {
           let artifact = modelArtifact(binding.stage);
           if (binding.stage === EngineeringStage.PROGRAM_DESIGN)
             artifact = engineeringArtifact.parse({
               ...artifact,
+              schema_version: 2,
               slice_order: ["slice-1", "slice-2"],
+              slice_blueprints: [
+                {
+                  slice_id: "slice-1",
+                  objective: "first bounded result",
+                  observable_result: "first result is reviewable",
+                  allowed_paths: ["apps/agent-worker/src"],
+                  test_paths: ["apps/agent-worker/src/engineering-workflow.ts"],
+                  gate_ids: ["gate-1"],
+                  inspection_method: "inspect first evidence",
+                  stop_condition: "first review passes",
+                },
+                {
+                  slice_id: "slice-2",
+                  objective: "second bounded result",
+                  observable_result: "second result is reviewable",
+                  allowed_paths: ["apps/agent-worker/src"],
+                  test_paths: ["apps/agent-worker/src/engineering-workflow.ts"],
+                  gate_ids: ["gate-1"],
+                  inspection_method: "inspect second evidence",
+                  stop_condition: "second review passes",
+                },
+              ],
             });
-          if (binding.stage === EngineeringStage.SLICE_PLANNING && binding.attempt === 2)
-            artifact = engineeringArtifact.parse({ ...artifact, slice_id: "slice-2" });
+          if (binding.stage === EngineeringStage.SLICE_PLANNING) {
+            modelPlanningCalls += 1;
+            throw new Error("model slice planning must remain disconnected");
+          }
           return { kind: "ARTIFACT", artifact, modelCalls: 1 };
         },
       };
@@ -1926,7 +2256,7 @@ describeIntegration(
         });
       };
       await invoke(EngineeringStage.PROGRAM_DESIGN, 1);
-      await invoke(EngineeringStage.SLICE_PLANNING, 1);
+      expect(await invoke(EngineeringStage.SLICE_PLANNING, 1)).toMatchObject({ modelCalls: 0 });
       await invoke(EngineeringStage.SLICE_IMPLEMENTATION, 1);
       await invoke(EngineeringStage.GATE_EXECUTION, 1);
       const firstReview = await invoke(EngineeringStage.SLICE_REVIEW, 1);
@@ -1944,12 +2274,195 @@ describeIntegration(
       const secondPlan = await invoke(EngineeringStage.SLICE_PLANNING, 2);
       expect(secondPlan).toMatchObject({
         status: "COMPLETED",
+        modelCalls: 0,
         evidence: {
           slice: {
             activeSliceId: "slice-2",
             expectedSliceId: "slice-2",
             completedSliceIds: ["slice-1"],
             directive: "CONTINUE",
+          },
+        },
+      });
+      await invoke(EngineeringStage.SLICE_IMPLEMENTATION, 2);
+      await invoke(EngineeringStage.GATE_EXECUTION, 2);
+      const secondReview = await invoke(EngineeringStage.SLICE_REVIEW, 2);
+      expect(secondReview).toMatchObject({
+        status: "COMPLETED",
+        evidence: {
+          slice: {
+            activeSliceId: "slice-2",
+            expectedSliceId: null,
+            completedSliceIds: ["slice-1", "slice-2"],
+            directive: "COMPLETE",
+          },
+        },
+      });
+      expect(modelPlanningCalls).toBe(0);
+    });
+
+    it.each(["PATH", "GATE", "TEST", "MINIMUM"] as const)(
+      "refuses a v2 %s blueprint mismatch before implementation",
+      async (mismatch) => {
+        const jobs = new JobStore(runtime);
+        await jobs.enqueue(db, {
+          caseId: "case-1",
+          jobType: "agent.implementer",
+          payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+        });
+        const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+        expect(lease).not.toBeNull();
+        const artifact = currentProgramDesignArtifact({
+          count: mismatch === "MINIMUM" ? 1 : 2,
+          ...(mismatch === "GATE" ? { gateId: "foreign-gate" } : {}),
+        });
+        let implementationCalls = 0;
+        const implementation = fakeImplementationExecutor();
+        const executor: EngineeringStageExecutor = {
+          configDigest: sha("5"),
+          slicePlanningConstraints:
+            mismatch === "PATH"
+              ? {
+                  allowedPaths: ["apps/agent-worker/test"],
+                  allowedTestPaths: ["apps/agent-worker/test"],
+                  requiredGateIds: ["gate-1"],
+                }
+              : mismatch === "TEST"
+                ? {
+                    allowedPaths: WRITE_POLICY.write_path_allowlist,
+                    allowedTestPaths: ["apps/agent-worker/test"],
+                    requiredGateIds: ["gate-1"],
+                  }
+                : SLICE_PLANNING_CONSTRAINTS,
+          schemaDigest: () => sha("6"),
+          execute: async () => ({ kind: "ARTIFACT", artifact, modelCalls: 1 }),
+        };
+        const port = createPostgresEngineeringRuntimePort({
+          db,
+          lease: lease!,
+          jobs,
+          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          executor,
+          implementationExecutor: {
+            ...implementation,
+            execute: async (input) => {
+              implementationCalls += 1;
+              return implementation.execute(input);
+            },
+          },
+          policy: { riskFacts: { ...smallRiskFacts, multi_module: true } },
+        });
+        await port.open(runtimeIdentity());
+        const binding = {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage: EngineeringStage.PROGRAM_DESIGN,
+          attempt: 1,
+        } as const;
+        const context = await port.prepareContext(binding);
+        await port.commitStarted(binding);
+        await expect(
+          port.invokeAndRecord({
+            binding,
+            context,
+            definition: {
+              role: "PLANNER",
+              input_artifacts: [],
+              output_artifacts: [],
+              completion_contract: "EngineeringProgramDesign",
+              workspace_access: "READ_ONLY",
+            },
+          }),
+        ).rejects.toThrow();
+        expect(implementationCalls).toBe(0);
+        expect(
+          (
+            await db.query(
+              "SELECT 1 FROM engineering_artifact_revisions WHERE artifact_kind='ProgramDesign'",
+            )
+          ).rowCount,
+        ).toBe(0);
+      },
+    );
+
+    it("stops a legacy planning result whose identity changes the durable order", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      expect(lease).not.toBeNull();
+      const executor: EngineeringStageExecutor = {
+        configDigest: sha("5"),
+        slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+        schemaDigest: () => sha("6"),
+        execute: async ({ binding }) => {
+          const artifact = modelArtifact(binding.stage);
+          if (binding.stage === EngineeringStage.PROGRAM_DESIGN) {
+            return {
+              kind: "ARTIFACT",
+              artifact: engineeringArtifact.parse({
+                ...artifact,
+                slice_order: ["slice-1", "slice-2"],
+              }),
+              modelCalls: 1,
+            };
+          }
+          if (binding.stage === EngineeringStage.SLICE_PLANNING) {
+            return {
+              kind: "ARTIFACT",
+              artifact: engineeringArtifact.parse({ ...artifact, slice_id: "slice-2" }),
+              modelCalls: 1,
+            };
+          }
+          return { kind: "ARTIFACT", artifact, modelCalls: 1 };
+        },
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease: lease!,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        policy: { riskFacts: { ...smallRiskFacts, multi_module: true } },
+      });
+      await port.open(runtimeIdentity());
+      const invoke = async (stage: EngineeringStage) => {
+        const binding = {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage,
+          attempt: 1,
+        } as const;
+        const context = await port.prepareContext(binding);
+        await port.commitStarted(binding);
+        return port.invokeAndRecord({
+          binding,
+          context,
+          definition: {
+            role: "PLANNER",
+            input_artifacts: [],
+            output_artifacts: [],
+            completion_contract: null,
+            workspace_access: "READ_ONLY",
+          },
+        });
+      };
+      await invoke(EngineeringStage.PROGRAM_DESIGN);
+      expect(await invoke(EngineeringStage.SLICE_PLANNING)).toMatchObject({
+        status: "COMPLETED",
+        modelCalls: 1,
+        evidence: {
+          slice: {
+            activeSliceId: null,
+            expectedSliceId: "slice-1",
+            directive: "STOP",
           },
         },
       });
@@ -2735,7 +3248,11 @@ it("binds a structured stage to its server-owned Bedrock schema", async () => {
   const transport = new FakeTransport([
     { model: config.model, content: [{ type: "json", value: artifact }] },
   ]);
-  const executor = createBedrockEngineeringStageExecutor({ transport, config });
+  const executor = createBedrockEngineeringStageExecutor({
+    transport,
+    config,
+    slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+  });
   const result = await executor.execute({
     binding: {
       caseId: "case-1",
@@ -2747,6 +3264,8 @@ it("binds a structured stage to its server-owned Bedrock schema", async () => {
     },
     objective: "bounded slice",
     context: manifest(EngineeringStage.SLICE_PLANNING),
+    orderedArtifacts: [],
+    processClass: "SMALL",
   });
   expect(result).toEqual({ kind: "ARTIFACT", artifact, modelCalls: 1 });
   expect(transport.requests).toHaveLength(1);
@@ -2756,6 +3275,159 @@ it("binds a structured stage to its server-owned Bedrock schema", async () => {
       .map((content) => (content.type === "text" ? content.text : ""))
       .join("\n"),
   ).toContain("Execute only engineering stage SLICE_PLANNING");
+});
+
+it.each([
+  ["MEDIUM", 1, 2],
+  ["LARGE_OR_HIGH_RISK", 2, 3],
+] as const)(
+  "requires the code-owned minimum blueprint count for %s",
+  (processClass, count, minimum) => {
+    const design = currentProgramDesignArtifact({ count });
+    if (design.artifact_kind !== "ProgramDesign" || design.schema_version !== 2) {
+      throw new Error("current ProgramDesign fixture mismatch");
+    }
+    expect(() =>
+      assertEngineeringProgramDesignBlueprints({
+        design,
+        processClass,
+        constraints: SLICE_PLANNING_CONSTRAINTS,
+      }),
+    ).toThrow(`requires at least ${minimum} blueprints`);
+  },
+);
+
+it("rejects a blueprint that exceeds the code-owned per-slice write-root limit", () => {
+  const design = currentProgramDesignArtifact({ count: 2 });
+  if (design.artifact_kind !== "ProgramDesign" || design.schema_version !== 2) {
+    throw new Error("current ProgramDesign fixture mismatch");
+  }
+  const broad = engineeringArtifact.parse({
+    ...design,
+    slice_blueprints: design.slice_blueprints.map((blueprint, index) =>
+      index === 0
+        ? {
+            ...blueprint,
+            allowed_paths: [
+              "apps/agent-worker/src/a",
+              "apps/agent-worker/src/b",
+              "apps/agent-worker/src/c",
+              "apps/agent-worker/src/d",
+              "apps/agent-worker/src/e",
+            ],
+            test_paths: ["apps/agent-worker/src/a"],
+          }
+        : blueprint,
+    ),
+  });
+  if (broad.artifact_kind !== "ProgramDesign" || broad.schema_version !== 2) {
+    throw new Error("broad ProgramDesign fixture mismatch");
+  }
+  expect(() =>
+    assertEngineeringProgramDesignBlueprints({
+      design: broad,
+      processClass: "MEDIUM",
+      constraints: SLICE_PLANNING_CONSTRAINTS,
+    }),
+  ).toThrow("exceeds the 4-root write limit");
+});
+
+it("binds FIRST/EACH/LAST gates to the exact code-owned blueprint positions", () => {
+  const constraints = {
+    allowedPaths: WRITE_POLICY.write_path_allowlist,
+    allowedTestPaths: WRITE_POLICY.write_path_allowlist,
+    requiredGateIds: ["first", "each", "last"],
+    requiredGateSchedules: {
+      first: "FIRST_SLICE" as const,
+      each: "EACH_SLICE" as const,
+      last: "LAST_SLICE" as const,
+    },
+  };
+  const scheduled = currentProgramDesignArtifact({
+    count: 3,
+    gateIdsByIndex: [["first", "each"], ["each"], ["each", "last"]],
+  });
+  if (scheduled.artifact_kind !== "ProgramDesign" || scheduled.schema_version !== 2) {
+    throw new Error("scheduled ProgramDesign fixture mismatch");
+  }
+  expect(() =>
+    assertEngineeringProgramDesignBlueprints({
+      design: scheduled,
+      processClass: "LARGE_OR_HIGH_RISK",
+      constraints,
+    }),
+  ).not.toThrow();
+
+  expect(() =>
+    assertEngineeringProgramDesignBlueprints({
+      design: {
+        ...scheduled,
+        slice_blueprints: scheduled.slice_blueprints.map((blueprint) => ({
+          ...blueprint,
+          gate_ids: ["first", "each", "last"],
+        })),
+      },
+      processClass: "LARGE_OR_HIGH_RISK",
+      constraints,
+    }),
+  ).toThrow(/exact scheduled required gates/);
+});
+
+it("replaces model-authored blueprint gate IDs with the exact code-owned schedule", async () => {
+  const constraints = {
+    allowedPaths: WRITE_POLICY.write_path_allowlist,
+    allowedTestPaths: WRITE_POLICY.write_path_allowlist,
+    requiredGateIds: ["first", "each", "last"],
+    requiredGateSchedules: {
+      first: "FIRST_SLICE" as const,
+      each: "EACH_SLICE" as const,
+      last: "LAST_SLICE" as const,
+    },
+  };
+  const modelDesign = currentProgramDesignArtifact({
+    count: 3,
+    gateIdsByIndex: [
+      ["first", "each", "last"],
+      ["first", "each", "last"],
+      ["first", "each", "last"],
+    ],
+  });
+  const config = createRuntimeConfig({
+    model: { provider: "bedrock", model_id: "test-model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 2, maxCalls: 2 },
+  });
+  const transport = new FakeTransport([
+    { model: config.model, content: [{ type: "json", value: modelDesign }] },
+  ]);
+  const executor = createBedrockEngineeringStageExecutor({
+    transport,
+    config,
+    slicePlanningConstraints: constraints,
+  });
+  const result = await executor.execute({
+    binding: {
+      caseId: "case-1",
+      workUnitId: "unit-1",
+      runId: "run-1",
+      checkpointRevision: 0,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      attempt: 1,
+    },
+    objective: "scheduled slices",
+    context: manifest(EngineeringStage.PROGRAM_DESIGN),
+    orderedArtifacts: [],
+    processClass: "LARGE_OR_HIGH_RISK",
+  });
+  expect(result.kind).toBe("ARTIFACT");
+  if (result.kind !== "ARTIFACT" || result.artifact.artifact_kind !== "ProgramDesign") {
+    throw new Error("expected ProgramDesign artifact");
+  }
+  expect(result.artifact.slice_blueprints.map((blueprint) => blueprint.gate_ids)).toEqual([
+    ["first", "each"],
+    ["each"],
+    ["each", "last"],
+  ]);
 });
 
 it("creates a fresh tools-disabled Bedrock pre-commit session", async () => {
@@ -2805,4 +3477,5 @@ it("creates a fresh tools-disabled Bedrock pre-commit session", async () => {
   expect(factory.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(captured).toHaveLength(1);
   expect(captured[0]).toMatchObject({ tools: [] });
+  expect(JSON.stringify(captured[0])).toContain("one contiguous verbatim quote");
 });

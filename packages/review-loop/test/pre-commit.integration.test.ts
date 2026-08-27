@@ -79,6 +79,7 @@ function session(
     tools?: readonly string[];
     linesExamined?: number;
     summary?: string;
+    evidence?: string;
   } = {},
 ): PreCommitReviewSession {
   return Object.freeze({
@@ -103,7 +104,7 @@ function session(
                     severity: input.severity,
                     summary: input.summary ?? "Authorization was widened by this exact line.",
                     location: { relative_path: "src/auth.ts", line: 1 },
-                    evidence: "export const allowed = true;",
+                    evidence: input.evidence ?? "export const allowed = true;",
                     required_fix: "Restore the denied authorization default.",
                   },
                 ],
@@ -165,6 +166,24 @@ describe("fresh pre-commit review boundary", () => {
       expect(result.blockingFindingIds[0]).toBe(stableId);
       expect(result.blockingFindingIds[0]).not.toMatch(/blocker|high|medium|real/iu);
     }
+  });
+
+  it("downgrades a blocking finding whose model evidence is absent from the actual patch", async () => {
+    const result = await execute({
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        evidence: "a paraphrase that is not present in the patch",
+      }),
+    });
+
+    expect(result.readiness).toBe(ReviewReadiness.READY);
+    expect(result.blockingFindingIds).toEqual([]);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        severity: ReviewSeverity.LOW,
+        summary: "Reviewer finding was not anchored in the actual patch.",
+      }),
+    ]);
   });
 
   it("fails closed for exposed tools, reused sessions, zero calls and zero examination", async () => {

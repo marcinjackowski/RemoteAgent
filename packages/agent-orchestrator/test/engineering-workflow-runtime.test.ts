@@ -583,6 +583,58 @@ describe("SupervisorRuntime engineering stage driver", () => {
     expect(store.state.completion?.status).toBe("COMPLETED");
   });
 
+  it("corrects a failed required gate before review without replaying slice planning", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const original = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await original(input);
+      if (result.status !== "COMPLETED") return result;
+      const failedGate =
+        input.binding.stage === EngineeringStage.GATE_EXECUTION && input.binding.attempt === 1;
+      const afterReview =
+        input.binding.stage === EngineeringStage.SLICE_REVIEW ||
+        input.binding.stage === EngineeringStage.MEMORY_PROJECTION ||
+        input.binding.stage === EngineeringStage.FINAL_VERIFICATION ||
+        input.binding.stage === EngineeringStage.LOCAL_COMMIT;
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          structuralState: {
+            ...result.evidence.structuralState,
+            failedGateIds: failedGate ? ["compile"] : [],
+          },
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: afterReview ? ["slice-1"] : [],
+            directive: failedGate ? "CORRECT_SLICE" : afterReview ? "COMPLETE" : "CONTINUE",
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+
+    expect(
+      port.bindings
+        .filter((binding) => binding.stage === EngineeringStage.SLICE_PLANNING)
+        .map((binding) => binding.attempt),
+    ).toEqual([1]);
+    expect(
+      port.bindings
+        .filter((binding) => binding.stage === EngineeringStage.SLICE_IMPLEMENTATION)
+        .map((binding) => binding.attempt),
+    ).toEqual([1, 2]);
+    expect(
+      port.bindings
+        .filter((binding) => binding.stage === EngineeringStage.SLICE_REVIEW)
+        .map((binding) => binding.attempt),
+    ).toEqual([2]);
+    expect(store.state.completion?.status).toBe("COMPLETED");
+  });
+
   it("stops a correction before another write stage can change slice identity", async () => {
     const store = new MemoryRuntimeStore();
     const port = new MemoryStagePort("SMALL");

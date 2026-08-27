@@ -86,7 +86,7 @@ describe("engineering stage registry", () => {
     }
     expect(engineeringStageRegistry.GATE_EXECUTION).toMatchObject({
       completion_contract: null,
-      output_artifacts: ["EngineeringEvidenceBundle"],
+      output_artifacts: ["EngineeringEvidenceBundle", "EngineeringGateFailure"],
     });
   });
 

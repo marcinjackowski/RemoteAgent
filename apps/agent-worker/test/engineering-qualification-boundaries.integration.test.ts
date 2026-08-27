@@ -93,10 +93,11 @@ class BoundaryTransport implements RuntimeTransport {
         source_digest: sha("1"),
       });
     }
-    if (name === "EngineeringProgramDesign_v1") {
+    if (name === "EngineeringProgramDesign_v2") {
       const sliceIds = this.scenario.sliceIds ?? ["slice-1"];
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "ProgramDesign",
         call_flow: [...sliceIds],
         file_tree_delta: ["src/change.ts"],
@@ -104,20 +105,32 @@ class BoundaryTransport implements RuntimeTransport {
         uncertainty_review: ["review every slice independently"],
         expected_tests: ["qualification"],
         slice_order: [...sliceIds],
+        slice_blueprints: sliceIds.map((sliceId) => ({
+          slice_id: sliceId,
+          objective: "exercise the exact production boundary",
+          observable_result: "the durable terminal or accepted correction is exact",
+          allowed_paths: ["src"],
+          test_paths: ["src"],
+          gate_ids: [...(this.scenario.gateIds ?? ["qualification"])],
+          inspection_method: "inspect immutable attempts and receipts",
+          stop_condition: "server-derived review or terminal state is durable",
+        })),
         source_digest: sha("2"),
       });
     }
-    if (name === "EngineeringSliceContract_v1") {
+    if (name === "EngineeringSliceContract_v2") {
       const sliceId = (this.scenario.sliceIds ?? ["slice-1"])[this.planningCalls];
       if (sliceId === undefined) throw new Error("unexpected extra slice planning attempt");
       this.planningCalls += 1;
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "SliceContract",
         slice_id: sliceId,
         objective: "exercise the exact production boundary",
         observable_result: "the durable terminal or accepted correction is exact",
         allowed_paths: ["src"],
+        test_paths: ["src"],
         gate_ids: [...(this.scenario.gateIds ?? ["qualification"])],
         inspection_method: "inspect immutable attempts and receipts",
         stop_condition: "server-derived review or terminal state is durable",
@@ -127,17 +140,34 @@ class BoundaryTransport implements RuntimeTransport {
       const content = this.scenario.contents[this.implementationAttempts];
       if (content === undefined) throw new Error("unexpected extra implementation attempt");
       if (!this.#awaitingImplementationReport) {
+        const priorContent = this.scenario.contents[this.implementationAttempts - 1];
+        if (priorContent === content) {
+          this.implementationAttempts += 1;
+          return json({ schema_version: 1, changed_files: [] });
+        }
         this.#awaitingImplementationReport = true;
+        const tool =
+          priorContent === undefined
+            ? {
+                id: `write-${String(this.implementationAttempts + 1)}`,
+                name: "write",
+                input: { relative_path: "src/change.ts", content },
+              }
+            : {
+                id: `patch-${String(this.implementationAttempts + 1)}`,
+                name: "patch",
+                input: {
+                  replacement_files: [
+                    {
+                      relative_path: "src/change.ts",
+                      replacements: [{ old_content: priorContent, new_content: content }],
+                    },
+                  ],
+                },
+              };
         return {
           model: qualificationModel,
-          content: [
-            {
-              type: "tool-use",
-              id: `write-${String(this.implementationAttempts + 1)}`,
-              name: "write",
-              input: { relative_path: "src/change.ts", content },
-            },
-          ],
+          content: [{ type: "tool-use", ...tool }],
         };
       }
       this.#awaitingImplementationReport = false;
@@ -355,7 +385,7 @@ describeIntegration(
       },
     );
 
-    it("does not convert another typed review contract failure into NO_PROGRESS", async () => {
+    it("does not let an unsubstantiated review finding block a gate-verified slice", async () => {
       const fixture = await createEngineeringQualificationFixture({ id: "review-contract-error" });
       active.push(fixture);
       const transport = new BoundaryTransport(
@@ -372,9 +402,7 @@ describeIntegration(
         policy: { riskFacts: smallRiskFacts },
       });
 
-      await expect(production.handler(lease, async () => undefined)).rejects.toThrow(
-        /did not complete its work/,
-      );
+      await expect(production.handler(lease, async () => undefined)).resolves.toBeUndefined();
       expect(transport.reviewAttempts).toBe(1);
       const terminalArtifacts = await fixture.db.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM engineering_artifact_revisions
@@ -387,7 +415,7 @@ describeIntegration(
           WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt'`,
         [fixture.ids.runId],
       );
-      expect(commits.rows[0]?.count).toBe("0");
+      expect(commits.rows[0]?.count).toBe("1");
     });
 
     it("opens a fresh reviewer when a new slice matches an older rejected patch", async () => {
@@ -416,7 +444,7 @@ describeIntegration(
 
       await production.handler(lease, async () => undefined);
 
-      expect(transport.planningCalls).toBe(2);
+      expect(transport.planningCalls).toBe(0);
       expect(transport.implementationAttempts).toBe(3);
       expect(transport.reviewAttempts).toBe(3);
       const artifacts = await artifactAttempts(fixture);
@@ -656,7 +684,13 @@ describeIntegration(
       active.push(fixture);
       const transport = new BoundaryTransport(
         { caseId: fixture.ids.caseId, runId: fixture.ids.runId },
-        { contents: ["export const value = 'not-accepted';\n"], reviews: ["PASS"] },
+        {
+          contents: [
+            "export const value = 'not-accepted';\n",
+            "export const value = 'not-accepted';\n",
+          ],
+          reviews: [],
+        },
       );
       const lease = await fixture.claimImplementer();
       const production = fixture.makeProduction(lease, {
@@ -672,10 +706,11 @@ describeIntegration(
       );
       expect(completion.rows[0]).toMatchObject({
         status: "BLOCKED",
-        summary: expect.stringContaining("required gates did not pass"),
+        summary: expect.stringContaining("NO_PROGRESS"),
       });
       await assertNoAcceptedWrite(fixture);
       expect(transport.reviewAttempts).toBe(0);
+      expect(transport.implementationAttempts).toBe(2);
     });
 
     it.each([

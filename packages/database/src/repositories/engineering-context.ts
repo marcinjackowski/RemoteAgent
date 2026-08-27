@@ -498,7 +498,7 @@ export class EngineeringContextRepository {
       for (const row of artifacts.rows) {
         const parsedArtifact = engineeringArtifact.safeParse(row.payload);
         if (!parsedArtifact.success) dataError();
-        // These two artifacts are stage-local server provenance consumed through orderedArtifacts.
+        // These artifacts are stage-local server provenance consumed through orderedArtifacts.
         // ContextManifest is also complete in the immutable stage intent. Rendering either into
         // the next prompt would recursively duplicate evidence. The closed list is intentional:
         // every other unsupported artifact kind remains corruption.
@@ -514,6 +514,12 @@ export class EngineeringContextRepository {
             row.stage === "SLICE_IMPLEMENTATION" &&
             parsedArtifact.data.attempt === row.stage_attempt &&
             parsedArtifact.data.work_unit_id === authority.work_unit_id &&
+            parsedArtifact.data.revision === row.checkpoint_revision &&
+            row.checkpoint_revision === authority.checkpoint_revision) ||
+          (row.artifact_kind === "GateFailure" &&
+            parsedArtifact.data.artifact_kind === "GateFailure" &&
+            row.stage === "GATE_EXECUTION" &&
+            parsedArtifact.data.attempt === row.stage_attempt &&
             parsedArtifact.data.revision === row.checkpoint_revision &&
             row.checkpoint_revision === authority.checkpoint_revision)
         ) {

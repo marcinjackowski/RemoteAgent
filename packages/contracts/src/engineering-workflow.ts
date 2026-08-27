@@ -78,6 +78,27 @@ const engineeringExecutionConfigV2PolicyProjection = z.strictObject({
   executable_allowlist: z.array(z.string().trim().min(1)),
 });
 
+const engineeringExecutionConfigV3PolicyProjection = z.strictObject({
+  schema_version: z.literal(3),
+  workspace_root: z.string().trim().min(1),
+  baseline_root: z.string().trim().min(1),
+  artifact_root: z.string().trim().min(1),
+  repository: z.strictObject({
+    repository_id: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(/^[A-Za-z0-9._-]+$/u),
+    source_path: z.string().trim().min(1),
+    base_branch: z.string().trim().min(1),
+    write_path_allowlist: z.array(relativeRepositoryPath).min(1).max(256),
+    test_path_allowlist: z.array(relativeRepositoryPath).min(1).max(256),
+  }),
+  gates: z.array(z.unknown()),
+  executable_allowlist: z.array(z.string().trim().min(1)),
+  generators: z.array(z.unknown()).optional(),
+});
+
 function uniqueSorted(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
 }
@@ -139,6 +160,19 @@ export function engineeringWriteDeploymentPolicyFromExecutionConfigV2(
   input: unknown,
 ): Readonly<EngineeringWriteDeploymentPolicyV1> {
   const config = engineeringExecutionConfigV2PolicyProjection.parse(input);
+  return normalizeEngineeringWriteDeploymentPolicyV1({
+    schema_version: 1,
+    purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+    repository_id: config.repository.repository_id,
+    write_path_allowlist: config.repository.write_path_allowlist,
+  });
+}
+
+/** V3 adds a code-owned test-root subset without changing the write authorization scope. */
+export function engineeringWriteDeploymentPolicyFromExecutionConfigV3(
+  input: unknown,
+): Readonly<EngineeringWriteDeploymentPolicyV1> {
+  const config = engineeringExecutionConfigV3PolicyProjection.parse(input);
   return normalizeEngineeringWriteDeploymentPolicyV1({
     schema_version: 1,
     purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
@@ -481,7 +515,7 @@ export const engineeringSystemDesign = versionedContract({
   source_digest: sha256Digest,
 });
 
-const programDesignShape = {
+const programDesignV1Shape = {
   artifact_kind: z.literal("ProgramDesign"),
   ...artifactBase,
   call_flow: z.array(nonEmptyText).min(1).max(256),
@@ -492,7 +526,7 @@ const programDesignShape = {
   slice_order: z.array(idString).min(1).max(256),
   source_digest: sha256Digest,
 };
-export const engineeringProgramDesign = versionedContract(programDesignShape).superRefine(
+const engineeringProgramDesignV1 = versionedContract(programDesignV1Shape).superRefine(
   (design, ctx) => {
     if (new Set(design.slice_order).size !== design.slice_order.length)
       ctx.addIssue({
@@ -512,7 +546,88 @@ export const engineeringGateId = gateId;
 const noCommand = (value: string) =>
   !/^\s*(?:\$|sudo\b|(?:npm|pnpm|yarn|bun|git|make|xcodebuild|cargo|go)\b)/i.test(value);
 
-export const engineeringSliceContract = versionedContract({
+function pathWithinRoot(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+function addUniqueListIssue(values: readonly string[], path: string, ctx: z.RefinementCtx): void {
+  if (new Set(values).size !== values.length) {
+    ctx.addIssue({ code: "custom", path: [path], message: `${path} must contain unique values` });
+  }
+}
+
+function validateSliceScope(
+  value: Readonly<{
+    allowed_paths: readonly string[];
+    test_paths: readonly string[];
+    gate_ids: readonly string[];
+  }>,
+  ctx: z.RefinementCtx,
+): void {
+  addUniqueListIssue(value.allowed_paths, "allowed_paths", ctx);
+  addUniqueListIssue(value.test_paths, "test_paths", ctx);
+  addUniqueListIssue(value.gate_ids, "gate_ids", ctx);
+  for (const [index, testPath] of value.test_paths.entries()) {
+    if (!value.allowed_paths.some((root) => pathWithinRoot(testPath, root))) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["test_paths", index],
+        message: "test path must be contained by an allowed path",
+      });
+    }
+  }
+}
+
+export const engineeringSliceBlueprint = valueObject({
+  slice_id: idString,
+  objective: nonEmptyText,
+  observable_result: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((value) => value.trim().length > 0, "must not be blank"),
+  allowed_paths: z.array(relativeRepositoryPath).min(1).max(16),
+  test_paths: z.array(relativeRepositoryPath).min(1).max(16),
+  gate_ids: z.array(gateId).min(1).max(64),
+  inspection_method: nonEmptyText.refine(noCommand, "must identify a method, not a raw command"),
+  stop_condition: nonEmptyText.refine(noCommand, "must identify a condition, not a raw command"),
+}).superRefine(validateSliceScope);
+
+export const engineeringProgramDesign = z
+  .strictObject({
+    schema_version: z.literal(2),
+    ...programDesignV1Shape,
+    slice_blueprints: z.array(engineeringSliceBlueprint).min(1).max(32),
+  })
+  .superRefine((design, ctx) => {
+    if (new Set(design.slice_order).size !== design.slice_order.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["slice_order"],
+        message: "slice_order must contain unique slice identities",
+      });
+    }
+    const blueprintOrder = design.slice_blueprints.map((blueprint) => blueprint.slice_id);
+    if (new Set(blueprintOrder).size !== blueprintOrder.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["slice_blueprints"],
+        message: "slice blueprints must contain unique slice identities",
+      });
+    }
+    if (
+      blueprintOrder.length !== design.slice_order.length ||
+      blueprintOrder.some((sliceId, index) => sliceId !== design.slice_order[index])
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["slice_order"],
+        message: "slice_order must exactly match ordered slice_blueprints",
+      });
+    }
+  });
+
+const sliceContractV1Shape = {
   artifact_kind: z.literal("SliceContract"),
   ...artifactBase,
   slice_id: idString,
@@ -526,7 +641,16 @@ export const engineeringSliceContract = versionedContract({
   gate_ids: z.array(gateId).min(1).max(64),
   inspection_method: nonEmptyText.refine(noCommand, "must identify a method, not a raw command"),
   stop_condition: nonEmptyText.refine(noCommand, "must identify a condition, not a raw command"),
-});
+};
+const engineeringSliceContractV1 = versionedContract(sliceContractV1Shape);
+
+export const engineeringSliceContract = z
+  .strictObject({
+    schema_version: z.literal(2),
+    ...sliceContractV1Shape,
+    test_paths: z.array(relativeRepositoryPath).min(1).max(16),
+  })
+  .superRefine(validateSliceScope);
 
 export const engineeringContextManifest = versionedContract({
   artifact_kind: z.literal("ContextManifest"),
@@ -602,6 +726,59 @@ export const engineeringEvidenceBundle = versionedContract({
       }),
     )
     .max(256),
+});
+
+const engineeringGateFailureDiagnostic = valueObject({
+  gate_id: idString,
+  outcome: z.enum(["FAILED", "TIMED_OUT", "INFRASTRUCTURE"]),
+  log_digest: sha256Digest.nullable(),
+  trust: z.literal(TrustLevel.UNTRUSTED_DATA),
+  excerpt: z.string().trim().min(1).max(16_384),
+});
+
+/** Durable, bounded feedback for a retryable required-gate assertion failure. */
+export const engineeringGateFailure = versionedContract({
+  artifact_kind: z.literal("GateFailure"),
+  ...artifactBase,
+  authority: z.literal("SERVER_OWNED"),
+  slice_id: idString,
+  attempt: z.int().positive(),
+  tree_digest: sha256Digest,
+  diff_digest: sha256Digest,
+  context_digest: sha256Digest,
+  config_digest: sha256Digest,
+  blocking_gate_ids: z.array(idString).min(1).max(128),
+  receipt_ids: z.array(idString).min(1).max(256),
+  decision_ids: z.array(idString).max(256),
+  diagnostics: z.array(engineeringGateFailureDiagnostic).min(1).max(8),
+}).superRefine((failure, ctx) => {
+  for (const [field, values] of [
+    ["blocking_gate_ids", failure.blocking_gate_ids],
+    ["receipt_ids", failure.receipt_ids],
+    ["decision_ids", failure.decision_ids],
+  ] as const) {
+    if (new Set(values).size !== values.length) {
+      ctx.addIssue({ code: "custom", path: [field], message: `${field} must be unique` });
+    }
+  }
+  if (
+    new Set(failure.diagnostics.map((item) => item.gate_id)).size !== failure.diagnostics.length
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["diagnostics"],
+      message: "gate diagnostics must be unique",
+    });
+  }
+  for (const diagnostic of failure.diagnostics) {
+    if (!failure.blocking_gate_ids.includes(diagnostic.gate_id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["diagnostics"],
+        message: "diagnostic gate must be blocking",
+      });
+    }
+  }
 });
 
 const baselineWorkspaceReference = valueObject({
@@ -828,9 +1005,11 @@ export const engineeringTerminalReason = versionedContract({
 export type EngineeringOutcomeContract = z.infer<typeof engineeringOutcomeContract>;
 export type EngineeringSystemDesign = z.infer<typeof engineeringSystemDesign>;
 export type EngineeringProgramDesign = z.infer<typeof engineeringProgramDesign>;
+export type EngineeringSliceBlueprint = z.infer<typeof engineeringSliceBlueprint>;
 export type EngineeringSliceContract = z.infer<typeof engineeringSliceContract>;
 export type EngineeringContextManifest = z.infer<typeof engineeringContextManifest>;
 export type EngineeringEvidenceBundle = z.infer<typeof engineeringEvidenceBundle>;
+export type EngineeringGateFailure = z.infer<typeof engineeringGateFailure>;
 export type EngineeringSliceImplementationReceipt = z.infer<
   typeof engineeringSliceImplementationReceipt
 >;
@@ -841,15 +1020,22 @@ export type EngineeringVerificationDecision = z.infer<typeof engineeringVerifica
 export type EngineeringLocalCommitReceipt = z.infer<typeof engineeringLocalCommitReceipt>;
 export type EngineeringTerminalReason = z.infer<typeof engineeringTerminalReason>;
 
-export const engineeringArtifact = z.discriminatedUnion("artifact_kind", [
+/**
+ * Durable artifacts retain the two superseded v1 design/slice revisions for recovery only.
+ * New model boundaries and schema publication use the strict v2 exports above.
+ */
+export const engineeringArtifact = z.union([
   engineeringOutcomeContract,
   engineeringPhase,
   engineeringSystemDesign,
+  engineeringProgramDesignV1,
   engineeringProgramDesign,
+  engineeringSliceContractV1,
   engineeringSliceContract,
   engineeringContextManifest,
   engineeringSliceImplementationReceipt,
   engineeringEvidenceBundle,
+  engineeringGateFailure,
   engineeringMemoryUpdate,
   engineeringDesignDecision,
   engineeringReviewDecision,
@@ -879,7 +1065,11 @@ export const engineeringArtifactKindsByStage = Object.freeze({
     "SliceImplementationReceipt",
     "TerminalReason",
   ),
-  [EngineeringStage.GATE_EXECUTION]: artifactKinds("EvidenceBundle", "TerminalReason"),
+  [EngineeringStage.GATE_EXECUTION]: artifactKinds(
+    "EvidenceBundle",
+    "GateFailure",
+    "TerminalReason",
+  ),
   [EngineeringStage.SLICE_REVIEW]: artifactKinds("ReviewDecision", "TerminalReason"),
   [EngineeringStage.MEMORY_PROJECTION]: artifactKinds("MemoryUpdate"),
   [EngineeringStage.FINAL_VERIFICATION]: artifactKinds("VerificationDecision"),

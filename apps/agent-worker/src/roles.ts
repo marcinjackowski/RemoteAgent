@@ -124,8 +124,8 @@ export function roleConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Runtime
   return createRuntimeConfig({
     model: {
       provider: env.RA_MODEL_PROVIDER ?? "bedrock",
-      // `us.` inference profile: the bare model id fails on-demand (Bedrock ValidationException).
-      model_id: env.RA_MODEL_ID ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      // Operator-selected `us.` inference profile; bare model ids are not used by this route.
+      model_id: env.RA_MODEL_ID ?? "us.anthropic.claude-opus-4-8",
     },
     timeoutMs: timeoutMs === undefined ? 120_000 : Number.parseInt(timeoutMs, 10),
     toolLimits: { maxIterations: 16, maxCalls: 64 },

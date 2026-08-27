@@ -414,8 +414,8 @@ describeIntegration(
       const transport = new EngineeringQualificationTransport({
         caseId: fixture.ids.caseId,
         runId: proposal.run_id,
-        sliceIds: ["slice-1"],
-        implementationPaths: ["src/ingress.ts"],
+        sliceIds: ["slice-1", "slice-2", "slice-3"],
+        implementationPaths: ["src/ingress-1.ts", "src/ingress-2.ts", "src/ingress-3.ts"],
         processClass: "LARGE_OR_HIGH_RISK",
       });
       const identity = {
@@ -448,6 +448,7 @@ describeIntegration(
       const driftedPolicy = {
         ...fixture.config,
         writePathAllowlist: ["foreign-path"],
+        testPathAllowlist: ["foreign-path"],
         writeDeploymentPolicy: {
           ...fixture.config.writeDeploymentPolicy,
           write_path_allowlist: ["foreign-path"],

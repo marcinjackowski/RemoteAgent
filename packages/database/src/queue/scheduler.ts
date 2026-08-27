@@ -103,7 +103,7 @@ export class Scheduler {
     try {
       // The handler may renew its lease during long work (audit MEDIUM-07).
       const heartbeat = async (): Promise<void> => {
-        await jobs.heartbeat(db, lease);
+        await jobs.heartbeat(db, lease, this.deps.claim?.leaseMs ?? 30_000);
       };
       await handler(lease, heartbeat);
       handlerSucceeded = true;

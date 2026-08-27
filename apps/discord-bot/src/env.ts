@@ -19,6 +19,7 @@ import { isAbsolute } from "node:path";
 
 import {
   engineeringWriteDeploymentPolicyFromExecutionConfigV2,
+  engineeringWriteDeploymentPolicyFromExecutionConfigV3,
   type EngineeringWriteDeploymentPolicyV1,
 } from "@remoteagent/contracts";
 import { Database } from "@remoteagent/database";
@@ -128,6 +129,14 @@ export async function engineeringWritePolicyFromEnv(
   if (canonicalPath !== path)
     throw new DiscordEnvError("RA_ENGINEERING_CONFIG_PATH must be canonical");
   const decoded: unknown = JSON.parse(await readFile(canonicalPath, "utf8"));
+  if (
+    typeof decoded === "object" &&
+    decoded !== null &&
+    "schema_version" in decoded &&
+    decoded.schema_version === 3
+  ) {
+    return engineeringWriteDeploymentPolicyFromExecutionConfigV3(decoded);
+  }
   return engineeringWriteDeploymentPolicyFromExecutionConfigV2(decoded);
 }
 

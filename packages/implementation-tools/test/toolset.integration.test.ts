@@ -43,9 +43,12 @@ import { createTestDatabase } from "../../database/test/harness.js";
 import { describeIntegration, ensurePostgres } from "../../database/test/integration-base.js";
 import {
   BOUNDED_DISCOVERY_BUDGET_EXHAUSTED,
+  BOUNDED_PATCH_REQUIRES_EXACT_REPLACEMENTS,
+  BOUNDED_WRITE_REQUIRES_NEW_FILE,
   OperationLedgerRepository,
   OperationStatus,
   TOOLSET_PATH_PROTECTED,
+  TEST_FIRST_MUTATION_REQUIRED,
   ToolKind,
   ToolOutcome,
   createBoundedImplementationToolset,
@@ -625,6 +628,175 @@ describeIntegration(
     });
 
     describe("criterion: implementation-attempt discovery is bounded", () => {
+      it("refuses a production-first mutation before filesystem or ledger effects using exact path segments", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/test"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `test-first-${tool}-${String(sequence)}`,
+        });
+
+        const result = await bounded.write({
+          relative_path: "src/testing/production.ts",
+          content: "export const production = true;\n",
+        });
+
+        expect(failureOf(result)).toBe(TEST_FIRST_MUTATION_REQUIRED);
+        expect(body(result)).toMatchObject({ failure_code: TEST_FIRST_MUTATION_REQUIRED });
+        expect(await exists(join(root, "src", "testing"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "test-first-write-0")).toBeNull();
+      });
+
+      it("does not unlock production after a failed test write", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/tests"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `failed-first-${tool}-${String(sequence)}`,
+        });
+
+        const failedTest = await bounded.write({
+          relative_path: "src/tests/missing/app.test.ts",
+          content: "expect(true).toBe(true);\n",
+        });
+        expect(failedTest.outcome).toBe(ToolOutcome.FAILED);
+
+        const production = await bounded.write({
+          relative_path: "src/production.ts",
+          content: "export const production = true;\n",
+        });
+        expect(failureOf(production)).toBe(TEST_FIRST_MUTATION_REQUIRED);
+        expect(await exists(join(root, "src", "production.ts"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "failed-first-write-1")).toBeNull();
+      });
+
+      it("does not let a successful test-root mkdir stand in for a changed test file", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/tests"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `mkdir-first-${tool}-${String(sequence)}`,
+        });
+
+        const directory = await bounded.mkdir({
+          relative_path: "src/tests/new-suite",
+          recursive: true,
+        });
+        expect(directory.outcome).toBe(ToolOutcome.SUCCEEDED);
+
+        const refusedProduction = await bounded.write({
+          relative_path: "src/production.ts",
+          content: "export const production = true;\n",
+        });
+        expect(failureOf(refusedProduction)).toBe(TEST_FIRST_MUTATION_REQUIRED);
+        expect(await exists(join(root, "src", "production.ts"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "mkdir-first-write-1")).toBeNull();
+
+        const test = await bounded.write({
+          relative_path: "src/tests/new-suite/production.test.ts",
+          content: "expect(true).toBe(true);\n",
+        });
+        expect(test.outcome).toBe(ToolOutcome.SUCCEEDED);
+
+        const production = await bounded.write({
+          relative_path: "src/production.ts",
+          content: "export const production = true;\n",
+        });
+        expect(production.outcome).toBe(ToolOutcome.SUCCEEDED);
+      });
+
+      it("unlocks production only after a successful exact test patch and never resets", async () => {
+        await writeFile(join(root, "src", "app.test.ts"), "expect(value).toBe(1);\n");
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/app.test.ts"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `unlock-${tool}-${String(sequence)}`,
+        });
+
+        const testPatch = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.test.ts",
+              replacements: [{ old_content: "toBe(1)", new_content: "toBe(2)" }],
+            },
+          ],
+        });
+        expect(testPatch.outcome).toBe(ToolOutcome.SUCCEEDED);
+
+        const production = await bounded.write({
+          relative_path: "src/production.ts",
+          content: "export const production = 2;\n",
+        });
+        expect(production.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await readFile(join(root, "src", "production.ts"), "utf8")).toBe(
+          "export const production = 2;\n",
+        );
+      });
+
+      it("refuses complete replacement of an existing file before delegate or ledger", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/app.ts"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `complete-${tool}-${String(sequence)}`,
+        });
+
+        const result = await bounded.patch({
+          files: [{ relative_path: "src/app.ts", content: "truncated\n" }],
+        });
+
+        expect(failureOf(result)).toBe(BOUNDED_PATCH_REQUIRES_EXACT_REPLACEMENTS);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+        expect(await ledger.findUnscoped(db, "complete-patch-0")).toBeNull();
+      });
+
+      it("refuses write on an existing file and preserves its bytes", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `create-only-${tool}-${String(sequence)}`,
+        });
+
+        const result = await bounded.write({
+          relative_path: "src/app.ts",
+          content: "truncated\n",
+        });
+
+        expect(failureOf(result)).toBe(BOUNDED_WRITE_REQUIRES_NEW_FILE);
+        expect(body(result)).toMatchObject({
+          failure_code: BOUNDED_WRITE_REQUIRES_NEW_FILE,
+          next_action: "Use patch.replacement_files with exact old_content for an existing file.",
+        });
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+        expect(await ledger.findUnscoped(db, "create-only-write-0")).toBeNull();
+      });
+
       it("requires mutation after 10 discovery calls and does not reset the budget after a patch", async () => {
         const bounded = await createBoundedImplementationToolset({
           root,
@@ -632,6 +804,7 @@ describeIntegration(
           ledger,
           runTransaction: inTx,
           allowedPaths: ["src"],
+          firstMutationPaths: ["src"],
           beforeMutation: async () => undefined,
           operationIdFor: (tool, sequence) => `bounded-${tool}-${String(sequence)}`,
         });
@@ -663,6 +836,45 @@ describeIntegration(
 
         const stillExhausted = await bounded.read({ relative_path: "src/app.ts" });
         expect(failureOf(stillExhausted)).toBe(BOUNDED_DISCOVERY_BUDGET_EXHAUSTED);
+      });
+
+      it("permits an exact server-owned prefetch plan above the model default within the hard cap", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src"],
+          maxDiscoveryCalls: 13,
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `prefetch-${tool}-${String(sequence)}`,
+        });
+
+        for (let index = 0; index < 13; index += 1) {
+          const result = await bounded.search({ query: `server-plan-${String(index)}` });
+          expect(result.outcome, `prefetch call ${String(index + 1)}`).toBe(ToolOutcome.SUCCEEDED);
+        }
+        const exhausted = await bounded.search({ query: "outside-server-plan" });
+        expect(failureOf(exhausted)).toBe(BOUNDED_DISCOVERY_BUDGET_EXHAUSTED);
+      });
+
+      it("rejects a caller-supplied discovery ceiling outside the code-owned range", async () => {
+        const create = (maxDiscoveryCalls: number) =>
+          createBoundedImplementationToolset({
+            root,
+            identity,
+            ledger,
+            runTransaction: inTx,
+            allowedPaths: ["src"],
+            firstMutationPaths: ["src"],
+            maxDiscoveryCalls,
+            beforeMutation: async () => undefined,
+            operationIdFor: (tool, sequence) => `invalid-${tool}-${String(sequence)}`,
+          });
+
+        await expect(create(0)).rejects.toThrow(/code-owned cap/u);
+        await expect(create(25)).rejects.toThrow(/code-owned cap/u);
       });
     });
   },

@@ -11,10 +11,8 @@ import {
   describeIntegration,
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
-import {
-  createBedrockEngineeringStageExecutor,
-  createBedrockPreCommitReviewSessionFactory,
-} from "../src/engineering-workflow.js";
+import { createBedrockPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
+import { createConfiguredEngineeringStageExecutor } from "../src/engineering-execution.js";
 import { createProductionEngineeringRecoveryCoordinator } from "../src/engineering-recovery.js";
 import {
   createEngineeringQualificationFixture,
@@ -78,9 +76,10 @@ function recoveryCoordinator(
   transport: EngineeringQualificationTransport,
   owner: string,
 ) {
-  const stageExecutor = createBedrockEngineeringStageExecutor({
+  const stageExecutor = createConfiguredEngineeringStageExecutor({
     transport,
-    config: fixture.modelConfig,
+    modelConfig: fixture.modelConfig,
+    executionConfig: fixture.config,
   });
   const reviewer = createBedrockPreCommitReviewSessionFactory({
     transport,
@@ -123,8 +122,8 @@ describeIntegration(
       const transport = new EngineeringQualificationTransport({
         caseId: fixture.ids.caseId,
         runId: fixture.ids.runId,
-        sliceIds: ["slice-one"],
-        implementationPaths: ["src/change.ts"],
+        sliceIds: ["slice-one", "slice-two", "slice-three"],
+        implementationPaths: ["src/change-1.ts", "src/change-2.ts", "src/change-3.ts"],
         processClass: "LARGE_OR_HIGH_RISK",
       });
       const crashed = fixture.makeProduction(original, {
@@ -139,9 +138,10 @@ describeIntegration(
         "UPDATE jobs SET lease_expires_at=now()-interval '1 second' WHERE job_id=$1",
         [original.jobId],
       );
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createConfiguredEngineeringStageExecutor({
         transport,
-        config: fixture.modelConfig,
+        modelConfig: fixture.modelConfig,
+        executionConfig: fixture.config,
       });
       const reviewer = createBedrockPreCommitReviewSessionFactory({
         transport,
@@ -248,13 +248,14 @@ describeIntegration(
       const transport = new EngineeringQualificationTransport({
         caseId: fixture.ids.caseId,
         runId: fixture.ids.runId,
-        sliceIds: ["slice-one"],
-        implementationPaths: ["src/change.ts"],
+        sliceIds: ["slice-one", "slice-two", "slice-three"],
+        implementationPaths: ["src/change-1.ts", "src/change-2.ts", "src/change-3.ts"],
         processClass: "LARGE_OR_HIGH_RISK",
       });
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createConfiguredEngineeringStageExecutor({
         transport,
-        config: fixture.modelConfig,
+        modelConfig: fixture.modelConfig,
+        executionConfig: fixture.config,
       });
       const reviewer = createBedrockPreCommitReviewSessionFactory({
         transport,
@@ -336,8 +337,8 @@ describeIntegration(
       const transport = new EngineeringQualificationTransport({
         caseId: fixture.ids.caseId,
         runId: fixture.ids.runId,
-        sliceIds: ["slice-one"],
-        implementationPaths: ["src/change.ts"],
+        sliceIds: ["slice-one", "slice-two", "slice-three"],
+        implementationPaths: ["src/change-1.ts", "src/change-2.ts", "src/change-3.ts"],
         processClass: "LARGE_OR_HIGH_RISK",
       });
       const crashed = fixture.makeProduction(original, {

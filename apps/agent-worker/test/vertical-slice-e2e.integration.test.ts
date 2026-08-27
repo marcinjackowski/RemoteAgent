@@ -41,11 +41,9 @@ import {
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
 import type { CompiledRoleContext } from "../src/context.js";
+import { createBedrockPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
 import {
-  createBedrockEngineeringStageExecutor,
-  createBedrockPreCommitReviewSessionFactory,
-} from "../src/engineering-workflow.js";
-import {
+  createConfiguredEngineeringStageExecutor,
   createProductionEngineeringRuntimePort,
   type EngineeringExecutionConfig,
 } from "../src/engineering-execution.js";
@@ -91,9 +89,10 @@ class EngineeringScriptTransport implements RuntimeTransport {
         source_digest: sha("1"),
       });
     }
-    if (name === "EngineeringProgramDesign_v1") {
+    if (name === "EngineeringProgramDesign_v2") {
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "ProgramDesign",
         call_flow: ["slice one", "slice two"],
         file_tree_delta: ["src/one.ts", "src/two.ts"],
@@ -101,19 +100,31 @@ class EngineeringScriptTransport implements RuntimeTransport {
         uncertainty_review: ["review every attempt"],
         expected_tests: ["required unit gate"],
         slice_order: ["slice-1", "slice-2"],
+        slice_blueprints: ["slice-1", "slice-2"].map((sliceId) => ({
+          slice_id: sliceId,
+          objective: `implement ${sliceId}`,
+          observable_result: `${sliceId} file exists`,
+          allowed_paths: ["src"],
+          test_paths: ["src"],
+          gate_ids: ["unit"],
+          inspection_method: "inspect durable Git evidence",
+          stop_condition: "fresh review passes",
+        })),
         source_digest: sha("2"),
       });
     }
-    if (name === "EngineeringSliceContract_v1") {
+    if (name === "EngineeringSliceContract_v2") {
       this.#planning += 1;
       const id = this.#planning === 1 ? "slice-1" : "slice-2";
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "SliceContract",
         slice_id: id,
         objective: `implement ${id}`,
         observable_result: `${id} file exists`,
         allowed_paths: ["src"],
+        test_paths: ["src"],
         gate_ids: ["unit"],
         inspection_method: "inspect durable Git evidence",
         stop_condition: "fresh review passes",
@@ -130,16 +141,33 @@ class EngineeringScriptTransport implements RuntimeTransport {
             : index === 1
               ? "good implementation\n"
               : "second slice\n";
+        const tool =
+          index === 1
+            ? {
+                id: `patch-${String(index)}`,
+                name: "patch",
+                input: {
+                  replacement_files: [
+                    {
+                      relative_path: path,
+                      replacements: [
+                        {
+                          old_content: "bad implementation\n",
+                          new_content: "good implementation\n",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              }
+            : {
+                id: `write-${String(index)}`,
+                name: "write",
+                input: { relative_path: path, content },
+              };
         return {
           model,
-          content: [
-            {
-              type: "tool-use",
-              id: `write-${String(index)}`,
-              name: "write",
-              input: { relative_path: path, content },
-            },
-          ],
+          content: [{ type: "tool-use", ...tool }],
         };
       }
       this.#implementationAwaitingReport = false;
@@ -304,6 +332,7 @@ describeIntegration(
         baselineRoot,
         artifactRoot,
         writePathAllowlist: Object.freeze(["src"]),
+        testPathAllowlist: Object.freeze(["src"]),
         writeDeploymentPolicy: Object.freeze({
           schema_version: 1,
           purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
@@ -320,9 +349,10 @@ describeIntegration(
         toolLimits: { maxIterations: 8, maxCalls: 16 },
         retryPolicy: { maxAttempts: 1, baseDelayMs: 0 },
       });
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createConfiguredEngineeringStageExecutor({
         transport,
-        config: modelConfig,
+        modelConfig,
+        executionConfig: config,
       });
       const reviewer = createBedrockPreCommitReviewSessionFactory({
         transport,
@@ -447,8 +477,49 @@ describeIntegration(
       const implementationRequests = transport.requests.filter(
         (request) => request.outputSchema?.name === "SliceImplementationReport_v1",
       );
+      expect(implementationRequests).toHaveLength(6);
+      const correctionRequests = implementationRequests.filter(
+        (request) =>
+          request.tools
+            ?.map((tool) => tool.name)
+            .sort()
+            .join(",") === "mkdir,patch,write",
+      );
+      expect(correctionRequests).toHaveLength(2);
       expect(
-        implementationRequests.every(
+        correctionRequests.every(
+          (request) =>
+            request.tools
+              ?.map((tool) => tool.name)
+              .sort()
+              .join(",") === "mkdir,patch,write",
+        ),
+      ).toBe(true);
+      const correctionPrompt = correctionRequests[0]?.messages
+        .flatMap((message) => message.content)
+        .filter((content) => content.type === "text")
+        .map((content) => content.text)
+        .join("\n");
+      expect(correctionPrompt).toContain('"relative_path":"src/one.ts"');
+      const serializedPrefetch = correctionPrompt
+        ?.split("Code-owned prefetched repository context: ")[1]
+        ?.split("\nPrevious required-gate correction evidence:")[0];
+      const prefetched = JSON.parse(serializedPrefetch ?? "[]") as Array<{
+        evidence: string;
+        relative_path: string;
+      }>;
+      expect(prefetched).toHaveLength(1);
+      expect(prefetched[0]?.relative_path).toBe("src/one.ts");
+      expect(JSON.parse(prefetched[0]?.evidence ?? "{}")).toMatchObject({
+        complete: true,
+        content: "bad implementation\n",
+        relative_path: "src/one.ts",
+      });
+      const ordinaryImplementationRequests = implementationRequests.filter(
+        (request) => !correctionRequests.includes(request),
+      );
+      expect(
+        ordinaryImplementationRequests.every(
           (request) =>
             request.tools
               ?.map((tool) => tool.name)

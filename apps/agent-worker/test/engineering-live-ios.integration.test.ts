@@ -1,7 +1,6 @@
 import { realpath } from "node:fs/promises";
 
 import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
-import { canonicalDigest, relativeRepositoryPath } from "@remoteagent/contracts";
 import {
   CaseMessageRepository,
   CaseRepository,
@@ -16,12 +15,11 @@ import {
   type Database,
 } from "@remoteagent/database";
 import { MetricRegistry, StructuredLogger } from "@remoteagent/observability";
-import { implementationToolResult } from "@remoteagent/implementation-tools";
 import { expect, it } from "vitest";
 
 import { createEngineeringRoleContextReader } from "../src/context.js";
 import {
-  assertEngineeringModelCallBudget,
+  createEngineeringDebugTransport,
   EngineeringDebugJournal,
   engineeringDebugErrorDigest,
   runWithEngineeringDebugJournal,
@@ -39,7 +37,10 @@ import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
 import { roleConfigFromEnv } from "../src/roles.js";
 import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
-import { createXcodeVerificationGatePlatformAdapter } from "../src/xcode-gate-adapter.js";
+import {
+  createXcodeVerificationGatePlatformAdapter,
+  xcodeDestinationFromGateCatalog,
+} from "../src/xcode-gate-adapter.js";
 import { createTestDatabase } from "../../../packages/database/test/harness.js";
 
 const enabled = process.env.RA_RUN_LIVE_IOS_ENGINEERING === "1";
@@ -57,11 +58,10 @@ live(
   async () => {
     const objective = required("RA_LIVE_ENGINEERING_OBJECTIVE");
     const configPath = required("RA_ENGINEERING_CONFIG_PATH");
-    const destination = required("RA_XCODE_DESTINATION");
     const xcodebuildPath = await realpath(required("RA_XCODEBUILD_PATH"));
     const developerDir = await realpath(required("DEVELOPER_DIR"));
-    const bearerToken = required("AWS_BEARER_TOKEN_BEDROCK");
-    const awsRegion = required("AWS_REGION");
+    const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
+    const awsRegion = process.env.AWS_REGION?.trim();
     const created = await createTestDatabase();
     const db = created.db as unknown as Database;
     const runtime = productionRuntime();
@@ -80,6 +80,10 @@ live(
 
     try {
       const config = await loadEngineeringExecutionConfig(configPath);
+      const destination = xcodeDestinationFromGateCatalog(
+        config.catalog.definitions,
+        xcodebuildPath,
+      );
       debugJournal = await EngineeringDebugJournal.create({
         artifactRoot: config.artifactRoot,
         invocationId: suffix,
@@ -175,51 +179,13 @@ live(
         base_sha: sourceHead,
         config_digest: config.configDigest,
       });
-      const rawTransport = new AwsBedrockTransport({ bearerToken, region: awsRegion });
+      const rawTransport = new AwsBedrockTransport({
+        ...(bearerToken === undefined || bearerToken === "" ? {} : { bearerToken }),
+        ...(awsRegion === undefined || awsRegion === "" ? {} : { region: awsRegion }),
+      });
       let modelUsage = emptyEngineeringModelUsage;
-      const transport = {
+      const usageTransport = {
         converse: async (...input: Parameters<typeof rawTransport.converse>) => {
-          const previous = input[0].messages.at(-1);
-          if (previous?.role === "tool") {
-            for (const content of previous.content) {
-              if (content.type !== "tool-result") continue;
-              const output = content.output;
-              if (output === null || typeof output !== "object" || Array.isArray(output)) continue;
-              if (Reflect.get(output, "ok") !== true) {
-                const error = Reflect.get(output, "error");
-                const rawCode =
-                  error !== null && typeof error === "object" && !Array.isArray(error)
-                    ? Reflect.get(error, "code")
-                    : undefined;
-                await debugJournal?.append({
-                  event: "TOOL_RESULT",
-                  kind: "RUNTIME_INPUT",
-                  outcome: "FAILED",
-                  failure_code:
-                    typeof rawCode === "string" && rawCode.length > 0 && rawCode.length <= 128
-                      ? rawCode
-                      : "TOOL_EXECUTION_FAILED",
-                  changed_files: [],
-                  operation_id_digest: canonicalDigest({ tool_use_id: content.id }),
-                  output_truncated: false,
-                });
-                continue;
-              }
-              const parsed = implementationToolResult.safeParse(Reflect.get(output, "value"));
-              if (!parsed.success) continue;
-              const result = parsed.data;
-              await debugJournal?.append({
-                event: "TOOL_RESULT",
-                kind: result.kind,
-                outcome: result.outcome,
-                failure_code: result.outcome === "FAILED" ? result.failure_code : null,
-                changed_files: [...result.changed_files],
-                operation_id_digest: canonicalDigest({ operation_id: result.operation_id }),
-                output_truncated: result.output.truncated,
-              });
-            }
-          }
-          assertEngineeringModelCallBudget(modelUsage.totalTokens);
           const response = await rawTransport.converse(...input);
           modelUsage = addEngineeringModelUsage(modelUsage, response.usage);
           const comparison = classifyEngineeringModelUsage(modelUsage.totalTokens);
@@ -229,103 +195,16 @@ live(
           process.stdout.write(
             `RA045_MODEL_USAGE=${JSON.stringify({ ...modelUsage, comparison })}\n`,
           );
-          await debugJournal?.append({
-            event: "MODEL_USAGE",
-            stage: null,
-            responses: modelUsage.responses,
-            input_tokens: modelUsage.inputTokens,
-            output_tokens: modelUsage.outputTokens,
-            total_tokens: modelUsage.totalTokens,
-            responses_without_usage: modelUsage.responsesWithoutUsage,
-            responses_with_partial_usage: modelUsage.responsesWithPartialUsage,
-            comparison,
-          });
-          if (comparison === "HARD_LIMIT") {
-            throw new Error("RA045 live model usage exceeded the 250000-token hard limit");
-          }
-          const toolUses = response.content
-            .filter((content) => content.type === "tool-use")
-            .map((content) => {
-              const toolInput =
-                content.input !== null &&
-                typeof content.input === "object" &&
-                !Array.isArray(content.input)
-                  ? (content.input as Record<string, unknown>)
-                  : {};
-              const requestedFiles = Array.isArray(toolInput.files)
-                ? toolInput.files
-                : Array.isArray(toolInput.replacement_files)
-                  ? toolInput.replacement_files
-                  : [];
-              const files = requestedFiles
-                .map((file) =>
-                  file !== null && typeof file === "object" && !Array.isArray(file)
-                    ? (file as Record<string, unknown>).relative_path
-                    : undefined,
-                )
-                .filter((path): path is string => typeof path === "string");
-              return {
-                name: content.name,
-                relative_path:
-                  typeof toolInput.relative_path === "string" ? toolInput.relative_path : null,
-                query: typeof toolInput.query === "string" ? toolInput.query : null,
-                files,
-                input_keys: Object.keys(toolInput).sort(),
-              };
-            });
-          if (toolUses.length > 0) {
-            const journalTools = toolUses
-              .filter((tool) =>
-                ["read", "search", "tree", "config", "write", "patch", "mkdir"].includes(tool.name),
-              )
-              .map((tool) => ({
-                name: tool.name as
-                  "read" | "search" | "tree" | "config" | "write" | "patch" | "mkdir",
-                relative_path:
-                  tool.relative_path !== null &&
-                  relativeRepositoryPath.safeParse(tool.relative_path).success
-                    ? tool.relative_path
-                    : null,
-                query_digest: tool.query === null ? null : canonicalDigest({ query: tool.query }),
-                files: tool.files.filter((path) => relativeRepositoryPath.safeParse(path).success),
-                input_keys: tool.input_keys.slice(0, 32),
-              }));
-            if (journalTools.length > 0) {
-              await debugJournal?.append({ event: "TOOL_BATCH", tools: journalTools });
-            }
-          }
-          for (const content of response.content) {
-            if (
-              content.type !== "json" ||
-              content.value === null ||
-              typeof content.value !== "object" ||
-              Array.isArray(content.value)
-            )
-              continue;
-            const value = content.value as Record<string, unknown>;
-            await debugJournal?.append({
-              event: "MODEL_OUTPUT_SHAPE",
-              keys: Object.keys(value).sort().slice(0, 64),
-              artifact_kind: typeof value.artifact_kind === "string" ? value.artifact_kind : null,
-              changed_files: Array.isArray(value.changed_files)
-                ? value.changed_files
-                    .filter(
-                      (path): path is string =>
-                        typeof path === "string" && relativeRepositoryPath.safeParse(path).success,
-                    )
-                    .slice(0, 512)
-                : null,
-            });
-          }
           return response;
         },
       };
+      const transport = createEngineeringDebugTransport(usageTransport);
       const baseModelConfig = roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId });
       const modelConfig = {
         ...baseModelConfig,
         toolLimits: { maxIterations: 12, maxCalls: 48 },
       };
-      const knownSecrets = [bearerToken];
+      const knownSecrets = bearerToken === undefined || bearerToken === "" ? [] : [bearerToken];
       const metrics = new MetricRegistry(knownSecrets);
       const readContext = createEngineeringRoleContextReader({
         db,
@@ -333,27 +212,11 @@ live(
         knownSecrets,
         beforeRead: (caseId) => persistence.ensureBaselineCheckpoint(caseId).then(() => undefined),
       });
-      const rawStageExecutor = createConfiguredEngineeringStageExecutor({
+      const stageExecutor = createConfiguredEngineeringStageExecutor({
         transport,
         modelConfig,
         executionConfig: config,
       });
-      const stageExecutor = {
-        ...rawStageExecutor,
-        execute: async (input: Parameters<typeof rawStageExecutor.execute>[0]) => {
-          try {
-            return await rawStageExecutor.execute(input);
-          } catch (error) {
-            await debugJournal?.append({
-              event: "STAGE_ERROR",
-              stage: input.binding.stage,
-              error_name: error instanceof Error ? error.name : "UnknownError",
-              error_digest: engineeringDebugErrorDigest(error),
-            });
-            throw error;
-          }
-        },
-      };
       const reviewer = createBedrockPreCommitReviewSessionFactory({
         transport,
         config: modelConfig,
@@ -385,7 +248,7 @@ live(
               migration: false,
               irreversible_side_effect: false,
               broad_public_contract_change: false,
-              multi_module: false,
+              multi_module: true,
               new_architecture: false,
               deterministic_oracle: true,
               user_data: false,

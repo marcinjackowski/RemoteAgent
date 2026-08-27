@@ -195,15 +195,17 @@ class OneSliceTransport implements RuntimeTransport {
         process_class: "SMALL",
         source_digest: sha("1"),
       });
-    if (name === "EngineeringSliceContract_v1") {
+    if (name === "EngineeringSliceContract_v2") {
       this.planningCalls += 1;
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "SliceContract",
         slice_id: "slice-1",
         objective: "write one file",
         observable_result: "file is present",
         allowed_paths: ["src"],
+        test_paths: ["src"],
         gate_ids: ["qualification"],
         inspection_method: "inspect durable evidence",
         stop_condition: "gate passes",
@@ -315,7 +317,7 @@ class LeaseLostPlanningTransport extends OneSliceTransport {
   }
 
   public override async converse(request: RuntimeRequest): Promise<RuntimeResponse> {
-    if (request.outputSchema?.name === "EngineeringSliceContract_v1") {
+    if (request.outputSchema?.name === "EngineeringSliceContract_v2") {
       this.#markEntered();
       await this.#release;
     }

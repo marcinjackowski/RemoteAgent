@@ -569,13 +569,21 @@ describe("test evidence layer", () => {
     });
 
     it("bounds the inline excerpt independently of the artifact", async () => {
-      const built = await runner([entry("huge", "process.stdout.write('y'.repeat(200000))")]);
+      const built = await runner([
+        entry(
+          "huge",
+          "process.stdout.write('HEAD_CANARY' + 'y'.repeat(200000) + 'TAIL_DIAGNOSTIC')",
+        ),
+      ]);
       const run = await built.run({ command_name: "huge" });
 
       expect(run.excerpt.truncated).toBe(true);
       expect(new TextEncoder().encode(run.excerpt.value).length).toBeLessThanOrEqual(
         MAX_EXCERPT_BYTES,
       );
+      expect(run.excerpt.value).toContain("HEAD_CANARY");
+      expect(run.excerpt.value).toContain("REMOTEAGENT_EXCERPT_TRUNCATED");
+      expect(run.excerpt.value).toContain("TAIL_DIAGNOSTIC");
       // The pre-clip size survives, so the reader knows how much was dropped.
       expect(run.excerpt.original_byte_length).toBeGreaterThan(MAX_EXCERPT_BYTES);
     });

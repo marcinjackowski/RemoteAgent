@@ -19,11 +19,24 @@ export interface RetryPolicy {
   readonly baseDelayMs: number;
 }
 
+/** Optional code-owned policy for bounded mutation-first tool sessions. */
+export interface ToolLoopPolicy {
+  readonly readonlyToolNames: readonly string[];
+  readonly mutationToolNames: readonly string[];
+  /** Tool-execution rounds protected until the first mutation attempt. */
+  readonly mutationIterationsReserved: number;
+  /** Number of newest complete assistant/tool pairs retained verbatim. */
+  readonly retainRecentToolPairs: number;
+  /** Refuse a final report immediately after a failed mutation until a later mutation succeeds. */
+  readonly requireSuccessfulMutationAfterFailure?: boolean;
+}
+
 export interface RuntimeConfig {
   readonly model: ModelIdentity;
   readonly timeoutMs: number;
   readonly toolLimits: ToolLimits;
   readonly retryPolicy: RetryPolicy;
+  readonly toolLoopPolicy?: ToolLoopPolicy;
 }
 
 export interface RuntimeMessage {

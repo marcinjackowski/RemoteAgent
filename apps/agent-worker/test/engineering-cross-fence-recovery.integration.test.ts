@@ -14,10 +14,8 @@ import {
   describeIntegration,
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
-import {
-  createBedrockEngineeringStageExecutor,
-  createBedrockPreCommitReviewSessionFactory,
-} from "../src/engineering-workflow.js";
+import { createBedrockPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
+import { createConfiguredEngineeringStageExecutor } from "../src/engineering-execution.js";
 import { createProductionEngineeringRecoveryCoordinator } from "../src/engineering-recovery.js";
 import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
 import {
@@ -64,8 +62,8 @@ function transportFor(fixture: EngineeringQualificationFixture) {
   return new EngineeringQualificationTransport({
     caseId: fixture.ids.caseId,
     runId: fixture.ids.runId,
-    sliceIds: ["slice-one"],
-    implementationPaths: ["src/change.ts"],
+    sliceIds: ["slice-one", "slice-two", "slice-three"],
+    implementationPaths: ["src/change-1.ts", "src/change-2.ts", "src/change-3.ts"],
     processClass: "LARGE_OR_HIGH_RISK",
   });
 }
@@ -74,9 +72,10 @@ function coordinatorFor(
   fixture: EngineeringQualificationFixture,
   transport: EngineeringQualificationTransport,
 ) {
-  const stageExecutor = createBedrockEngineeringStageExecutor({
+  const stageExecutor = createConfiguredEngineeringStageExecutor({
     transport,
-    config: fixture.modelConfig,
+    modelConfig: fixture.modelConfig,
+    executionConfig: fixture.config,
   });
   const reviewer = createBedrockPreCommitReviewSessionFactory({
     transport,
@@ -173,7 +172,7 @@ describeIntegration(
       const durable = await fixture!.db.query<{
         inner_operations: string;
         inner_completions: string;
-        completion_id: string;
+        original_completion_count: string;
         bundles: string;
         local_commits: string;
       }>(
@@ -183,20 +182,21 @@ describeIntegration(
            (SELECT count(*)::text FROM job_completions c JOIN engineering_operations o
              ON o.intent_id=c.intent_id
              WHERE o.operation_kind='engineering.verification.gate') AS inner_completions,
-           (SELECT c.completion_id FROM job_completions c JOIN engineering_operations o
+           (SELECT count(*)::text FROM job_completions c JOIN engineering_operations o
              ON o.intent_id=c.intent_id
-             WHERE o.operation_kind='engineering.verification.gate') AS completion_id,
+             WHERE o.operation_kind='engineering.verification.gate'
+               AND c.completion_id=$2) AS original_completion_count,
            (SELECT count(*)::text FROM engineering_artifact_revisions
              WHERE run_id=$1 AND artifact_kind='EvidenceBundle') AS bundles,
            (SELECT count(*)::text FROM engineering_artifact_revisions
              WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt') AS local_commits`,
-        [fixture!.ids.runId],
+        [fixture!.ids.runId, receipt.rows[0]!.completion_id],
       );
       expect(durable.rows[0]).toEqual({
-        inner_operations: "1",
-        inner_completions: "1",
-        completion_id: receipt.rows[0]!.completion_id,
-        bundles: "1",
+        inner_operations: "3",
+        inner_completions: "3",
+        original_completion_count: "1",
+        bundles: "3",
         local_commits: "1",
       });
     });

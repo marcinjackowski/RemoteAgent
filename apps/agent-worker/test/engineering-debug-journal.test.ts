@@ -9,13 +9,19 @@ import type { RuntimeTransport } from "@remoteagent/bedrock-runtime";
 import { StructuredLogger } from "@remoteagent/observability";
 
 import {
+  ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+  ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
+  ENGINEERING_MODEL_TARGET_TOKEN_LIMIT,
   EngineeringDebugJournal,
   createEngineeringDebugTransport,
+  assertEngineeringModelCallBudgetBeforeStage,
   createEngineeringInvocationJournalRunner,
   engineeringDebugErrorDigest,
+  recordEngineeringDebugGateProgress,
   recordEngineeringDebugGateBoundaryError,
   recordEngineeringDebugToolResult,
   runWithEngineeringDebugJournal,
+  runWithEngineeringDebugSlice,
   runWithEngineeringDebugStage,
 } from "../src/engineering-debug-journal.js";
 
@@ -114,6 +120,180 @@ it("rejects raw narrative fields and writes nothing after close", async () => {
       artifact_kinds: [],
     }),
   ).rejects.toThrow(/closed/);
+});
+
+it("records slice checklist, round and token budgets with code-owned decision codes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-progress-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "progress-slice-one",
+  });
+  const transport = createEngineeringDebugTransport({
+    async converse(_request, config) {
+      return {
+        model: config.model,
+        usage: { inputTokens: 90, outputTokens: 30, totalTokens: 120 },
+        content: [
+          {
+            type: "tool-use",
+            id: "private-tool-id",
+            name: "write",
+            input: { relative_path: "src/feature.test.ts", content: "private test bytes" },
+          },
+        ],
+      };
+    },
+  });
+  await runWithEngineeringDebugJournal(journal, () =>
+    runWithEngineeringDebugSlice("SLICE_IMPLEMENTATION", "slice-one", 2, () =>
+      transport.converse(
+        {
+          messages: [{ role: "user", content: [{ type: "text", text: "private objective" }] }],
+        },
+        {
+          model: { provider: "bedrock", model_id: "model" },
+          timeoutMs: 1_000,
+          toolLimits: { maxIterations: 6, maxCalls: 32 },
+          toolLoopPolicy: {
+            readonlyToolNames: ["read"],
+            mutationToolNames: ["write"],
+            mutationIterationsReserved: 3,
+            retainRecentToolPairs: 1,
+          },
+          retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
+        },
+      ),
+    ),
+  );
+  await journal.close();
+
+  const text = await readFile(journal.filePath, "utf8");
+  const records = text
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const codes = records
+    .filter((record) => record.event === "DECISION")
+    .map((record) => record.decision_code);
+  expect(codes).toEqual(
+    expect.arrayContaining([
+      "STAGE_ENTERED",
+      "MODEL_CALL_RESERVED",
+      "MUTATION_BATCH_REQUESTED",
+      "MODEL_RESPONSE_RECORDED",
+      "STAGE_COMPLETED",
+    ]),
+  );
+  const snapshot = [...records]
+    .reverse()
+    .find(
+      (record) =>
+        record.event === "PROGRESS_SNAPSHOT" && record.decision_code === "MODEL_RESPONSE_RECORDED",
+    );
+  expect(snapshot).toMatchObject({
+    stage: "SLICE_IMPLEMENTATION",
+    slice_id: "slice-one",
+    attempt: 2,
+    rounds: { used: 1, limit: 6, mutation_reserved: 0, remaining: 5 },
+    calls: { used: 1, limit: 32, remaining: 31 },
+    tokens: {
+      used: 120,
+      target: ENGINEERING_MODEL_TARGET_TOKEN_LIMIT,
+      hard_limit: ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
+      final_call_reserved: ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+    },
+  });
+  expect(JSON.stringify(snapshot)).toContain('"item":"TEST_FIRST","status":"COMPLETE"');
+  expect(text).not.toContain("private objective");
+  expect(text).not.toContain("private test bytes");
+  expect(text).not.toContain("private-tool-id");
+});
+
+it("resets round and call progress for each slice attempt while retaining global token usage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-slice-reset-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "slice-reset",
+  });
+  let response = 0;
+  const transport = createEngineeringDebugTransport({
+    async converse(_request, config) {
+      response += 1;
+      return {
+        model: config.model,
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+        content: [
+          {
+            type: "tool-use",
+            id: `tool-${String(response)}`,
+            name: "write",
+            input: { relative_path: `src/slice-${String(response)}.test.ts`, content: "private" },
+          },
+        ],
+      };
+    },
+  });
+  const config = {
+    model: { provider: "bedrock", model_id: "model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 6, maxCalls: 32 },
+    toolLoopPolicy: {
+      readonlyToolNames: ["read"],
+      mutationToolNames: ["write"],
+      mutationIterationsReserved: 3,
+      retainRecentToolPairs: 1,
+    },
+    retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
+  } as const;
+  await runWithEngineeringDebugJournal(journal, async () => {
+    await runWithEngineeringDebugSlice("SLICE_IMPLEMENTATION", "slice-one", 1, () =>
+      transport.converse({ messages: [] }, config),
+    );
+    await runWithEngineeringDebugSlice("SLICE_IMPLEMENTATION", "slice-two", 2, () =>
+      transport.converse({ messages: [] }, config),
+    );
+  });
+  await journal.close();
+
+  const records = (await readFile(journal.filePath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const second = [...records]
+    .reverse()
+    .find(
+      (record) =>
+        record.event === "PROGRESS_SNAPSHOT" &&
+        record.slice_id === "slice-two" &&
+        record.decision_code === "MODEL_RESPONSE_RECORDED",
+    );
+  expect(second).toMatchObject({
+    rounds: { used: 1, limit: 6, remaining: 5 },
+    calls: { used: 1, limit: 32, remaining: 31 },
+    tokens: { used: 240 },
+  });
+  expect(JSON.stringify(second)).toContain('"item":"IMPLEMENTATION","status":"IN_PROGRESS"');
+});
+
+it("records FAST and FULL gate states without gate output or model narrative", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-gates-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "gate-progress",
+  });
+  await runWithEngineeringDebugJournal(journal, async () => {
+    await recordEngineeringDebugGateProgress({ tier: "FAST", status: "PASSED" });
+    await recordEngineeringDebugGateProgress({ tier: "FULL", status: "BLOCKED" });
+  });
+  await journal.close();
+  const text = await readFile(journal.filePath, "utf8");
+  expect(text).toContain('"decision_code":"FAST_GATES_PASSED"');
+  expect(text).toContain('"decision_code":"FULL_GATES_BLOCKED"');
+  expect(text).toContain('"gates":{"fast":"COMPLETE","full":"BLOCKED"}');
+  expect(text).not.toContain("gate stdout");
 });
 
 it("routes concurrent model and tool events to separate async-local invocation files", async () => {
@@ -344,7 +524,7 @@ it("records provider usage and stops an invocation above the hard token limit", 
     async converse(_request, config) {
       return {
         model: config.model,
-        usage: { inputTokens: 250_000, outputTokens: 1, totalTokens: 250_001 },
+        usage: { inputTokens: 600_000, outputTokens: 1, totalTokens: 600_001 },
         content: [],
       };
     },
@@ -362,10 +542,10 @@ it("records provider usage and stops an invocation above the hard token limit", 
         },
       ),
     ),
-  ).rejects.toThrow(/250000-token hard limit/);
+  ).rejects.toThrow(/600000-token hard limit/);
   await journal.close();
   const text = await readFile(journal.filePath, "utf8");
-  expect(text).toContain('"total_tokens":250001');
+  expect(text).toContain('"total_tokens":600001');
   expect(text).toContain('"comparison":"HARD_LIMIT"');
   expect(text).not.toContain("private");
 });
@@ -383,7 +563,7 @@ it("refuses the next provider call before the remaining hard-limit reserve can b
       calls += 1;
       return {
         model: config.model,
-        usage: { inputTokens: 215_999, outputTokens: 1, totalTokens: 216_000 },
+        usage: { inputTokens: 565_999, outputTokens: 1, totalTokens: 566_000 },
         content: [],
       };
     },
@@ -409,6 +589,45 @@ it("refuses the next provider call before the remaining hard-limit reserve can b
   ).rejects.toThrow(/reserve would exceed/);
   expect(calls).toBe(1);
   await journal.close();
+  const text = await readFile(journal.filePath, "utf8");
+  expect(text).toContain('"decision_code":"MODEL_CALL_REFUSED_BUDGET"');
+});
+
+it("refuses an exhausted model-backed stage before transport dispatch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-stage-reserve-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "stage-reserved-token-limit",
+  });
+  let calls = 0;
+  const transport = createEngineeringDebugTransport({
+    async converse(_request, config) {
+      calls += 1;
+      return {
+        model: config.model,
+        usage: { inputTokens: 565_999, outputTokens: 1, totalTokens: 566_000 },
+        content: [],
+      };
+    },
+  });
+  const config = {
+    model: { provider: "bedrock", model_id: "model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 1, maxCalls: 1 },
+    retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
+  } as const;
+
+  await expect(
+    runWithEngineeringDebugJournal(journal, async () => {
+      await transport.converse({ messages: [] }, config);
+      await assertEngineeringModelCallBudgetBeforeStage();
+    }),
+  ).rejects.toThrow(/reserve would exceed/);
+  expect(calls).toBe(1);
+  await journal.close();
+  const text = await readFile(journal.filePath, "utf8");
+  expect(text.match(/MODEL_CALL_REFUSED_BUDGET/gu)).toHaveLength(2);
 });
 
 it("keeps a completed Engineering result when only diagnostic persistence fails", async () => {

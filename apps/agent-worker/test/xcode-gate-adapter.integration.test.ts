@@ -10,9 +10,44 @@ import {
 import { computeTreeDigest } from "@remoteagent/workspace-runner";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { createXcodeVerificationGatePlatformAdapter } from "../src/xcode-gate-adapter.js";
+import {
+  createXcodeVerificationGatePlatformAdapter,
+  xcodeDestinationFromGateCatalog,
+} from "../src/xcode-gate-adapter.js";
 
 const roots: string[] = [];
+
+function gateDefinition(input: {
+  executable: string;
+  destination: string;
+  gateId?: string;
+}): VerificationGateDefinition {
+  return VerificationGateDefinition.parse({
+    schema_version: 1,
+    gate_id: input.gateId ?? "ios-tests",
+    gate_class: VerificationGateClass.TEST,
+    executable: input.executable,
+    argv: [
+      "-project",
+      "Fake.xcodeproj",
+      "-destination",
+      input.destination,
+      "-derivedDataPath",
+      ".remoteagent-xcode/DerivedData",
+      "-clonedSourcePackagesDirPath",
+      ".remoteagent-xcode/SourcePackages",
+      "test",
+    ],
+    relative_cwd: "project",
+    required: true,
+    baseline: false,
+    test_first: false,
+    timeout_ms: 60_000,
+    environment_profile: "BUILD_TOOLCHAIN",
+    network_profile: "PLATFORM_MANAGED",
+    mutable_outputs: ["project/.remoteagent-xcode"],
+  });
+}
 
 async function prepareFakeProject(workspace: string): Promise<void> {
   await mkdir(
@@ -24,6 +59,33 @@ async function prepareFakeProject(workspace: string): Promise<void> {
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+it("derives one exact simulator destination from the server-owned gate catalog", async () => {
+  const executable = await realpath(process.execPath);
+  const selected = "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000001";
+  expect(
+    xcodeDestinationFromGateCatalog(
+      [
+        gateDefinition({ executable, destination: selected, gateId: "ios-tests-a" }),
+        gateDefinition({ executable, destination: selected, gateId: "ios-tests-b" }),
+      ],
+      executable,
+    ),
+  ).toBe(selected);
+  expect(() =>
+    xcodeDestinationFromGateCatalog(
+      [
+        gateDefinition({ executable, destination: selected, gateId: "ios-tests-a" }),
+        gateDefinition({
+          executable,
+          destination: "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000002",
+          gateId: "ios-tests-b",
+        }),
+      ],
+      executable,
+    ),
+  ).toThrow(/conflicting simulator destinations/u);
 });
 
 it("runs a BUILD_TOOLCHAIN gate through the injected bounded boundary and mints evidence", async () => {
@@ -200,6 +262,45 @@ it("bounds verbose Xcode output without killing the selected build and preserves
   expect(stored).toContain("original_bytes=2097169");
   expect(stored).toContain("XCODE_TAIL_CANARY");
   expect(Buffer.byteLength(stored)).toBeLessThanOrEqual(1024 * 1024 + 256);
+});
+
+it("preserves repository-relative compiler locations while redacting other host paths", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "ra-xcode-diagnostics-"));
+  roots.push(parent);
+  const workspace = join(parent, "workspace");
+  const artifacts = join(parent, "artifacts");
+  await Promise.all([workspace, artifacts].map((path) => mkdir(path)));
+  await mkdir(join(workspace, "project"));
+  await prepareFakeProject(workspace);
+  await writeFile(join(workspace, "project", "project.txt"), "source\n");
+  const executable = await realpath(process.execPath);
+  const destination = "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000001";
+  const adapter = await createXcodeVerificationGatePlatformAdapter({
+    xcodebuildPath: executable,
+    developerDir: dirname(executable),
+    destination,
+    processRunner: async () => ({
+      exitCode: 65,
+      signal: null,
+      stdout: `${workspace}/project/Sources/Feature.swift:8:14: error: missing symbol`,
+      stderr: "/Users/private/secret/Other.swift:1:1: error: must remain private",
+      timedOut: false,
+      cancelled: false,
+      outputTruncated: false,
+    }),
+  });
+  const run = await adapter.run({
+    definition: gateDefinition({ executable, destination }),
+    disposable_root: workspace,
+    scope: { case_id: "case-diagnostics", workspace_id: "workspace-diagnostics" },
+    store: new LocalArtifactStore({ root: artifacts }),
+  });
+
+  expect(run.outcome).toBe("FAILED");
+  expect(run.excerpt.value).toContain("project/Sources/Feature.swift:8:14: error: missing symbol");
+  expect(run.excerpt.value).not.toContain(workspace);
+  expect(run.excerpt.value).not.toContain("/Users/private/secret");
+  expect(run.excerpt.value).toContain("[REDACTED]");
 });
 
 it("refuses a non-Xcode profile or output path before process dispatch", async () => {

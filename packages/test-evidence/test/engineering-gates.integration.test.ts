@@ -32,6 +32,7 @@ import {
   VerificationGateReceipt,
   VerificationGateStatus,
   VerificationGateTarget,
+  VerificationGateTier,
   TestPhase,
   createTestRunner,
   executeVerificationGate,
@@ -241,6 +242,44 @@ describeIntegration("durable engineering gate executor", () => {
       executable_allowlist: [executable],
     });
   }
+
+  it("rejects host-path gate inputs before a hermetic command can become a late infrastructure failure", async () => {
+    const executable = await realpath(process.execPath);
+    expect(() =>
+      VerificationGateDefinition.parse({
+        schema_version: 1,
+        gate_id: "host-script",
+        gate_class: VerificationGateClass.TEST,
+        executable,
+        argv: ["/private/tmp/code-owned-gate.mjs"],
+        relative_cwd: "src",
+        required: true,
+        baseline: false,
+        test_first: false,
+        timeout_ms: 10_000,
+        environment_profile: "HERMETIC",
+        network_profile: "DENY",
+        mutable_outputs: [],
+      }),
+    ).toThrow(/absolute host paths/u);
+    expect(() =>
+      VerificationGateDefinition.parse({
+        schema_version: 1,
+        gate_id: "host-script-assignment",
+        gate_class: VerificationGateClass.TEST,
+        executable,
+        argv: ["--config=/private/tmp/code-owned-gate.json"],
+        relative_cwd: "src",
+        required: true,
+        baseline: false,
+        test_first: false,
+        timeout_ms: 10_000,
+        environment_profile: "HERMETIC",
+        network_profile: "DENY",
+        mutable_outputs: [],
+      }),
+    ).toThrow(/absolute host paths/u);
+  });
 
   async function catalogFrom(
     definitions: readonly Record<string, unknown>[],
@@ -690,7 +729,11 @@ describeIntegration("durable engineering gate executor", () => {
       {
         gate_id: "z-optional-model-cannot-select",
         required: false,
-        argv: ["-e", "require('node:fs').writeFileSync(process.argv[1],'should-not-run')", canary],
+        argv: [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1],'should-not-run')",
+          "optional-should-not-run",
+        ],
       },
     ]);
 
@@ -712,6 +755,9 @@ describeIntegration("durable engineering gate executor", () => {
     expect(JSON.stringify(result.bundle?.items)).not.toContain(root);
     expect(JSON.stringify(result.bundle?.items)).not.toContain(artifactRoot);
     await expect(access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(join(root, "src", "optional-should-not-run"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     const ordered = await db.query<{ gate_id: string; target: string }>(
       `SELECT i.descriptor->>'gate_id' AS gate_id,
@@ -747,6 +793,125 @@ describeIntegration("durable engineering gate executor", () => {
     ).toBe(true);
   });
 
+  it("binds explicit tier and schedule into catalog and command digests with deterministic defaults", async () => {
+    const implicit = await catalogFrom([{ gate_id: "tiered" }]);
+    const explicitFull = await catalogFrom([
+      { gate_id: "tiered", gate_tier: VerificationGateTier.FULL },
+    ]);
+    const fast = await catalogFrom([{ gate_id: "tiered", gate_tier: VerificationGateTier.FAST }]);
+    const firstSlice = await catalogFrom([{ gate_id: "tiered", gate_schedule: "FIRST_SLICE" }]);
+
+    expect(implicit.definitions[0]?.gate_tier).toBe(VerificationGateTier.FULL);
+    expect(implicit.config_digest).toBe(explicitFull.config_digest);
+    expect(implicit.commandDigest("tiered")).toBe(explicitFull.commandDigest("tiered"));
+    expect(fast.config_digest).not.toBe(explicitFull.config_digest);
+    expect(fast.commandDigest("tiered")).not.toBe(explicitFull.commandDigest("tiered"));
+    expect(implicit.definitions[0]?.gate_schedule).toBe("EACH_SLICE");
+    expect(firstSlice.config_digest).not.toBe(explicitFull.config_digest);
+    expect(firstSlice.commandDigest("tiered")).not.toBe(explicitFull.commandDigest("tiered"));
+  });
+
+  it("finishes both targets of a failed FAST test-first gate and blocks lexical-first FULL", async () => {
+    const batchCatalog = await catalogFrom([
+      {
+        gate_id: "a-full-must-not-run",
+        gate_tier: VerificationGateTier.FULL,
+        argv: ["-e", "process.stdout.write('full')"],
+      },
+      {
+        gate_id: "z-fast-first",
+        gate_tier: VerificationGateTier.FAST,
+        baseline: true,
+        test_first: true,
+        argv: ["-e", "process.stdout.write('fast');process.exit(7)"],
+      },
+    ]);
+
+    expect(batchCatalog.definitions.map((gate) => gate.gate_id)).toEqual([
+      "z-fast-first",
+      "a-full-must-not-run",
+    ]);
+    const result = await executeVerificationGateBatch(await batchInput(batchCatalog));
+    expect(result).toEqual({
+      status: "INCOMPLETE",
+      aggregate: null,
+      bundle: null,
+      reason: "FAST_GATE_BLOCKED_FULL",
+      blocking_gate_ids: ["z-fast-first"],
+      receipts: expect.any(Array),
+    });
+    const receipts = await db.query<{ gate_id: string; target: string; outcome: string }>(
+      `SELECT receipt->>'gate_id' AS gate_id,
+              receipt->>'target' AS target,
+              receipt->>'outcome' AS outcome
+         FROM job_completions ORDER BY receipt->>'target'`,
+    );
+    expect(receipts.rows).toEqual([
+      {
+        gate_id: "z-fast-first",
+        target: VerificationGateTarget.BASELINE,
+        outcome: VerificationGateOutcome.FAILED,
+      },
+      {
+        gate_id: "z-fast-first",
+        target: VerificationGateTarget.CURRENT,
+        outcome: VerificationGateOutcome.FAILED,
+      },
+    ]);
+  });
+
+  it("keeps a missing FAST recovery receipt AMBIGUOUS without dispatching either tier", async () => {
+    const batchCatalog = await catalogFrom([
+      { gate_id: "z-fast", gate_tier: VerificationGateTier.FAST },
+      { gate_id: "a-full", gate_tier: VerificationGateTier.FULL },
+    ]);
+    const result = await executeVerificationGateBatch(
+      await batchInput(batchCatalog, { recovery_only: true }),
+    );
+
+    expect(result).toEqual({
+      status: "INCOMPLETE",
+      aggregate: null,
+      bundle: null,
+      reason: "AMBIGUOUS",
+      blocking_gate_ids: ["z-fast"],
+      receipts: [],
+    });
+    expect((await db.query("SELECT 1 FROM job_intents")).rowCount).toBe(0);
+    expect((await db.query("SELECT 1 FROM job_completions")).rowCount).toBe(0);
+  });
+
+  it("runs all passing FAST gates before FULL regardless of lexical gate IDs", async () => {
+    const batchCatalog = await catalogFrom([
+      {
+        gate_id: "a-full",
+        gate_tier: VerificationGateTier.FULL,
+        argv: ["-e", "process.stdout.write('full')"],
+      },
+      {
+        gate_id: "z-fast",
+        gate_tier: VerificationGateTier.FAST,
+        argv: ["-e", "process.stdout.write('fast')"],
+      },
+    ]);
+
+    const result = await executeVerificationGateBatch(await batchInput(batchCatalog));
+    expect(result.status).toBe("COMPLETE");
+    if (result.status !== "COMPLETE") throw new Error("expected complete tiered gates");
+    expect(result.aggregate.status).toBe(VerificationGateStatus.PASSED);
+    expect(result.bundle).not.toBeNull();
+    expect(batchCatalog.definitions.map((gate) => gate.gate_id)).toEqual(["z-fast", "a-full"]);
+    const invocations = await db.query<{ gate_id: string }>(
+      `SELECT i.descriptor->>'gate_id' AS gate_id
+         FROM engineering_stage_events e
+         JOIN engineering_operations o ON o.operation_id=e.operation_id
+         JOIN job_intents i ON i.intent_id=o.intent_id
+        WHERE e.event_type='INTENT_BOUND'
+        ORDER BY e.event_sequence`,
+    );
+    expect(invocations.rows).toEqual([{ gate_id: "z-fast" }, { gate_id: "a-full" }]);
+  });
+
   it("rejects vacuous baseline green and never mints an EvidenceBundle", async () => {
     const batchCatalog = await catalogFrom([
       {
@@ -773,6 +938,7 @@ describeIntegration("durable engineering gate executor", () => {
       bundle: null,
       reason: "AMBIGUOUS",
       blocking_gate_ids: ["unit-gate"],
+      receipts: [],
     });
     expect((await db.query("SELECT 1 FROM job_completions")).rowCount).toBe(0);
   });
@@ -891,6 +1057,7 @@ describeIntegration("durable engineering gate executor", () => {
       bundle: null,
       reason: "CANCELLED",
       blocking_gate_ids: ["a-cancelled"],
+      receipts: expect.any(Array),
     });
     const receipts = await db.query<{ gate_id: string; outcome: string }>(
       `SELECT receipt->>'gate_id' AS gate_id, receipt->>'outcome' AS outcome

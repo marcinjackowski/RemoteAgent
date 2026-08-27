@@ -82,7 +82,7 @@ export const engineeringStageRegistry = Object.freeze({
   [EngineeringStage.GATE_EXECUTION]: Object.freeze({
     role: AgentRole.VERIFICATION,
     input_artifacts: artifacts("EngineeringSliceContract", "EngineeringSliceImplementationReceipt"),
-    output_artifacts: artifacts("EngineeringEvidenceBundle"),
+    output_artifacts: artifacts("EngineeringEvidenceBundle", "EngineeringGateFailure"),
     completion_contract: null,
     workspace_access: readOnly,
   }),

@@ -39,6 +39,8 @@ import {
 } from "@remoteagent/git-lifecycle";
 import {
   OperationLedgerRepository,
+  ToolKind,
+  ToolOutcome,
   createBoundedImplementationToolset,
   type BoundedImplementationToolName,
   type BoundedImplementationToolset,
@@ -51,14 +53,17 @@ import {
 } from "@remoteagent/review-loop";
 import {
   BaselineWorkspaceStore,
+  CodeOwnedGeneratorCatalog,
   VerificationGateCatalog,
   VerificationGateStatus,
   deriveBaselineTreeDelta,
+  executeCodeOwnedGenerators,
   executeVerificationGateBatch,
   type ArtifactStore,
   type BaselineWorkspaceBinding,
   type BaselineWorkspaceReference,
   type VerificationGateAggregate,
+  type VerificationGateReceipt,
   type VerificationGatePlatformAdapter,
 } from "@remoteagent/test-evidence";
 import {
@@ -74,6 +79,7 @@ import {
 
 import {
   recordEngineeringDebugGateBoundaryError,
+  recordEngineeringDebugGateProgress,
   recordEngineeringDebugToolResult,
 } from "./engineering-debug-journal.js";
 
@@ -108,6 +114,37 @@ function parseImplementerReport(input: unknown): VerticalSliceImplementerReport 
   return Object.freeze({ changed_files: Object.freeze([...input.changed_files] as string[]) });
 }
 
+function normalizeImplementerReport(input: {
+  report: VerticalSliceImplementerReport;
+  operationResults: readonly ImplementationToolResult[];
+  actualChangedPaths: readonly string[];
+}): VerticalSliceImplementerReport {
+  const receiptPaths = new Set(
+    input.operationResults
+      .filter(
+        (result) =>
+          result.outcome === ToolOutcome.SUCCEEDED &&
+          (result.kind === ToolKind.WRITE_FILE || result.kind === ToolKind.APPLY_PATCH),
+      )
+      .flatMap((result) => result.changed_files),
+  );
+  const reportedPaths = new Set(input.report.changed_files);
+  const actualPaths = new Set(input.actualChangedPaths);
+
+  if (
+    input.report.changed_files.some((path) => !actualPaths.has(path)) ||
+    input.actualChangedPaths.some((path) => !receiptPaths.has(path) && !reportedPaths.has(path))
+  ) {
+    throw new Error(
+      "implementer changed_files claim does not match actual slice delta before generators",
+    );
+  }
+
+  return Object.freeze({
+    changed_files: Object.freeze([...input.actualChangedPaths].sort()),
+  });
+}
+
 export type VerticalSliceImplementer = (
   tools: BoundedImplementationToolset,
   context: VerticalSliceImplementerContext,
@@ -126,9 +163,13 @@ export type ExecuteVerticalSliceInput = Readonly<{
   writePathAllowlist: readonly string[];
   attempt: number;
   implement: VerticalSliceImplementer;
+  /** Code-owned prefetch budget; omitted callers retain the default model discovery ceiling. */
+  discoveryCallLimit?: number;
   /** Prior server-observed agent paths, never model supplied. */
   priorAgentPaths?: readonly string[];
   baselineStore?: BaselineWorkspaceStore;
+  generatorCatalog?: CodeOwnedGeneratorCatalog;
+  generatorArtifactRoot?: string;
 }>;
 
 export type VerticalSliceActualEvidence = Readonly<{
@@ -141,6 +182,57 @@ export type VerticalSliceActualEvidence = Readonly<{
   insertions: number;
   deletions: number;
 }>;
+
+export type EngineeringDiffPolicy = Readonly<{
+  schema_version: 1;
+  max_files_changed: number;
+  max_total_changes: number;
+  max_deletions: number;
+  destructive_deletion_ratio: number;
+  destructive_min_deletions: number;
+}>;
+
+/** Code-owned ceiling applied to the exact staged Git diff before it becomes evidence. */
+export const ENGINEERING_DIFF_POLICY: EngineeringDiffPolicy = Object.freeze({
+  schema_version: 1,
+  max_files_changed: 16,
+  max_total_changes: 2_000,
+  max_deletions: 800,
+  destructive_deletion_ratio: 0.8,
+  destructive_min_deletions: 20,
+});
+
+export const ENGINEERING_DIFF_POLICY_REFUSED = "ENGINEERING_DIFF_POLICY_REFUSED";
+
+function refuseEngineeringDiff(reason: string): never {
+  const error = new Error(`engineering diff refused by code-owned policy: ${reason}`);
+  Reflect.set(error, "code", ENGINEERING_DIFF_POLICY_REFUSED);
+  Reflect.set(error, "reason", reason);
+  throw error;
+}
+
+export function assertEngineeringDiffWithinPolicy(
+  diff: Readonly<{
+    filesChanged: number;
+    insertions: number;
+    deletions: number;
+  }>,
+): void {
+  const policy = ENGINEERING_DIFF_POLICY;
+  if (diff.filesChanged > policy.max_files_changed) refuseEngineeringDiff("TOO_MANY_FILES");
+  if (diff.insertions + diff.deletions > policy.max_total_changes) {
+    refuseEngineeringDiff("TOO_MANY_TOTAL_CHANGES");
+  }
+  if (diff.deletions > policy.max_deletions) refuseEngineeringDiff("TOO_MANY_DELETIONS");
+  const total = diff.insertions + diff.deletions;
+  if (
+    diff.deletions >= policy.destructive_min_deletions &&
+    total > 0 &&
+    diff.deletions / total > policy.destructive_deletion_ratio
+  ) {
+    refuseEngineeringDiff("DESTRUCTIVE_DELETION_RATIO");
+  }
+}
 
 export type VerticalSliceExecutionResult = Readonly<{
   caseId: string;
@@ -218,6 +310,7 @@ export type ExecuteVerticalSliceGateInput = Readonly<{
   checkpointRevision: number;
   writer: VerticalSliceWriterFence;
   slice: EngineeringSliceContract;
+  expectedGateIds?: readonly string[];
   writePathAllowlist: readonly string[];
   attempt: number;
   baseline: BaselineWorkspaceReference;
@@ -251,6 +344,9 @@ export type VerticalSliceGateResult =
       aggregate: VerificationGateAggregate | null;
       bundle: null;
       reason: string;
+      blockingGateIds: readonly string[];
+      receipts: readonly VerificationGateReceipt[];
+      actual: VerticalSliceActualEvidence;
     }>;
 
 export type ExecuteVerticalSliceReviewInput = Readonly<{
@@ -495,6 +591,20 @@ function operationIdFactory(input: {
     )}`;
 }
 
+function generatorOperationIdFactory(input: {
+  caseId: string;
+  workspaceId: string;
+  runId: string;
+  checkpointRevision: number;
+  sliceId: string;
+  attempt: number;
+}): (generatorId: string, phase: "command" | "materialize") => string {
+  return (generatorId, phase) =>
+    `vsg:${digest(
+      `${input.caseId}\0${input.workspaceId}\0${input.runId}\0${String(input.checkpointRevision)}\0${input.sliceId}\0${String(input.attempt)}\0${generatorId}\0${phase}`,
+    )}`;
+}
+
 function validateWriter(writer: VerticalSliceWriterFence | undefined, caseId: string): void {
   if (
     writer === undefined ||
@@ -595,6 +705,7 @@ async function actualEvidence(input: {
     }
     const diff = await git.diff();
     if (diff.truncated) throw new Error("actual diff is truncated and cannot become evidence");
+    assertEngineeringDiffWithinPolicy(diff);
     const diffDigest = canonicalDigest({
       patch: diff.patch,
       files_changed: diff.filesChanged,
@@ -716,6 +827,10 @@ export async function executeVerticalSlice(
     ledger: new OperationLedgerRepository(),
     runTransaction: (fn) => input.db.withTransaction(fn),
     allowedPaths: slice.allowed_paths,
+    firstMutationPaths: slice.test_paths,
+    ...(input.discoveryCallLimit === undefined
+      ? {}
+      : { maxDiscoveryCalls: input.discoveryCallLimit }),
     beforeMutation: assertCurrent,
     operationIdFor: operationIdFactory({
       caseId: input.caseId,
@@ -742,6 +857,50 @@ export async function executeVerticalSlice(
   if (operationResults.some((result) => result.outcome === "AMBIGUOUS")) {
     throw new Error("ambiguous implementation operation cannot produce slice evidence");
   }
+  const implementationDelta = await durableBaselineStore.inspect(
+    binding,
+    mapping.target,
+    baseline,
+    (root) => deriveBaselineTreeDelta(root, mapping.target),
+  );
+  if (implementationDelta.changed_paths.some((path) => !pathAllowed(path, slice.allowed_paths))) {
+    throw new Error("actual implementation delta escaped server-owned allowed_paths");
+  }
+  const normalizedReport = normalizeImplementerReport({
+    report,
+    operationResults,
+    actualChangedPaths: implementationDelta.changed_paths,
+  });
+  let generatedPaths: readonly string[] = [];
+  if (input.generatorCatalog !== undefined && input.generatorCatalog.definitions.length > 0) {
+    if (input.generatorArtifactRoot === undefined) {
+      throw new Error("generator artifact root is required for a non-empty generator catalog");
+    }
+    const generated = await executeCodeOwnedGenerators({
+      authoritativeRoot: mapping.target,
+      artifactRoot: input.generatorArtifactRoot,
+      identity: { case_id: input.caseId, workspace_id: workspaceId },
+      ledger: new OperationLedgerRepository(),
+      runTransaction: (fn) => input.db.withTransaction(fn),
+      catalog: input.generatorCatalog,
+      implementationChangedPaths: implementationDelta.changed_paths,
+      allowedPaths: slice.allowed_paths,
+      beforeMutation: assertCurrent,
+      operationIdFor: generatorOperationIdFactory({
+        caseId: input.caseId,
+        workspaceId,
+        runId: slice.run_id,
+        checkpointRevision: slice.revision,
+        sliceId: slice.slice_id,
+        attempt: input.attempt,
+      }),
+    });
+    generatedPaths = generated.changedFiles;
+    for (const result of generated.operationResults) {
+      operationResults.push(result);
+      recordEngineeringDebugToolResult(result);
+    }
+  }
   const actual = await actualEvidence({
     store: durableBaselineStore,
     binding,
@@ -753,7 +912,9 @@ export async function executeVerticalSlice(
     workspaceId,
     allowedPaths: slice.allowed_paths,
     priorAgentPaths: input.priorAgentPaths ?? [],
-    claimedChangedFiles: report.changed_files,
+    claimedChangedFiles: [
+      ...new Set([...normalizedReport.changed_files, ...generatedPaths]),
+    ].sort(),
     assertCurrent,
   });
   // A first attempt with no cumulative patch made no progress. A correction may legitimately
@@ -772,7 +933,7 @@ export async function executeVerticalSlice(
     operationResults: Object.freeze([...operationResults]),
     baseline,
     actual,
-    implementerReport: report,
+    implementerReport: normalizedReport,
   });
 }
 
@@ -1039,8 +1200,9 @@ export async function executeVerticalSliceGates(
     .filter((definition) => definition.required)
     .map((definition) => definition.gate_id)
     .sort();
-  if (!samePaths(gateIds, requiredGateIds)) {
-    throw new Error("SliceContract gate_ids must equal every server-required gate");
+  const expectedGateIds = input.expectedGateIds ?? requiredGateIds;
+  if (!samePaths(gateIds, expectedGateIds)) {
+    throw new Error("SliceContract gate_ids must equal every server-required gate scheduled here");
   }
   const selected = gateIds.map((gateId) => {
     const definition = input.catalog.get(gateId);
@@ -1123,11 +1285,15 @@ export async function executeVerticalSliceGates(
     },
   );
   if (result.status !== "COMPLETE") {
+    void recordEngineeringDebugGateProgress({ tier: "FAST", status: "BLOCKED" });
     return {
       status: "BLOCKED",
       aggregate: null,
       bundle: null,
       reason: result.reason,
+      blockingGateIds: result.blocking_gate_ids,
+      receipts: result.receipts,
+      actual: input.actual,
     };
   }
   if (
@@ -1136,6 +1302,15 @@ export async function executeVerticalSliceGates(
     result.bundle.tree_digest !== input.actual.treeDigest ||
     result.bundle.diff_digest !== input.actual.diffDigest
   ) {
+    const blockedFast = selectedCatalog.definitions.some(
+      (definition) =>
+        definition.gate_tier === "FAST" &&
+        result.aggregate.blocking_gate_ids.includes(definition.gate_id),
+    );
+    void recordEngineeringDebugGateProgress({
+      tier: blockedFast ? "FAST" : "FULL",
+      status: "BLOCKED",
+    });
     return {
       status: "BLOCKED",
       aggregate: result.aggregate,
@@ -1144,8 +1319,13 @@ export async function executeVerticalSliceGates(
         result.aggregate.status === VerificationGateStatus.PASSED
           ? "PASS_WITHOUT_BOUND_EVIDENCE_BUNDLE"
           : result.aggregate.status,
+      blockingGateIds: result.aggregate.blocking_gate_ids,
+      receipts: result.receipts,
+      actual: input.actual,
     };
   }
+  void recordEngineeringDebugGateProgress({ tier: "FAST", status: "PASSED" });
+  void recordEngineeringDebugGateProgress({ tier: "FULL", status: "PASSED" });
   return {
     status: "PASS",
     aggregate: result.aggregate,

@@ -1,5 +1,11 @@
 import { ConfigurationError } from "./errors.js";
-import type { ModelIdentity, RetryPolicy, RuntimeConfig, ToolLimits } from "./types.js";
+import type {
+  ModelIdentity,
+  RetryPolicy,
+  RuntimeConfig,
+  ToolLimits,
+  ToolLoopPolicy,
+} from "./types.js";
 
 export const MAX_TIMEOUT_MS = 86_400_000;
 export const MAX_TOOL_ITERATIONS = 100;
@@ -14,6 +20,7 @@ export interface RuntimeConfigInput {
   readonly timeoutMs: number;
   readonly toolLimits: ToolLimits;
   readonly retryPolicy?: Partial<RetryPolicy>;
+  readonly toolLoopPolicy?: ToolLoopPolicy;
 }
 
 function requireText(value: unknown, field: string): string {
@@ -28,6 +35,17 @@ function requireBoundedInteger(value: unknown, field: string, maximum: number): 
     throw new ConfigurationError(`${field} must be an integer between 0 and ${maximum}`);
   }
   return value;
+}
+
+function uniqueToolNames(values: unknown, field: string): readonly string[] {
+  if (!Array.isArray(values) || values.length > 256) {
+    throw new ConfigurationError(`${field} must be an array with at most 256 entries`);
+  }
+  const names = values.map((value, index) => requireText(value, `${field}[${index}]`));
+  if (new Set(names).size !== names.length) {
+    throw new ConfigurationError(`${field} must contain unique names`);
+  }
+  return Object.freeze(names);
 }
 
 /** Validate and copy the safe, provider-neutral portion of runtime settings. */
@@ -79,10 +97,56 @@ export function createRuntimeConfig(input: RuntimeConfigInput): RuntimeConfig {
     throw new ConfigurationError("retryPolicy.maxAttempts must be at least 1");
   }
 
+  let toolLoopPolicy: ToolLoopPolicy | undefined;
+  if (input.toolLoopPolicy !== undefined) {
+    const readonlyToolNames = uniqueToolNames(
+      input.toolLoopPolicy.readonlyToolNames,
+      "toolLoopPolicy.readonlyToolNames",
+    );
+    const mutationToolNames = uniqueToolNames(
+      input.toolLoopPolicy.mutationToolNames,
+      "toolLoopPolicy.mutationToolNames",
+    );
+    if (readonlyToolNames.some((name) => mutationToolNames.includes(name))) {
+      throw new ConfigurationError("toolLoopPolicy tool classes must be disjoint");
+    }
+    const mutationIterationsReserved = requireBoundedInteger(
+      input.toolLoopPolicy.mutationIterationsReserved,
+      "toolLoopPolicy.mutationIterationsReserved",
+      toolLimits.maxIterations,
+    );
+    const retainRecentToolPairs = requireBoundedInteger(
+      input.toolLoopPolicy.retainRecentToolPairs,
+      "toolLoopPolicy.retainRecentToolPairs",
+      toolLimits.maxIterations,
+    );
+    if (
+      input.toolLoopPolicy.requireSuccessfulMutationAfterFailure !== undefined &&
+      typeof input.toolLoopPolicy.requireSuccessfulMutationAfterFailure !== "boolean"
+    ) {
+      throw new ConfigurationError(
+        "toolLoopPolicy.requireSuccessfulMutationAfterFailure must be a boolean",
+      );
+    }
+    toolLoopPolicy = Object.freeze({
+      readonlyToolNames,
+      mutationToolNames,
+      mutationIterationsReserved,
+      retainRecentToolPairs,
+      ...(input.toolLoopPolicy.requireSuccessfulMutationAfterFailure === undefined
+        ? {}
+        : {
+            requireSuccessfulMutationAfterFailure:
+              input.toolLoopPolicy.requireSuccessfulMutationAfterFailure,
+          }),
+    });
+  }
+
   return Object.freeze({
     model: Object.freeze(model),
     timeoutMs: input.timeoutMs,
     toolLimits: Object.freeze(toolLimits),
     retryPolicy: Object.freeze(retryPolicy),
+    ...(toolLoopPolicy === undefined ? {} : { toolLoopPolicy }),
   });
 }

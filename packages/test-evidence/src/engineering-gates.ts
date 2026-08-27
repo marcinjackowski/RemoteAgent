@@ -49,6 +49,21 @@ export const VerificationGateClass = {
 
 const verificationGateClass = z.enum(VerificationGateClass);
 
+export const VerificationGateTier = {
+  FAST: "FAST",
+  FULL: "FULL",
+} as const;
+
+const verificationGateTier = z.enum(VerificationGateTier);
+
+export const VerificationGateSchedule = {
+  FIRST_SLICE: "FIRST_SLICE",
+  EACH_SLICE: "EACH_SLICE",
+  LAST_SLICE: "LAST_SLICE",
+} as const;
+
+const verificationGateSchedule = z.enum(VerificationGateSchedule);
+
 export const VerificationGateTarget = {
   BASELINE: "BASELINE",
   CURRENT: "CURRENT",
@@ -124,6 +139,8 @@ const implementationContextEntry = z.discriminatedUnion("kind", [
 const verificationGateDefinitionSchema = versionedContract({
   gate_id: idString,
   gate_class: verificationGateClass,
+  gate_tier: verificationGateTier.default(VerificationGateTier.FULL),
+  gate_schedule: verificationGateSchedule.default(VerificationGateSchedule.EACH_SLICE),
   executable: absoluteExecutable,
   argv: z.array(z.string().max(4096)).max(128),
   relative_cwd: relativeRepositoryPath,
@@ -137,6 +154,21 @@ const verificationGateDefinitionSchema = versionedContract({
   implementation_guidance: z.string().min(1).max(4096).optional(),
   implementation_context: z.array(implementationContextEntry).min(1).max(24).optional(),
 }).superRefine((definition, ctx) => {
+  if (
+    definition.environment_profile === "HERMETIC" &&
+    definition.argv.some((argument) => {
+      if (path.isAbsolute(argument)) return true;
+      const assignment = argument.indexOf("=");
+      return assignment >= 0 && path.isAbsolute(argument.slice(assignment + 1));
+    })
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["argv"],
+      message:
+        "hermetic gate arguments cannot reference absolute host paths; use workspace-relative or digest-bound inline input",
+    });
+  }
   if (definition.test_first && (!definition.required || !definition.baseline)) {
     ctx.addIssue({
       code: "custom",
@@ -318,6 +350,8 @@ function verificationGateFreezeDefinition(
 
 function verificationGateCommandDigest(definition: VerificationGateDefinition): string {
   return canonicalDigest({
+    gate_tier: definition.gate_tier,
+    gate_schedule: definition.gate_schedule,
     executable: definition.executable,
     argv: definition.argv,
     relative_cwd: definition.relative_cwd,
@@ -409,9 +443,12 @@ export class VerificationGateCatalog {
       }
     }
 
-    definitions.sort((left, right) =>
-      left.gate_id < right.gate_id ? -1 : left.gate_id > right.gate_id ? 1 : 0,
-    );
+    definitions.sort((left, right) => {
+      if (left.gate_tier !== right.gate_tier) {
+        return left.gate_tier === VerificationGateTier.FAST ? -1 : 1;
+      }
+      return left.gate_id < right.gate_id ? -1 : left.gate_id > right.gate_id ? 1 : 0;
+    });
     return new VerificationGateCatalog(definitions, canonicalAllowlist);
   }
 
@@ -1267,13 +1304,15 @@ export type VerificationGateBatchExecutionResult =
       status: "COMPLETE";
       aggregate: VerificationGateAggregate;
       bundle: EngineeringEvidenceBundle | null;
+      receipts: readonly VerificationGateReceipt[];
     }>
   | Readonly<{
       status: "INCOMPLETE";
       aggregate: null;
       bundle: null;
-      reason: "NO_REQUIRED_GATES" | "AMBIGUOUS" | "CANCELLED";
+      reason: "NO_REQUIRED_GATES" | "AMBIGUOUS" | "CANCELLED" | "FAST_GATE_BLOCKED_FULL";
       blocking_gate_ids: readonly string[];
+      receipts: readonly VerificationGateReceipt[];
     }>;
 
 type DurableGateExecution = Extract<VerificationGateExecutionResult, { status: "RECORDED" }>;
@@ -1308,6 +1347,23 @@ function verificationGateBundleItems(
   });
 }
 
+function fastGatePassed(
+  definition: VerificationGateDefinition,
+  results: readonly DurableGateExecution[],
+): boolean {
+  const current = results.find(
+    (result) => result.receipt.target === VerificationGateTarget.CURRENT,
+  );
+  if (current?.receipt.outcome !== VerificationGateOutcome.PASSED) return false;
+  const baseline = results.find(
+    (result) => result.receipt.target === VerificationGateTarget.BASELINE,
+  );
+  if (definition.test_first) {
+    return baseline?.receipt.outcome === VerificationGateOutcome.FAILED;
+  }
+  return baseline === undefined || baseline.receipt.outcome === VerificationGateOutcome.PASSED;
+}
+
 /**
  * Deterministic required-gate policy: catalog order, BASELINE then CURRENT.
  * Durable assertion/infrastructure outcomes continue so the batch is complete;
@@ -1329,6 +1385,7 @@ export async function executeVerificationGateBatch(
       bundle: null,
       reason: "NO_REQUIRED_GATES",
       blocking_gate_ids: [],
+      receipts: [],
     };
   }
 
@@ -1357,6 +1414,7 @@ export async function executeVerificationGateBatch(
 
   const results: DurableGateExecution[] = [];
   for (const definition of required) {
+    const gateResults: DurableGateExecution[] = [];
     const targets = [
       ...(definition.baseline
         ? [
@@ -1407,18 +1465,37 @@ export async function executeVerificationGateBatch(
           bundle: null,
           reason: "AMBIGUOUS",
           blocking_gate_ids: [definition.gate_id],
+          receipts: results.map((result) => result.receipt),
         };
       }
       results.push(execution);
+      gateResults.push(execution);
       if (execution.receipt.outcome === VerificationGateOutcome.CANCELLED) {
         return {
           status: "INCOMPLETE",
           aggregate: null,
           bundle: null,
-          reason: "CANCELLED",
+          reason:
+            definition.gate_tier === VerificationGateTier.FAST
+              ? "FAST_GATE_BLOCKED_FULL"
+              : "CANCELLED",
           blocking_gate_ids: [definition.gate_id],
+          receipts: results.map((result) => result.receipt),
         };
       }
+    }
+    if (
+      definition.gate_tier === VerificationGateTier.FAST &&
+      !fastGatePassed(definition, gateResults)
+    ) {
+      return {
+        status: "INCOMPLETE",
+        aggregate: null,
+        bundle: null,
+        reason: "FAST_GATE_BLOCKED_FULL",
+        blocking_gate_ids: [definition.gate_id],
+        receipts: results.map((result) => result.receipt),
+      };
     }
   }
 
@@ -1441,7 +1518,12 @@ export async function executeVerificationGateBatch(
     })),
   });
   if (aggregate.status !== VerificationGateStatus.PASSED) {
-    return { status: "COMPLETE", aggregate, bundle: null };
+    return {
+      status: "COMPLETE",
+      aggregate,
+      bundle: null,
+      receipts: results.map((result) => result.receipt),
+    };
   }
 
   const byKey = new Map(results.map((result) => [verificationGateResultKey(result), result]));
@@ -1482,5 +1564,10 @@ export async function executeVerificationGateBatch(
     context_digest: metadata.context_digest,
     test_first_evidence: testFirstEvidence,
   });
-  return { status: "COMPLETE", aggregate, bundle };
+  return {
+    status: "COMPLETE",
+    aggregate,
+    bundle,
+    receipts: results.map((result) => result.receipt),
+  };
 }

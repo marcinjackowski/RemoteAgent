@@ -3,18 +3,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
-import { EngineeringStage } from "@remoteagent/contracts";
-import { FakeTransport, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
+import { EngineeringStage, canonicalDigest } from "@remoteagent/contracts";
+import { FakeTransport, ToolLimitError, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
 import { ToolInputError } from "@remoteagent/bedrock-runtime";
+import {
+  LocalArtifactStore,
+  VerificationGateOutcome,
+  VerificationGateReceipt,
+  VerificationGateTarget,
+  VerificationGateTier,
+} from "@remoteagent/test-evidence";
 import * as z from "zod";
 
 import {
   addEngineeringModelUsage,
   boundedToolInputError,
+  buildEngineeringGateFailureArtifact,
   classifyEngineeringModelUsage,
   createConfiguredEngineeringStageExecutor,
   emptyEngineeringModelUsage,
   engineeringImplementationContext,
+  engineeringCorrectionImplementationContext,
+  engineeringImplementationDiscoveryCallLimit,
   engineeringImplementationToolDefinitions,
   engineeringImplementationGuidance,
   engineeringImplementationPrompt,
@@ -22,7 +32,10 @@ import {
   engineeringMutationToolDefinitions,
   engineeringExecutionConfigFromEnv,
   loadEngineeringExecutionConfig,
+  receiptBackedImplementationReport,
 } from "../src/engineering-execution.js";
+import { EngineeringModelBudgetError } from "../src/engineering-debug-journal.js";
+import { ENGINEERING_DIFF_POLICY } from "../src/vertical-slice-executor.js";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -72,9 +85,193 @@ it("aggregates only provider-reported token usage and marks missing or partial r
   expect(() =>
     addEngineeringModelUsage(actual, { inputTokens: -1, outputTokens: 0, totalTokens: 0 }),
   ).toThrow(/invalid input token count/);
-  expect(classifyEngineeringModelUsage(150_000)).toBe("TARGET");
-  expect(classifyEngineeringModelUsage(150_001)).toBe("WARNING");
-  expect(classifyEngineeringModelUsage(250_001)).toBe("HARD_LIMIT");
+  expect(classifyEngineeringModelUsage(400_000)).toBe("TARGET");
+  expect(classifyEngineeringModelUsage(400_001)).toBe("WARNING");
+  expect(classifyEngineeringModelUsage(600_001)).toBe("HARD_LIMIT");
+});
+
+it("finalizes an implementation from successful receipts only at the exact token fence", () => {
+  expect(
+    receiptBackedImplementationReport({
+      error: new EngineeringModelBudgetError(),
+      successfulMutationPaths: ["src/z.swift", "src/a.swift", "src/z.swift"],
+      unresolvedMutationFailure: false,
+    }),
+  ).toEqual({ changed_files: ["src/a.swift", "src/z.swift"] });
+  expect(() =>
+    receiptBackedImplementationReport({
+      error: new Error("unrelated failure"),
+      successfulMutationPaths: ["src/a.swift"],
+      unresolvedMutationFailure: false,
+    }),
+  ).toThrow(/unrelated failure/);
+  expect(
+    receiptBackedImplementationReport({
+      error: new EngineeringModelBudgetError(),
+      successfulMutationPaths: ["src/a.swift"],
+      unresolvedMutationFailure: true,
+      unresolvedMutationAmbiguity: false,
+    }),
+  ).toEqual({ changed_files: ["src/a.swift"] });
+  expect(() =>
+    receiptBackedImplementationReport({
+      error: new EngineeringModelBudgetError(),
+      successfulMutationPaths: ["src/a.swift"],
+      unresolvedMutationFailure: true,
+      unresolvedMutationAmbiguity: true,
+    }),
+  ).toThrow(/reserve would exceed/);
+  expect(() =>
+    receiptBackedImplementationReport({
+      error: new EngineeringModelBudgetError(),
+      successfulMutationPaths: [],
+      unresolvedMutationFailure: false,
+    }),
+  ).toThrow(/reserve would exceed/);
+  expect(
+    receiptBackedImplementationReport({
+      error: new ToolLimitError("Repeated mutation target refusal made no progress"),
+      successfulMutationPaths: ["src/a.swift"],
+      unresolvedMutationFailure: true,
+      unresolvedMutationAmbiguity: false,
+    }),
+  ).toEqual({ changed_files: ["src/a.swift"] });
+  expect(() =>
+    receiptBackedImplementationReport({
+      error: new ToolLimitError("Maximum tool iterations exceeded"),
+      successfulMutationPaths: ["src/a.swift"],
+      unresolvedMutationFailure: true,
+      unresolvedMutationAmbiguity: true,
+    }),
+  ).toThrow(/Maximum tool iterations exceeded/);
+});
+
+it("builds bounded server-owned correction evidence only from failed gate diagnostics", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "ra048-gate-failure-")));
+  cleanup.push(root);
+  const store = new LocalArtifactStore({ root, knownSecrets: ["opaque-secret-canary"] });
+  const log = await store.put({
+    artifact_id: "xcode-log",
+    scope: { case_id: "case-1", workspace_id: "workspace-1" },
+    content: [
+      "unrelated successful compilation detail that must not enter correction context",
+      "/Users/private/source/Assets+Help.swift:8:14: error: cannot find 'Bundle' in scope",
+      "fatal error: opaque-secret-canary must never survive redaction",
+    ].join("\n"),
+  });
+  const receipt = VerificationGateReceipt.parse({
+    schema_version: 1,
+    receipt_id: "receipt-xcode",
+    case_id: "case-1",
+    workspace_id: "workspace-1",
+    run_id: "run-1",
+    operation_id: "operation-xcode",
+    gate_id: "xcode-full",
+    target: VerificationGateTarget.CURRENT,
+    tree_digest: canonicalDigest({ tree: 1 }),
+    config_digest: canonicalDigest({ config: 1 }),
+    command_digest: canonicalDigest({ command: 1 }),
+    outcome: VerificationGateOutcome.FAILED,
+    exit_code: 65,
+    signal: null,
+    duration_ms: 236_300,
+    log_artifact: log,
+    log_digest: log.digest,
+  });
+  const actual = {
+    changedFiles: ["Sources/Assets+Help.swift"],
+    cumulativeAgentPaths: ["Sources/Assets+Help.swift"],
+    treeDigest: canonicalDigest({ actual_tree: 1 }),
+    diffDigest: canonicalDigest({ actual_diff: 1 }),
+    patch: "diff --git a/Sources/Assets+Help.swift b/Sources/Assets+Help.swift",
+    filesChanged: 1,
+    insertions: 8,
+    deletions: 0,
+  };
+  const binding = {
+    caseId: "case-1",
+    workUnitId: "unit-1",
+    runId: "run-1",
+    checkpointRevision: 2,
+    stage: EngineeringStage.GATE_EXECUTION,
+    attempt: 2,
+  };
+  const slice = {
+    schema_version: 2 as const,
+    artifact_kind: "SliceContract" as const,
+    case_id: "case-1",
+    run_id: "run-1",
+    revision: 2,
+    slice_id: "slice-1",
+    objective: "compile the help asset accessor",
+    observable_result: "the accessor compiles",
+    allowed_paths: ["Sources"],
+    test_paths: ["Tests"],
+    gate_ids: ["xcode-full"],
+    inspection_method: "run xcodebuild",
+    stop_condition: "xcodebuild passes",
+  };
+
+  const artifact = await buildEngineeringGateFailureArtifact({
+    binding,
+    slice,
+    contextManifestDigest: canonicalDigest({ context: 1 }),
+    catalogConfigDigest: canonicalDigest({ catalog: 1 }),
+    decisionIds: ["decision-2", "decision-1"],
+    result: {
+      status: "BLOCKED",
+      aggregate: null,
+      bundle: null,
+      reason: "FAILED",
+      blockingGateIds: ["xcode-full"],
+      receipts: [receipt],
+      actual,
+    },
+    artifactStore: store,
+  });
+
+  expect(artifact).toMatchObject({
+    artifact_kind: "GateFailure",
+    authority: "SERVER_OWNED",
+    slice_id: "slice-1",
+    attempt: 2,
+    blocking_gate_ids: ["xcode-full"],
+    receipt_ids: ["receipt-xcode"],
+    decision_ids: ["decision-1", "decision-2"],
+    diagnostics: [
+      expect.objectContaining({
+        gate_id: "xcode-full",
+        outcome: "FAILED",
+        trust: "UNTRUSTED_DATA",
+      }),
+    ],
+  });
+  const excerpt = artifact?.diagnostics[0]?.excerpt ?? "";
+  expect(excerpt).toContain("cannot find 'Bundle' in scope");
+  expect(excerpt).not.toContain("unrelated successful compilation detail");
+  expect(excerpt).not.toContain("opaque-secret-canary");
+  expect(excerpt).not.toContain("/Users/private/source");
+  expect(excerpt.length).toBeLessThanOrEqual(16_384);
+
+  await expect(
+    buildEngineeringGateFailureArtifact({
+      binding,
+      slice,
+      contextManifestDigest: canonicalDigest({ context: 1 }),
+      catalogConfigDigest: canonicalDigest({ catalog: 1 }),
+      decisionIds: [],
+      result: {
+        status: "BLOCKED",
+        aggregate: null,
+        bundle: null,
+        reason: "TIMED_OUT",
+        blockingGateIds: ["missing-failed-receipt"],
+        receipts: [receipt],
+        actual,
+      },
+      artifactStore: store,
+    }),
+  ).resolves.toBeNull();
 });
 
 it("describes bounded write semantics and search-first discovery to the implementer", () => {
@@ -90,7 +287,8 @@ it("describes bounded write semantics and search-first discovery to the implemen
     "tree",
     "write",
   ]);
-  expect(definitions.get("patch")?.description).toMatch(/complete final file contents/i);
+  expect(definitions.get("patch")?.description).toMatch(/complete final contents.*new files/i);
+  expect(definitions.get("patch")?.description).toMatch(/existing file.*replacement_files/i);
   expect(definitions.get("patch")?.description).toMatch(/never a unified diff/i);
   expect(definitions.get("write")?.description).toMatch(/complete final file contents/i);
   expect(definitions.get("search")?.description).toMatch(/before guessing/i);
@@ -102,16 +300,25 @@ it("describes bounded write semantics and search-first discovery to the implemen
   ]);
 });
 
-it("caps implementation to four batched tool rounds without widening a stricter deployment", () => {
+it("reserves mutation rounds within an eight-round engineering cap without widening deployment", () => {
   const broad = createRuntimeConfig({
     model: { provider: "test", model_id: "implementation-model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 16, maxCalls: 64 },
   });
   const bounded = engineeringImplementationRuntimeConfig(broad);
-  expect(bounded.toolLimits).toEqual({ maxIterations: 4, maxCalls: 24 });
+  expect(bounded.toolLimits).toEqual({ maxIterations: 8, maxCalls: 32 });
+  expect(bounded.toolLoopPolicy).toEqual({
+    readonlyToolNames: ["read", "search", "tree", "config"],
+    mutationToolNames: ["write", "patch", "mkdir"],
+    mutationIterationsReserved: 3,
+    retainRecentToolPairs: 3,
+    requireSuccessfulMutationAfterFailure: true,
+  });
   expect(Object.isFrozen(bounded)).toBe(true);
   expect(Object.isFrozen(bounded.toolLimits)).toBe(true);
+  expect(Object.isFrozen(bounded.toolLoopPolicy)).toBe(true);
+  expect(Object.isFrozen(bounded.toolLoopPolicy?.readonlyToolNames)).toBe(true);
 
   const stricter = createRuntimeConfig({
     model: broad.model,
@@ -122,6 +329,59 @@ it("caps implementation to four batched tool rounds without widening a stricter 
     maxIterations: 2,
     maxCalls: 7,
   });
+  expect(engineeringImplementationRuntimeConfig(stricter).toolLoopPolicy).toMatchObject({
+    mutationIterationsReserved: 2,
+    retainRecentToolPairs: 2,
+  });
+});
+
+it("derives a separate bounded budget only for the exact server-owned prefetch plan", () => {
+  expect(engineeringImplementationDiscoveryCallLimit([])).toBe(10);
+  expect(
+    engineeringImplementationDiscoveryCallLimit(
+      Array.from({ length: 13 }, (_, index) => ({
+        kind: "SEARCH" as const,
+        relative_path: `src/${String(index)}.ts`,
+        query: `symbol-${String(index)}`,
+      })),
+    ),
+  ).toBe(13);
+  expect(() =>
+    engineeringImplementationDiscoveryCallLimit(
+      Array.from({ length: 25 }, (_, index) => ({
+        kind: "READ" as const,
+        relative_path: `src/${String(index)}.ts`,
+      })),
+    ),
+  ).toThrow(/code-owned discovery cap/u);
+});
+
+it("prefetches exact prior agent files only for a gate correction", () => {
+  const configured = [
+    { kind: "SEARCH" as const, relative_path: "src/flow.swift", query: "routeAlert" },
+    { kind: "READ" as const, relative_path: "src/shared.swift" },
+  ];
+  expect(
+    engineeringCorrectionImplementationContext(
+      configured,
+      ["src/generated.swift", "src/shared.swift", "src/generated.swift"],
+      true,
+    ),
+  ).toEqual([
+    { kind: "SEARCH", relative_path: "src/flow.swift", query: "routeAlert" },
+    { kind: "READ", relative_path: "src/shared.swift" },
+    { kind: "READ", relative_path: "src/generated.swift" },
+  ]);
+  expect(
+    engineeringCorrectionImplementationContext(configured, ["src/generated.swift"], false),
+  ).toEqual(configured);
+  expect(() =>
+    engineeringCorrectionImplementationContext(
+      [],
+      Array.from({ length: 25 }, (_, index) => `src/generated-${String(index)}.swift`),
+      true,
+    ),
+  ).toThrow(/code-owned discovery cap/u);
 });
 
 it("loads one strict canonical deployment config and fails closed on widening", async () => {
@@ -137,7 +397,7 @@ it("loads one strict canonical deployment config and fails closed on widening", 
   await Promise.all([artifactInsideSource, sourceInsideWorkspace].map((path) => mkdir(path)));
   const executable = await realpath(process.execPath);
   const value = {
-    schema_version: 2,
+    schema_version: 3,
     workspace_root: workspace,
     baseline_root: baseline,
     artifact_root: artifacts,
@@ -146,12 +406,14 @@ it("loads one strict canonical deployment config and fails closed on widening", 
       source_path: source,
       base_branch: "main",
       write_path_allowlist: ["src", "packages"],
+      test_path_allowlist: ["src"],
     },
     gates: [
       {
         schema_version: 1,
         gate_id: "unit",
         gate_class: "TEST",
+        gate_tier: VerificationGateTier.FAST,
         executable,
         argv: ["-e", "process.exit(0)"],
         relative_cwd: "source",
@@ -171,6 +433,19 @@ it("loads one strict canonical deployment config and fails closed on widening", 
       },
     ],
     executable_allowlist: [executable],
+    generators: [
+      {
+        generator_id: "client_codegen",
+        trigger_paths: ["src/schema.json"],
+        output_paths: ["packages/generated.ts"],
+        command: {
+          executable,
+          args: ["-e", "process.exit(0)"],
+          cwd: ".",
+          timeoutMs: 10_000,
+        },
+      },
+    ],
   };
   const configPath = join(parent, "engineering.json");
   await writeFile(configPath, `${JSON.stringify(value)}\n`);
@@ -180,6 +455,7 @@ it("loads one strict canonical deployment config and fails closed on widening", 
     baselineRoot: baseline,
     artifactRoot: artifacts,
     writePathAllowlist: ["packages", "src"],
+    testPathAllowlist: ["src"],
     writeDeploymentPolicy: {
       schema_version: 1,
       purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
@@ -187,7 +463,29 @@ it("loads one strict canonical deployment config and fails closed on widening", 
       write_path_allowlist: ["packages", "src"],
     },
   });
+  expect(loaded.configDigest).toBe(
+    canonicalDigest({
+      schema_version: 3,
+      workspace_root: workspace,
+      baseline_root: baseline,
+      artifact_root: artifacts,
+      repository: {
+        repository_id: "repo",
+        source_path: source,
+        base_branch: "main",
+        write_path_allowlist: ["packages", "src"],
+        test_path_allowlist: ["src"],
+      },
+      engineering_diff_policy: ENGINEERING_DIFF_POLICY,
+      gate_config_digest: loaded.catalog.config_digest,
+      generator_config_digest: loaded.generatorCatalog?.config_digest,
+    }),
+  );
+  expect(loaded.generatorCatalog?.definitions.map((entry) => entry.generator_id)).toEqual([
+    "client_codegen",
+  ]);
   expect(loaded.catalog.definitions.map((gate) => gate.gate_id)).toEqual(["unit"]);
+  expect(loaded.catalog.definitions[0]?.gate_tier).toBe(VerificationGateTier.FAST);
   expect(engineeringImplementationGuidance(loaded.catalog, ["unit"])).toEqual([
     {
       gate_id: "unit",
@@ -228,6 +526,9 @@ it("loads one strict canonical deployment config and fails closed on widening", 
   expect(implementationPrompt).toContain("exact surrounding lines suitable");
   expect(implementationPrompt).toContain("do not read the whole file");
   expect(implementationPrompt).toContain("Batch independent replacements into the same patch call");
+  expect(implementationPrompt).toContain(
+    "first successful filesystem mutation must contain only paths within slice.test_paths",
+  );
   expect(implementationPrompt).toContain("do not create a replacement test file");
   expect(implementationPrompt).not.toContain(executable);
   const prefetchedPrompt = engineeringImplementationPrompt({
@@ -256,10 +557,28 @@ it("loads one strict canonical deployment config and fails closed on widening", 
         evidence: "bounded repository excerpt",
       },
     ],
+    existingAgentPaths: ["src/existing-test.ts", "src/existing-source.ts"],
+    gateCorrection: {
+      blocking_gate_ids: ["unit"],
+      diagnostics: [
+        {
+          gate_id: "unit",
+          outcome: "FAILED",
+          trust: "UNTRUSTED_DATA",
+          excerpt: "error: cannot find symbol",
+        },
+      ],
+    },
   });
   expect(prefetchedPrompt).toContain("server already performed the complete code-owned discovery");
   expect(prefetchedPrompt).toContain("Use only the supplied write, patch, and mkdir tools");
   expect(prefetchedPrompt).toContain("bounded repository excerpt");
+  expect(prefetchedPrompt).toContain("Previous required-gate correction evidence");
+  expect(prefetchedPrompt).toContain("cannot find symbol");
+  expect(prefetchedPrompt).toContain(
+    '["src/existing-source.ts","src/existing-test.ts"]. Never call write for these paths',
+  );
+  expect(prefetchedPrompt).toContain("patch.replacement_files and exact old_content");
   expect(prefetchedPrompt).not.toContain("Use search/tree results");
   expect(Object.isFrozen(loaded.writePathAllowlist)).toBe(true);
   const modelConfig = createRuntimeConfig({
@@ -274,7 +593,7 @@ it("loads one strict canonical deployment config and fails closed on widening", 
         {
           type: "json",
           value: {
-            schema_version: 1,
+            schema_version: 2,
             artifact_kind: "SliceContract",
             case_id: "case-1",
             run_id: "run-1",
@@ -283,6 +602,7 @@ it("loads one strict canonical deployment config and fails closed on widening", 
             objective: "bounded change",
             observable_result: "one visible result",
             allowed_paths: ["src"],
+            test_paths: ["src/settings.test.ts"],
             gate_ids: ["unit"],
             inspection_method: "inspect result",
             stop_condition: "required gate passes",
@@ -307,6 +627,8 @@ it("loads one strict canonical deployment config and fails closed on widening", 
     },
     objective: "bounded change",
     context: { packet: "bounded context" } as never,
+    orderedArtifacts: [],
+    processClass: "SMALL",
   });
   const planningPrompt =
     transport.requests[0]?.messages
@@ -314,9 +636,13 @@ it("loads one strict canonical deployment config and fails closed on widening", 
       .map((content) => (content.type === "text" ? content.text : ""))
       .join("\n") ?? "";
   expect(planningPrompt).toContain(
-    'allowed_paths must contain only applicable entries from ["packages","src"]',
+    'every blueprint or slice allowed_paths must contain only applicable entries from ["packages","src"]',
   );
-  expect(planningPrompt).toContain('gate_ids must equal ["unit"]');
+  expect(planningPrompt).toContain(
+    'test_paths must contain only applicable entries from the narrower code-owned test roots ["src"]',
+  );
+  expect(planningPrompt).toContain('"unit":"EACH_SLICE"');
+  expect(planningPrompt).toContain("gate_ids must equal the applicable IDs in server order");
   await writeFile(
     configPath,
     `${JSON.stringify({
@@ -326,6 +652,23 @@ it("loads one strict canonical deployment config and fails closed on widening", 
   );
   const narrower = await loadEngineeringExecutionConfig(configPath);
   expect(narrower.configDigest).not.toBe(loaded.configDigest);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({
+      ...value,
+      repository: { ...value.repository, test_path_allowlist: ["packages"] },
+    })}\n`,
+  );
+  const changedTestRoots = await loadEngineeringExecutionConfig(configPath);
+  expect(changedTestRoots.configDigest).not.toBe(loaded.configDigest);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({
+      ...value,
+      repository: { ...value.repository, test_path_allowlist: ["foreign"] },
+    })}\n`,
+  );
+  await expect(loadEngineeringExecutionConfig(configPath)).rejects.toThrow(/write allowlist/u);
   await writeFile(
     configPath,
     `${JSON.stringify({
@@ -340,6 +683,30 @@ it("loads one strict canonical deployment config and fails closed on widening", 
   );
   const changedGuidance = await loadEngineeringExecutionConfig(configPath);
   expect(changedGuidance.configDigest).not.toBe(loaded.configDigest);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({
+      ...value,
+      gates: [{ ...value.gates[0], gate_tier: VerificationGateTier.FULL }],
+    })}\n`,
+  );
+  const changedTier = await loadEngineeringExecutionConfig(configPath);
+  expect(changedTier.catalog.definitions[0]?.gate_tier).toBe(VerificationGateTier.FULL);
+  expect(changedTier.configDigest).not.toBe(loaded.configDigest);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({
+      ...value,
+      generators: [
+        {
+          ...value.generators[0],
+          command: { ...value.generators[0].command, args: ["-e", "process.exit(2)"] },
+        },
+      ],
+    })}\n`,
+  );
+  const changedGenerator = await loadEngineeringExecutionConfig(configPath);
+  expect(changedGenerator.configDigest).not.toBe(loaded.configDigest);
   await writeFile(configPath, `${JSON.stringify(value)}\n`);
   await expect(
     engineeringExecutionConfigFromEnv({ RA_ENGINEERING_CONFIG_PATH: configPath }),

@@ -2620,6 +2620,164 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
     ],
     "type": "object",
   },
+  "EngineeringGateFailure": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "artifact_kind": {
+        "const": "GateFailure",
+        "type": "string",
+      },
+      "attempt": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer",
+      },
+      "authority": {
+        "const": "SERVER_OWNED",
+        "type": "string",
+      },
+      "blocking_gate_ids": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 128,
+        "minItems": 1,
+        "type": "array",
+      },
+      "case_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "config_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "context_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "decision_ids": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
+      },
+      "diagnostics": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "excerpt": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string",
+            },
+            "gate_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "log_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string",
+                },
+                {
+                  "type": "null",
+                },
+              ],
+            },
+            "outcome": {
+              "enum": [
+                "FAILED",
+                "TIMED_OUT",
+                "INFRASTRUCTURE",
+              ],
+              "type": "string",
+            },
+            "trust": {
+              "const": "UNTRUSTED_DATA",
+              "type": "string",
+            },
+          },
+          "required": [
+            "gate_id",
+            "outcome",
+            "log_digest",
+            "trust",
+            "excerpt",
+          ],
+          "type": "object",
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array",
+      },
+      "diff_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+      "receipt_ids": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string",
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array",
+      },
+      "revision": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer",
+      },
+      "run_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "number",
+      },
+      "slice_id": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string",
+      },
+      "tree_digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+      },
+    },
+    "required": [
+      "schema_version",
+      "artifact_kind",
+      "case_id",
+      "run_id",
+      "revision",
+      "authority",
+      "slice_id",
+      "attempt",
+      "tree_digest",
+      "diff_digest",
+      "context_digest",
+      "config_digest",
+      "blocking_gate_ids",
+      "receipt_ids",
+      "decision_ids",
+      "diagnostics",
+    ],
+    "type": "object",
+  },
   "EngineeringLocalCommitReceipt": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
@@ -3059,8 +3217,87 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "type": "string",
       },
       "schema_version": {
-        "const": 1,
+        "const": 2,
         "type": "number",
+      },
+      "slice_blueprints": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_paths": {
+              "items": {
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._+/-]+$",
+                "type": "string",
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+            },
+            "gate_ids": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9._:-]*$",
+                "type": "string",
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array",
+            },
+            "inspection_method": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string",
+            },
+            "objective": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string",
+            },
+            "observable_result": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string",
+            },
+            "slice_id": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "stop_condition": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string",
+            },
+            "test_paths": {
+              "items": {
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._+/-]+$",
+                "type": "string",
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+            },
+          },
+          "required": [
+            "slice_id",
+            "objective",
+            "observable_result",
+            "allowed_paths",
+            "test_paths",
+            "gate_ids",
+            "inspection_method",
+            "stop_condition",
+          ],
+          "type": "object",
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array",
       },
       "slice_order": {
         "items": {
@@ -3100,6 +3337,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
       "expected_tests",
       "slice_order",
       "source_digest",
+      "slice_blueprints",
     ],
     "type": "object",
   },
@@ -3483,7 +3721,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "type": "string",
       },
       "schema_version": {
-        "const": 1,
+        "const": 2,
         "type": "number",
       },
       "slice_id": {
@@ -3495,6 +3733,17 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "maxLength": 65536,
         "minLength": 1,
         "type": "string",
+      },
+      "test_paths": {
+        "items": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._+/-]+$",
+          "type": "string",
+        },
+        "maxItems": 16,
+        "minItems": 1,
+        "type": "array",
       },
     },
     "required": [
@@ -3510,6 +3759,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
       "gate_ids",
       "inspection_method",
       "stop_condition",
+      "test_paths",
     ],
     "type": "object",
   },

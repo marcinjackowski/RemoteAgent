@@ -12,6 +12,7 @@ import {
   engineeringContextManifest,
   engineeringDesignDecision,
   engineeringEvidenceBundle,
+  engineeringGateFailure,
   engineeringMemoryUpdate,
   engineeringLocalCommitReceipt,
   engineeringMinimumProcessClass,
@@ -34,6 +35,7 @@ import {
   engineeringWriteDeploymentPolicyV1,
   engineeringWriteDeploymentPolicyV1Digest,
   engineeringWriteDeploymentPolicyFromExecutionConfigV2,
+  engineeringWriteDeploymentPolicyFromExecutionConfigV3,
   normalizeEngineeringWriteAuthorizationScope,
   normalizeEngineeringWriteAuthorizationScopeV2,
   normalizeEngineeringWriteDeploymentPolicyV1,
@@ -50,12 +52,25 @@ const base = {
 };
 const program = {
   ...base,
+  schema_version: 2,
   call_flow: ["worker -> runtime"],
   file_tree_delta: ["add contracts"],
   key_types_and_signatures: ["ProgramDesign"],
   uncertainty_review: ["none"],
   expected_tests: ["strict parsing"],
   slice_order: ["slice-1"],
+  slice_blueprints: [
+    {
+      slice_id: "slice-1",
+      objective: "add the strict contract",
+      observable_result: "the contract rejects foreign test paths",
+      allowed_paths: ["src", "test"],
+      test_paths: ["test/engineering-workflow.test.ts"],
+      gate_ids: ["contracts.test"],
+      inspection_method: "inspect strict contract evidence",
+      stop_condition: "the focused contract gate is green",
+    },
+  ],
   source_digest: digest,
 };
 const risk = (patch: Partial<EngineeringProcessRiskFacts> = {}): EngineeringProcessRiskFacts => ({
@@ -199,6 +214,37 @@ describe("engineering workflow contracts", () => {
     ).toThrow(/unrecognized/i);
   });
 
+  it("projects the same write authority from strict execution config v3 with code-owned test roots", () => {
+    const executionConfig = {
+      schema_version: 3,
+      workspace_root: "/srv/workspaces",
+      baseline_root: "/srv/baselines",
+      artifact_root: "/srv/artifacts",
+      repository: {
+        repository_id: "remote-agent",
+        source_path: "/srv/source",
+        base_branch: "main",
+        write_path_allowlist: ["packages/z", "apps/a"],
+        test_path_allowlist: ["apps/a/test"],
+      },
+      gates: [],
+      executable_allowlist: [],
+      generators: [],
+    };
+    expect(engineeringWriteDeploymentPolicyFromExecutionConfigV3(executionConfig)).toEqual({
+      schema_version: 1,
+      purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
+      repository_id: "remote-agent",
+      write_path_allowlist: ["apps/a", "packages/z"],
+    });
+    expect(() =>
+      engineeringWriteDeploymentPolicyFromExecutionConfigV3({
+        ...executionConfig,
+        repository: { ...executionConfig.repository, test_path_allowlist: undefined },
+      }),
+    ).toThrow();
+  });
+
   it("owns a frozen exhaustive stage-to-artifact-kind map and a segment-aware write cap", () => {
     expect(Object.keys(engineeringArtifactKindsByStage).sort()).toEqual(
       Object.values(EngineeringStage).sort(),
@@ -210,6 +256,9 @@ describe("engineering workflow contracts", () => {
     }
     expect(
       isEngineeringArtifactKindAllowedForStage(EngineeringStage.GATE_EXECUTION, "EvidenceBundle"),
+    ).toBe(true);
+    expect(
+      isEngineeringArtifactKindAllowedForStage(EngineeringStage.GATE_EXECUTION, "GateFailure"),
     ).toBe(true);
     expect(
       isEngineeringArtifactKindAllowedForStage(EngineeringStage.GATE_EXECUTION, "SliceContract"),
@@ -432,11 +481,13 @@ describe("engineering workflow contracts", () => {
         schema: engineeringSliceContract,
         payload: {
           ...binding,
+          schema_version: 2,
           artifact_kind: "SliceContract",
           slice_id: "slice",
           objective: "objective",
           observable_result: "one observable result",
-          allowed_paths: ["src/a.ts"],
+          allowed_paths: ["src", "test"],
+          test_paths: ["test/a.test.ts"],
           gate_ids: ["gate.unit"],
           inspection_method: "inspect the receipt",
           stop_condition: "receipt is bound to the current tree",
@@ -570,6 +621,33 @@ describe("engineering workflow contracts", () => {
         },
       },
       {
+        name: "GateFailure",
+        schema: engineeringGateFailure,
+        payload: {
+          ...binding,
+          artifact_kind: "GateFailure",
+          authority: "SERVER_OWNED",
+          slice_id: "slice-1",
+          attempt: 1,
+          tree_digest: digest,
+          diff_digest: digest,
+          context_digest: digest,
+          config_digest: digest,
+          blocking_gate_ids: ["gate-1"],
+          receipt_ids: ["receipt-1"],
+          decision_ids: [],
+          diagnostics: [
+            {
+              gate_id: "gate-1",
+              outcome: "FAILED",
+              log_digest: digest,
+              trust: "UNTRUSTED_DATA",
+              excerpt: "error: cannot find symbol",
+            },
+          ],
+        },
+      },
+      {
         name: "TerminalReason",
         schema: engineeringTerminalReason,
         payload: {
@@ -647,11 +725,50 @@ describe("engineering workflow contracts", () => {
       engineeringProgramDesign.safeParse({ ...program, slice_order: ["slice-1", "slice-1"] })
         .success,
     ).toBe(false);
+    expect(
+      engineeringProgramDesign.safeParse({
+        ...program,
+        slice_order: ["slice-2"],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringProgramDesign.safeParse({
+        ...program,
+        slice_blueprints: [
+          {
+            ...program.slice_blueprints[0],
+            test_paths: ["foreign/a.test.ts"],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringProgramDesign.safeParse({
+        ...program,
+        slice_blueprints: [
+          {
+            ...program.slice_blueprints[0],
+            allowed_paths: ["test", "test"],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringProgramDesign.safeParse({
+        ...program,
+        slice_blueprints: [
+          {
+            ...program.slice_blueprints[0],
+            gate_ids: ["contracts.test", "contracts.test"],
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps slices to gates and an observable result, never a raw command", () => {
     const slice = {
-      schema_version: 1,
+      schema_version: 2,
       artifact_kind: "SliceContract",
       case_id: "c",
       run_id: "r",
@@ -659,7 +776,8 @@ describe("engineering workflow contracts", () => {
       slice_id: "s",
       objective: "o",
       observable_result: "one result",
-      allowed_paths: ["src/a.ts"],
+      allowed_paths: ["src", "test"],
+      test_paths: ["test/a.test.ts"],
       gate_ids: ["RA-037.gate"],
       inspection_method: "inspect evidence",
       stop_condition: "when verified",
@@ -670,6 +788,17 @@ describe("engineering workflow contracts", () => {
     );
     expect(
       engineeringSliceContract.safeParse({ ...slice, inspection_method: "pnpm test" }).success,
+    ).toBe(false);
+    expect(engineeringSliceContract.safeParse({ ...slice, test_paths: [] }).success).toBe(false);
+    expect(engineeringSliceContract.safeParse({ ...slice, test_paths: [""] }).success).toBe(false);
+    expect(
+      engineeringSliceContract.safeParse({
+        ...slice,
+        test_paths: ["test/a.test.ts", "test/a.test.ts"],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringSliceContract.safeParse({ ...slice, test_paths: ["foreign/a.test.ts"] }).success,
     ).toBe(false);
   });
 
@@ -968,10 +1097,15 @@ describe("engineering workflow contracts", () => {
 
   it("strict-parses artifact before digesting and binds schema version", () => {
     expect(engineeringArtifact.parse(program).artifact_kind).toBe("ProgramDesign");
+    const legacyProgram: Partial<typeof program> = { ...program };
+    delete legacyProgram.slice_blueprints;
+    const v1Program = { ...legacyProgram, schema_version: 1 };
+    expect(engineeringArtifact.parse(v1Program).artifact_kind).toBe("ProgramDesign");
+    expect(engineeringProgramDesign.safeParse(v1Program).success).toBe(false);
     expect(engineeringArtifactDigest(program)).toBe(
       engineeringArtifactDigest({ ...program, source_digest: digest }),
     );
-    expect(() => engineeringArtifactDigest({ ...program, schema_version: 2 })).toThrow();
+    expect(() => engineeringArtifactDigest({ ...program, schema_version: 3 })).toThrow();
     expect(() => engineeringArtifactDigest({ ...program, unknown: true })).toThrow();
     expect(() =>
       engineeringArtifact.parse({ ...program, artifact_kind: "SystemDesign" }),

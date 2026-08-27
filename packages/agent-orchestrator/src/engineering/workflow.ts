@@ -349,6 +349,8 @@ export type EngineeringRuntimeStopCode =
 export type EngineeringRuntimeSession = Readonly<{
   plan: EngineeringWorkflowPlan;
   fingerprints: readonly string[];
+  /** Latest durable gate-correction state; permits a restart-safe two-strike gate loop bound. */
+  lastGateFailureFingerprint?: string;
   stageCalls: number;
   maxStageCalls: number;
   modelCalls: number;

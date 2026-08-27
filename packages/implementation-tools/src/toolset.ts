@@ -41,8 +41,11 @@
  * `command.ts` keeps its server-owned catalogue, and `mkdir.ts` keeps its
  * idempotency.
  */
+import { lstat } from "node:fs/promises";
+
 import { TrustLevel, canonicalJsonStringify } from "@remoteagent/contracts";
 import type { Transaction } from "@remoteagent/database";
+import { createWorkspacePathPolicy } from "@remoteagent/workspace-runner";
 import type { NetworkMode } from "@remoteagent/workspace-runner";
 
 import { ToolKind, ToolOutcome, implementationToolResult } from "./contracts.js";
@@ -71,7 +74,17 @@ export const TOOLSET_PATH_OUTSIDE_ALLOWED = "PATH_OUTSIDE_ALLOWED";
 /** Discovery is bounded per implementation attempt; the model must act on gathered evidence. */
 export const BOUNDED_DISCOVERY_BUDGET_EXHAUSTED = "DISCOVERY_BUDGET_EXHAUSTED";
 
-const MAX_DISCOVERY_CALLS_PER_ATTEMPT = 10;
+/** Existing files must be edited through exact replacements, never truncated by `write`. */
+export const BOUNDED_WRITE_REQUIRES_NEW_FILE = "WRITE_REQUIRES_NEW_FILE";
+
+/** The first successful filesystem mutation must be contained by a server-owned test root. */
+export const TEST_FIRST_MUTATION_REQUIRED = "TEST_FIRST_MUTATION_REQUIRED";
+
+/** Existing files cannot be replaced wholesale through patch.files. */
+export const BOUNDED_PATCH_REQUIRES_EXACT_REPLACEMENTS = "PATCH_REQUIRES_EXACT_REPLACEMENTS";
+
+export const DEFAULT_BOUNDED_DISCOVERY_CALLS = 10;
+export const MAX_BOUNDED_DISCOVERY_CALLS = 24;
 
 /**
  * Path segments that are protected wherever they appear in the tree.
@@ -526,6 +539,13 @@ export type BoundedImplementationToolsetOptions = Omit<
 > &
   Readonly<{
     allowedPaths: readonly string[];
+    /** Server-owned SliceContract test roots that must contain the first mutation. */
+    firstMutationPaths: readonly string[];
+    /**
+     * Code-owned discovery ceiling. Production may raise this only to execute a validated
+     * prefetched catalog plan; the model then receives mutation-only tools.
+     */
+    maxDiscoveryCalls?: number;
     /** Required server authority, awaited immediately before every mutation syscall. */
     beforeMutation(): Promise<void>;
     operationIdFor(tool: BoundedImplementationToolName, sequence: number): string;
@@ -581,11 +601,35 @@ export async function createBoundedImplementationToolset(
     [...new Set(options.allowedPaths.map((path) => workspaceRelativePath.parse(path)))].sort(),
   );
   if (allowed.length === 0) throw new Error("at least one server-owned allowed path is required");
+  const firstMutationPaths = Object.freeze(
+    [
+      ...new Set(options.firstMutationPaths.map((path) => workspaceRelativePath.parse(path))),
+    ].sort(),
+  );
+  if (firstMutationPaths.length === 0) {
+    throw new Error("at least one server-owned first mutation path is required");
+  }
+  if (
+    firstMutationPaths.some(
+      (path) => !allowed.some((root) => path === root || path.startsWith(`${root}/`)),
+    )
+  ) {
+    throw new Error("first mutation paths must be contained by allowed paths");
+  }
+  const maxDiscoveryCalls = options.maxDiscoveryCalls ?? DEFAULT_BOUNDED_DISCOVERY_CALLS;
+  if (
+    !Number.isSafeInteger(maxDiscoveryCalls) ||
+    maxDiscoveryCalls < 1 ||
+    maxDiscoveryCalls > MAX_BOUNDED_DISCOVERY_CALLS
+  ) {
+    throw new Error("maxDiscoveryCalls must be a positive safe integer within the code-owned cap");
+  }
 
   const reads = await createImplementationReadTools({
     root: options.root,
     identity: options.identity,
   });
+  const pathPolicy = await createWorkspacePathPolicy(options.root);
   const writes = await createImplementationWriteTools({
     root: options.root,
     identity: options.identity,
@@ -603,6 +647,7 @@ export async function createBoundedImplementationToolset(
   let sequence = 0;
   let ambiguous = false;
   let discoveryCalls = 0;
+  let firstMutationSucceeded = false;
 
   const nextId = (tool: BoundedImplementationToolName): string => {
     if (ambiguous) throw new Error("AMBIGUOUS implementation operation requires reconciliation");
@@ -620,6 +665,8 @@ export async function createBoundedImplementationToolset(
   };
   const isAllowed = (path: string): boolean =>
     allowed.some((root) => path === root || path.startsWith(`${root}/`));
+  const isFirstMutationPath = (path: string): boolean =>
+    firstMutationPaths.some((root) => path === root || path.startsWith(`${root}/`));
   const protectedResult = (
     tool: string,
     kind: ToolKind,
@@ -657,12 +704,97 @@ export async function createBoundedImplementationToolset(
       },
     });
   };
+  const refuseExistingWrite = (operationId: string): ImplementationToolResult => {
+    const value = canonicalJsonStringify({
+      tool: "write",
+      refused: true,
+      failure_code: BOUNDED_WRITE_REQUIRES_NEW_FILE,
+      next_action: "Use patch.replacement_files with exact old_content for an existing file.",
+    });
+    return implementationToolResult.parse({
+      schema_version: 1,
+      operation_id: operationId,
+      identity: options.identity,
+      kind: ToolKind.WRITE_FILE,
+      outcome: ToolOutcome.FAILED,
+      before_digest: null,
+      after_digest: null,
+      changed_files: [],
+      failure_code: BOUNDED_WRITE_REQUIRES_NEW_FILE,
+      output: {
+        trust: TrustLevel.UNTRUSTED_DATA,
+        value,
+        truncated: false,
+        original_byte_length: encoder.encode(value).length,
+      },
+    });
+  };
+  const refuseMutation = (
+    tool: BoundedImplementationToolName,
+    kind: ToolKind,
+    operationId: string,
+    failureCode: string,
+    nextAction: string,
+  ): ImplementationToolResult => {
+    const value = canonicalJsonStringify({
+      tool,
+      refused: true,
+      failure_code: failureCode,
+      next_action: nextAction,
+    });
+    return implementationToolResult.parse({
+      schema_version: 1,
+      operation_id: operationId,
+      identity: options.identity,
+      kind,
+      outcome: ToolOutcome.FAILED,
+      before_digest: null,
+      after_digest: null,
+      changed_files: [],
+      failure_code: failureCode,
+      output: {
+        trust: TrustLevel.UNTRUSTED_DATA,
+        value,
+        truncated: false,
+        original_byte_length: encoder.encode(value).length,
+      },
+    });
+  };
+  const requireTestFirst = (
+    tool: BoundedImplementationToolName,
+    kind: ToolKind,
+    operationId: string,
+    paths: readonly string[],
+  ): ImplementationToolResult | null =>
+    firstMutationSucceeded || paths.every((path) => isFirstMutationPath(path))
+      ? null
+      : refuseMutation(
+          tool,
+          kind,
+          operationId,
+          TEST_FIRST_MUTATION_REQUIRED,
+          "Make the first successful filesystem mutation within slice.test_paths.",
+        );
+  const markFirstMutation = (
+    result: ImplementationToolResult,
+    eligibleFileMutation: boolean,
+  ): ImplementationToolResult => {
+    if (
+      eligibleFileMutation &&
+      result.outcome === ToolOutcome.SUCCEEDED &&
+      result.changed_files.length > 0 &&
+      result.changed_files.every((path) => isFirstMutationPath(path))
+    ) {
+      firstMutationSucceeded = true;
+    }
+    return observe(result);
+  };
   const refuseDiscoveryBudget = (
     tool: BoundedImplementationToolName,
     kind: ToolKind,
     operationId: string,
   ): ImplementationToolResult | null => {
-    if (discoveryCalls < MAX_DISCOVERY_CALLS_PER_ATTEMPT) {
+    if (discoveryCalls < maxDiscoveryCalls) {
       discoveryCalls += 1;
       return null;
     }
@@ -772,7 +904,15 @@ export async function createBoundedImplementationToolset(
         input.relative_path,
       ]);
       if (denied !== null) return observe(denied);
-      return observe(
+      const testFirst = requireTestFirst("write", ToolKind.WRITE_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (testFirst !== null) return observe(testFirst);
+      const target = await pathPolicy.validateCreateTarget(input.relative_path);
+      if ((await lstat(target).catch(() => null)) !== null) {
+        return observe(refuseExistingWrite(operationId));
+      }
+      return markFirstMutation(
         await writes.write(
           input.expected_before_digest === undefined
             ? {
@@ -787,6 +927,7 @@ export async function createBoundedImplementationToolset(
                 expected_before_digest: input.expected_before_digest,
               },
         ),
+        true,
       );
     },
     patch: async (raw) => {
@@ -800,7 +941,28 @@ export async function createBoundedImplementationToolset(
       }
       const denied = protectedResult("patch", ToolKind.APPLY_PATCH, operationId, paths);
       if (denied !== null) return observe(denied);
-      return observe(
+      const testFirst = requireTestFirst("patch", ToolKind.APPLY_PATCH, operationId, paths);
+      if (testFirst !== null) return observe(testFirst);
+      if ("files" in input) {
+        const existing = await Promise.all(
+          input.files.map(async (file) => {
+            const target = await pathPolicy.validateCreateTarget(file.relative_path);
+            return (await lstat(target).catch(() => null)) !== null;
+          }),
+        );
+        if (existing.some(Boolean)) {
+          return observe(
+            refuseMutation(
+              "patch",
+              ToolKind.APPLY_PATCH,
+              operationId,
+              BOUNDED_PATCH_REQUIRES_EXACT_REPLACEMENTS,
+              "Edit existing files with patch.replacement_files and exact old_content.",
+            ),
+          );
+        }
+      }
+      return markFirstMutation(
         await writes.patch(
           "files" in input
             ? input.expected_before_digest === undefined
@@ -818,6 +980,7 @@ export async function createBoundedImplementationToolset(
                   expected_before_digest: input.expected_before_digest,
                 },
         ),
+        true,
       );
     },
     mkdir: async (raw) => {
@@ -830,7 +993,11 @@ export async function createBoundedImplementationToolset(
         input.relative_path,
       ]);
       if (denied !== null) return observe(denied);
-      return observe(
+      const testFirst = requireTestFirst("mkdir", ToolKind.WRITE_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (testFirst !== null) return observe(testFirst);
+      return markFirstMutation(
         await mkdir.run(
           input.recursive === undefined
             ? { operation_id: operationId, relative_path: input.relative_path }
@@ -840,6 +1007,7 @@ export async function createBoundedImplementationToolset(
                 recursive: input.recursive,
               },
         ),
+        false,
       );
     },
   });

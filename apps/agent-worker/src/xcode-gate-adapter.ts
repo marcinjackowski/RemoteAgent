@@ -7,6 +7,7 @@ import {
   testCommandManifest,
   verificationGateManifestDigest,
   verificationGateTestPhase,
+  type VerificationGateDefinition,
   type VerificationGatePlatformAdapter,
   type VerificationGatePlatformRunInput,
 } from "@remoteagent/test-evidence";
@@ -97,6 +98,34 @@ function exactArg(args: readonly string[], flag: string): string {
   return args[index + 1]!;
 }
 
+/**
+ * Resolve the simulator destination from the same server-owned gate catalogue that will be
+ * executed. The live harness used to accept a second environment value for this field; a typo in
+ * that duplicate value spent a full model run before the adapter correctly refused the mismatch.
+ * Keeping one authority makes the refusal happen during composition, before any model call.
+ */
+export function xcodeDestinationFromGateCatalog(
+  definitions: readonly VerificationGateDefinition[],
+  xcodebuildPath: string,
+): string {
+  const candidates = definitions.filter(
+    (definition) =>
+      definition.environment_profile === "BUILD_TOOLCHAIN" &&
+      definition.network_profile === "PLATFORM_MANAGED" &&
+      definition.executable === xcodebuildPath,
+  );
+  if (candidates.length === 0) {
+    throw new Error("Xcode gate catalog has no server-selected simulator destination");
+  }
+  const destinations = new Set(
+    candidates.map((definition) => exactArg(definition.argv, "-destination")),
+  );
+  if (destinations.size !== 1) {
+    throw new Error("Xcode gate catalog has conflicting simulator destinations");
+  }
+  return [...destinations][0]!;
+}
+
 async function xcodeSwiftPmConfigurationPath(
   disposableRoot: string,
   relativeCwd: string,
@@ -141,6 +170,17 @@ function killTree(child: ReturnType<typeof spawn>): void {
   } catch {
     child.kill("SIGKILL");
   }
+}
+
+/**
+ * Keep compiler locations useful without exposing the disposable host root. The generic runner
+ * still performs the final secret/absolute-path redaction, so only the exact workspace prefix is
+ * converted to a repository-relative diagnostic before that boundary.
+ */
+function relativizeXcodeDiagnostics(value: string, workspaceRoots: readonly string[]): string {
+  return [...new Set(workspaceRoots)]
+    .sort((left, right) => right.length - left.length)
+    .reduce((current, root) => current.split(`${root}${sep}`).join(""), value);
 }
 
 /**
@@ -333,7 +373,18 @@ export async function createXcodeVerificationGatePlatformAdapter(
               await mkdir(swiftPmConfiguration.path);
               createdSwiftPmConfiguration = true;
             }
-            return await (options.processRunner ?? runXcodeProcess)(processInput);
+            const result = await (options.processRunner ?? runXcodeProcess)(processInput);
+            return {
+              ...result,
+              stdout: relativizeXcodeDiagnostics(result.stdout, [
+                processInput.workspaceRoot,
+                input.disposable_root,
+              ]),
+              stderr: relativizeXcodeDiagnostics(result.stderr, [
+                processInput.workspaceRoot,
+                input.disposable_root,
+              ]),
+            };
           } finally {
             // DerivedData, package checkouts and the isolated HOME are build outputs, not
             // source evidence. Remove the exact validated disposable root before the shared

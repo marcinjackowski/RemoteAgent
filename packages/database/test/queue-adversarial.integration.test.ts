@@ -762,17 +762,17 @@ describeIntegration(
         clock,
         sink: async () => undefined,
         handler: async (_lease, heartbeat) => {
-          // Simulate long work spanning MORE than the lease, but heartbeating.
-          clock.advance(20_000);
-          await heartbeat(); // renew lease by another 30s (default)
+          // A heartbeat must preserve the scheduler's configured lease duration. The old
+          // default-only call silently shortened this 120s lease to 30s under a slow suite.
           clock.advance(20_000);
           await heartbeat();
+          clock.advance(40_000);
           // A concurrent reap now must NOT steal this still-live lease.
           const reaped = await jobs.reapExpired(db);
           expect(reaped.reconciling).toHaveLength(0);
           expect(reaped.requeued).toHaveLength(0);
         },
-        claim: { owner: "sched", leaseMs: 30_000 },
+        claim: { owner: "sched", leaseMs: 120_000 },
       });
       const result = await scheduler.tick();
       expect(result.jobOutcome).toBe("SUCCEEDED");

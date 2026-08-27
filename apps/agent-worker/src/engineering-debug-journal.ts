@@ -21,8 +21,22 @@ import * as z from "zod";
 
 const id = z.string().min(1).max(512);
 const boundedName = z.string().min(1).max(128);
-export const ENGINEERING_MODEL_HARD_TOKEN_LIMIT = 250_000;
+export const ENGINEERING_MODEL_HARD_TOKEN_LIMIT = 600_000;
+export const ENGINEERING_MODEL_TARGET_TOKEN_LIMIT = 250_000;
+export const ENGINEERING_MODEL_WARNING_TOKEN_LIMIT = 400_000;
 export const ENGINEERING_MODEL_CALL_TOKEN_RESERVE = 35_000;
+
+/** A typed, code-owned signal that permits receipt-backed implementation finalization. */
+export class EngineeringModelBudgetError extends Error {
+  readonly code = "ENGINEERING_MODEL_BUDGET_EXHAUSTED";
+
+  constructor() {
+    super(
+      `Engineering model call refused because the ${String(ENGINEERING_MODEL_CALL_TOKEN_RESERVE)}-token reserve would exceed the ${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT)}-token hard limit`,
+    );
+    this.name = "EngineeringModelBudgetError";
+  }
+}
 const relativePath = z
   .string()
   .min(1)
@@ -67,6 +81,75 @@ const toolResult = z.strictObject({
   output_truncated: z.boolean(),
 });
 
+const checklistItem = z.enum([
+  "DISCOVERY",
+  "DESIGN",
+  "SLICE",
+  "TEST_FIRST",
+  "IMPLEMENTATION",
+  "FAST_GATES",
+  "FULL_GATES",
+  "REVIEW",
+  "COMMIT",
+]);
+const progressState = z.enum(["PENDING", "IN_PROGRESS", "COMPLETE", "BLOCKED"]);
+const debugDecisionCode = z.enum([
+  "STAGE_ENTERED",
+  "STAGE_COMPLETED",
+  "STAGE_FAILED",
+  "MODEL_CALL_RESERVED",
+  "MODEL_CALL_REFUSED_BUDGET",
+  "IMPLEMENTATION_RECEIPT_FINALIZED",
+  "MODEL_RESPONSE_RECORDED",
+  "DISCOVERY_BATCH_REQUESTED",
+  "MUTATION_BATCH_REQUESTED",
+  "MUTATION_RESULT_RECORDED",
+  "FAST_GATES_PASSED",
+  "FAST_GATES_BLOCKED",
+  "FULL_GATES_PASSED",
+  "FULL_GATES_BLOCKED",
+]);
+export type EngineeringDebugDecisionCode = z.infer<typeof debugDecisionCode>;
+
+const progressSnapshot = z.strictObject({
+  event: z.literal("PROGRESS_SNAPSHOT"),
+  stage: boundedName.nullable(),
+  slice_id: id.nullable(),
+  attempt: z.number().int().positive().nullable(),
+  decision_code: debugDecisionCode,
+  checklist: z.array(z.strictObject({ item: checklistItem, status: progressState })).length(9),
+  rounds: z.strictObject({
+    used: z.number().int().nonnegative(),
+    limit: z.number().int().nonnegative(),
+    mutation_reserved: z.number().int().nonnegative(),
+    remaining: z.number().int().nonnegative(),
+  }),
+  calls: z.strictObject({
+    used: z.number().int().nonnegative(),
+    limit: z.number().int().nonnegative(),
+    remaining: z.number().int().nonnegative(),
+  }),
+  tokens: z.strictObject({
+    used: z.number().int().nonnegative(),
+    target: z.number().int().positive(),
+    warning: z.number().int().positive(),
+    hard_limit: z.number().int().positive(),
+    final_call_reserved: z.number().int().nonnegative(),
+    remaining_to_target: z.number().int().nonnegative(),
+    remaining_to_hard_limit: z.number().int().nonnegative(),
+  }),
+  gates: z.strictObject({ fast: progressState, full: progressState }),
+});
+
+const decisionEvent = z.strictObject({
+  event: z.literal("DECISION"),
+  stage: boundedName.nullable(),
+  slice_id: id.nullable(),
+  attempt: z.number().int().positive().nullable(),
+  decision_code: debugDecisionCode,
+  structural_digest: sha256Digest,
+});
+
 const debugEvent = z.discriminatedUnion("event", [
   z.strictObject({
     event: z.literal("RUN_STARTED"),
@@ -82,6 +165,8 @@ const debugEvent = z.discriminatedUnion("event", [
   usage,
   toolBatch,
   toolResult,
+  progressSnapshot,
+  decisionEvent,
   z.strictObject({
     event: z.literal("MODEL_OUTPUT_SHAPE"),
     keys: z.array(boundedName).max(64),
@@ -174,8 +259,22 @@ type UsageTotals = {
 
 type JournalContext = {
   readonly journal: EngineeringDebugJournal;
-  readonly state: { usage: UsageTotals };
+  readonly state: {
+    usage: UsageTotals;
+    roundsUsed: number;
+    callsUsed: number;
+    roundLimit: number;
+    callLimit: number;
+    mutationReserved: number;
+    mutationStarted: boolean;
+    sliceAttemptKey: string | null;
+    completedStages: Set<string>;
+    fastGates: "PENDING" | "PASSED" | "BLOCKED";
+    fullGates: "PENDING" | "PASSED" | "BLOCKED";
+  };
   readonly stage: string | null;
+  readonly sliceId: string | null;
+  readonly attempt: number | null;
 };
 
 const journalContext = new AsyncLocalStorage<JournalContext>();
@@ -222,7 +321,9 @@ function requestedFiles(input: Readonly<Record<string, RuntimeJsonValue>>): stri
     .filter((value): value is string => value !== null);
 }
 
-function toolBatchEvent(content: readonly RuntimeContent[]): EngineeringDebugEvent | null {
+function toolBatchEvent(
+  content: readonly RuntimeContent[],
+): Extract<EngineeringDebugEvent, { event: "TOOL_BATCH" }> | null {
   const tools = content
     .filter(
       (item): item is Extract<RuntimeContent, { type: "tool-use" }> => item.type === "tool-use",
@@ -306,8 +407,150 @@ function addUsage(current: UsageTotals, usage: RuntimeUsage | undefined): UsageT
 
 function usageComparison(totalTokens: number): "TARGET" | "WARNING" | "HARD_LIMIT" {
   if (totalTokens > ENGINEERING_MODEL_HARD_TOKEN_LIMIT) return "HARD_LIMIT";
-  if (totalTokens > 150_000) return "WARNING";
+  if (totalTokens > ENGINEERING_MODEL_WARNING_TOKEN_LIMIT) return "WARNING";
   return "TARGET";
+}
+
+const CHECKLIST = Object.freeze([
+  "DISCOVERY",
+  "DESIGN",
+  "SLICE",
+  "TEST_FIRST",
+  "IMPLEMENTATION",
+  "FAST_GATES",
+  "FULL_GATES",
+  "REVIEW",
+  "COMMIT",
+] as const);
+
+function checklistStage(item: (typeof CHECKLIST)[number]): string | null {
+  switch (item) {
+    case "DISCOVERY":
+      return "DISCOVERY";
+    case "DESIGN":
+      return "PROGRAM_DESIGN";
+    case "SLICE":
+      return "SLICE_PLANNING";
+    case "IMPLEMENTATION":
+      return "SLICE_IMPLEMENTATION";
+    case "REVIEW":
+      return "SLICE_REVIEW";
+    case "COMMIT":
+      return "LOCAL_COMMIT";
+    default:
+      return null;
+  }
+}
+
+function stageScopeKey(stage: string, sliceId: string | null, attempt: number | null): string {
+  return canonicalDigest({ stage, slice_id: sliceId, attempt });
+}
+
+function progressStatus(
+  context: JournalContext,
+  item: (typeof CHECKLIST)[number],
+): "PENDING" | "IN_PROGRESS" | "COMPLETE" | "BLOCKED" {
+  if (item === "TEST_FIRST") return context.state.mutationStarted ? "COMPLETE" : "PENDING";
+  if (item === "FAST_GATES") {
+    return context.state.fastGates === "PASSED"
+      ? "COMPLETE"
+      : context.state.fastGates === "BLOCKED"
+        ? "BLOCKED"
+        : "PENDING";
+  }
+  if (item === "FULL_GATES") {
+    return context.state.fullGates === "PASSED"
+      ? "COMPLETE"
+      : context.state.fullGates === "BLOCKED"
+        ? "BLOCKED"
+        : "PENDING";
+  }
+  const stage = checklistStage(item);
+  if (stage === null) return "PENDING";
+  if (
+    context.state.completedStages.has(stageScopeKey(stage, context.sliceId, context.attempt)) ||
+    context.state.completedStages.has(stageScopeKey(stage, null, null))
+  )
+    return "COMPLETE";
+  return context.stage === stage ? "IN_PROGRESS" : "PENDING";
+}
+
+function progressEvent(
+  context: JournalContext,
+  decisionCode: EngineeringDebugDecisionCode,
+): EngineeringDebugEvent {
+  const state = context.state;
+  return {
+    event: "PROGRESS_SNAPSHOT",
+    stage: context.stage,
+    slice_id: context.sliceId,
+    attempt: context.attempt,
+    decision_code: decisionCode,
+    checklist: CHECKLIST.map((item) => ({ item, status: progressStatus(context, item) })),
+    rounds: {
+      used: state.roundsUsed,
+      limit: state.roundLimit,
+      mutation_reserved: state.mutationStarted ? 0 : state.mutationReserved,
+      remaining: Math.max(0, state.roundLimit - state.roundsUsed),
+    },
+    calls: {
+      used: state.callsUsed,
+      limit: state.callLimit,
+      remaining: Math.max(0, state.callLimit - state.callsUsed),
+    },
+    tokens: {
+      used: state.usage.totalTokens,
+      target: ENGINEERING_MODEL_TARGET_TOKEN_LIMIT,
+      warning: ENGINEERING_MODEL_WARNING_TOKEN_LIMIT,
+      hard_limit: ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
+      final_call_reserved: ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+      remaining_to_target: Math.max(
+        0,
+        ENGINEERING_MODEL_TARGET_TOKEN_LIMIT - state.usage.totalTokens,
+      ),
+      remaining_to_hard_limit: Math.max(
+        0,
+        ENGINEERING_MODEL_HARD_TOKEN_LIMIT - state.usage.totalTokens,
+      ),
+    },
+    gates: {
+      fast:
+        state.fastGates === "PASSED"
+          ? "COMPLETE"
+          : state.fastGates === "BLOCKED"
+            ? "BLOCKED"
+            : "PENDING",
+      full:
+        state.fullGates === "PASSED"
+          ? "COMPLETE"
+          : state.fullGates === "BLOCKED"
+            ? "BLOCKED"
+            : "PENDING",
+    },
+  };
+}
+
+async function appendDecision(
+  context: JournalContext,
+  decisionCode: EngineeringDebugDecisionCode,
+): Promise<void> {
+  await context.journal.append({
+    event: "DECISION",
+    stage: context.stage,
+    slice_id: context.sliceId,
+    attempt: context.attempt,
+    decision_code: decisionCode,
+    structural_digest: canonicalDigest({
+      stage: context.stage,
+      slice_id: context.sliceId,
+      attempt: context.attempt,
+      decision_code: decisionCode,
+      rounds_used: context.state.roundsUsed,
+      calls_used: context.state.callsUsed,
+      tokens_used: context.state.usage.totalTokens,
+    }),
+  });
+  await context.journal.append(progressEvent(context, decisionCode));
 }
 
 /** Refuse a new provider call when its conservative reserve would cross the hard ceiling. */
@@ -316,9 +559,23 @@ export function assertEngineeringModelCallBudget(totalTokens: number): void {
     throw new Error("Engineering model token total is invalid");
   }
   if (totalTokens > ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE) {
-    throw new Error(
-      "Engineering model call refused because the 35000-token reserve would exceed the 250000-token hard limit",
-    );
+    throw new EngineeringModelBudgetError();
+  }
+}
+
+/**
+ * Refuse a model-backed mutating stage before its durable STARTED event. The transport repeats the
+ * same check immediately before dispatch, but that later boundary is too late to keep an exhausted
+ * SLICE_IMPLEMENTATION operation retry-safe.
+ */
+export async function assertEngineeringModelCallBudgetBeforeStage(): Promise<void> {
+  const context = journalContext.getStore();
+  if (context === undefined) return;
+  try {
+    assertEngineeringModelCallBudget(context.state.usage.totalTokens);
+  } catch (error) {
+    await appendDecision(context, "MODEL_CALL_REFUSED_BUDGET").catch(() => undefined);
+    throw error;
   }
 }
 
@@ -339,8 +596,20 @@ export function runWithEngineeringDebugJournal<T>(
           responsesWithoutUsage: 0,
           responsesWithPartialUsage: 0,
         },
+        roundsUsed: 0,
+        callsUsed: 0,
+        roundLimit: 0,
+        callLimit: 0,
+        mutationReserved: 0,
+        mutationStarted: false,
+        sliceAttemptKey: null,
+        completedStages: new Set<string>(),
+        fastGates: "PENDING",
+        fullGates: "PENDING",
       },
       stage: "ENGINEERING_INVOCATION",
+      sliceId: null,
+      attempt: null,
     },
     work,
   );
@@ -350,7 +619,56 @@ export function runWithEngineeringDebugJournal<T>(
 export function runWithEngineeringDebugStage<T>(stage: string, work: () => Promise<T>): Promise<T> {
   const context = journalContext.getStore();
   if (context === undefined) return work();
-  return journalContext.run({ ...context, stage: safeName(stage, "INVALID_STAGE") }, work);
+  const scoped = { ...context, stage: safeName(stage, "INVALID_STAGE") };
+  return journalContext.run(scoped, async () => {
+    await appendDecision(scoped, "STAGE_ENTERED").catch(() => undefined);
+    try {
+      const result = await work();
+      scoped.state.completedStages.add(
+        stageScopeKey(scoped.stage ?? "INVALID_STAGE", scoped.sliceId, scoped.attempt),
+      );
+      await appendDecision(scoped, "STAGE_COMPLETED").catch(() => undefined);
+      return result;
+    } catch (error) {
+      await appendDecision(scoped, "STAGE_FAILED").catch(() => undefined);
+      throw error;
+    }
+  });
+}
+
+/** Add exact slice identity to structural progress without persisting task prose. */
+export function runWithEngineeringDebugSlice<T>(
+  stage: string,
+  sliceId: string,
+  attempt: number,
+  work: () => Promise<T>,
+): Promise<T> {
+  const context = journalContext.getStore();
+  if (context === undefined) return work();
+  const parsedSliceId = id.parse(sliceId);
+  const parsedAttempt = z.number().int().positive().parse(attempt);
+  const sliceAttemptKey = canonicalDigest({ slice_id: parsedSliceId, attempt: parsedAttempt });
+  if (context.state.sliceAttemptKey !== sliceAttemptKey) {
+    context.state.sliceAttemptKey = sliceAttemptKey;
+    context.state.roundsUsed = 0;
+    context.state.callsUsed = 0;
+    context.state.roundLimit = 0;
+    context.state.callLimit = 0;
+    context.state.mutationReserved = 0;
+    context.state.mutationStarted = false;
+    context.state.fastGates = "PENDING";
+    context.state.fullGates = "PENDING";
+  }
+  return journalContext.run({ ...context, sliceId: parsedSliceId, attempt: parsedAttempt }, () =>
+    runWithEngineeringDebugStage(stage, work),
+  );
+}
+
+/** Record that durable successful mutation receipts replaced a redundant model final report. */
+export async function recordEngineeringDebugReceiptFinalization(): Promise<void> {
+  const context = journalContext.getStore();
+  if (context === undefined) return;
+  await appendDecision(context, "IMPLEMENTATION_RECEIPT_FINALIZED");
 }
 
 /** Instrument the shared transport without leaking one concurrent run into another journal. */
@@ -358,7 +676,18 @@ export function createEngineeringDebugTransport(delegate: RuntimeTransport): Run
   return {
     async converse(request, config) {
       const context = journalContext.getStore();
-      if (context !== undefined) assertEngineeringModelCallBudget(context.state.usage.totalTokens);
+      if (context !== undefined) {
+        context.state.roundLimit = config.toolLimits.maxIterations;
+        context.state.callLimit = config.toolLimits.maxCalls;
+        context.state.mutationReserved = config.toolLoopPolicy?.mutationIterationsReserved ?? 0;
+        try {
+          assertEngineeringModelCallBudget(context.state.usage.totalTokens);
+          await appendDecision(context, "MODEL_CALL_RESERVED").catch(() => undefined);
+        } catch (error) {
+          await appendDecision(context, "MODEL_CALL_REFUSED_BUDGET").catch(() => undefined);
+          throw error;
+        }
+      }
       const response = await delegate.converse(request, config);
       if (context === undefined) return response;
       context.state.usage = addUsage(context.state.usage, response.usage);
@@ -377,9 +706,22 @@ export function createEngineeringDebugTransport(delegate: RuntimeTransport): Run
           comparison,
         });
         const batch = toolBatchEvent(response.content);
-        if (batch !== null) await context.journal.append(batch);
+        if (batch !== null) {
+          await context.journal.append(batch);
+          context.state.roundsUsed += 1;
+          context.state.callsUsed += batch.tools.length;
+          const mutation = batch.tools.some((tool) =>
+            ["write", "patch", "mkdir"].includes(tool.name),
+          );
+          if (mutation) context.state.mutationStarted = true;
+          await appendDecision(
+            context,
+            mutation ? "MUTATION_BATCH_REQUESTED" : "DISCOVERY_BATCH_REQUESTED",
+          );
+        }
         for (const event of outputShapeEvents(response.content))
           await context.journal.append(event);
+        await appendDecision(context, "MODEL_RESPONSE_RECORDED");
       } catch {
         // A diagnostic write failure after a provider response cannot change stage semantics or
         // turn an otherwise recoverable model result into an unknown external effect.
@@ -399,6 +741,12 @@ export function recordEngineeringDebugToolResult(result: ImplementationToolResul
   const context = journalContext.getStore();
   if (context === undefined) return;
   const parsed = implementationToolResult.parse(result);
+  if (
+    parsed.outcome === "SUCCEEDED" &&
+    (parsed.kind === "WRITE_FILE" || parsed.kind === "APPLY_PATCH")
+  ) {
+    context.state.mutationStarted = true;
+  }
   void context.journal
     .append({
       event: "TOOL_RESULT",
@@ -409,7 +757,21 @@ export function recordEngineeringDebugToolResult(result: ImplementationToolResul
       operation_id_digest: canonicalDigest({ operation_id: parsed.operation_id }),
       output_truncated: parsed.output.truncated,
     })
+    .then(() => appendDecision(context, "MUTATION_RESULT_RECORDED"))
     .catch(() => undefined);
+}
+
+/** Record a bounded gate decision; receipt/log bytes remain in their durable stores. */
+export function recordEngineeringDebugGateProgress(input: {
+  tier: "FAST" | "FULL";
+  status: "PASSED" | "BLOCKED";
+}): Promise<void> {
+  const context = journalContext.getStore();
+  if (context === undefined) return Promise.resolve();
+  if (input.tier === "FAST") context.state.fastGates = input.status;
+  else context.state.fullGates = input.status;
+  const code = `${input.tier}_GATES_${input.status}` as EngineeringDebugDecisionCode;
+  return appendDecision(context, code).catch(() => undefined);
 }
 
 /** Record a platform/disposable gate failure without persisting its path-bearing message. */

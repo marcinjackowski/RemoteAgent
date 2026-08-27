@@ -99,9 +99,10 @@ class QualificationTransport implements RuntimeTransport {
         source_digest: sha("2"),
       });
     }
-    if (name === "EngineeringProgramDesign_v1") {
+    if (name === "EngineeringProgramDesign_v2") {
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "ProgramDesign",
         call_flow: [...this.#sliceIds],
         file_tree_delta: [...this.#implementationPaths],
@@ -109,6 +110,16 @@ class QualificationTransport implements RuntimeTransport {
         uncertainty_review: ["review every slice"],
         expected_tests: ["qualification"],
         slice_order: [...this.#sliceIds],
+        slice_blueprints: this.#sliceIds.map((sliceId) => ({
+          slice_id: sliceId,
+          objective: `implement ${sliceId}`,
+          observable_result: `${sliceId} is present in Git evidence`,
+          allowed_paths: ["src"],
+          test_paths: ["src"],
+          gate_ids: ["qualification"],
+          inspection_method: "inspect exact durable evidence",
+          stop_condition: "fresh pre-commit review passes",
+        })),
         source_digest: sha("3"),
       });
     }
@@ -130,16 +141,18 @@ class QualificationTransport implements RuntimeTransport {
         required_changes: [],
       });
     }
-    if (name === "EngineeringSliceContract_v1") {
+    if (name === "EngineeringSliceContract_v2") {
       const sliceId = this.#sliceIds[this.#planning++];
       if (sliceId === undefined) throw new Error("unexpected extra slice planning call");
       return json({
         ...common,
+        schema_version: 2,
         artifact_kind: "SliceContract",
         slice_id: sliceId,
         objective: `implement ${sliceId}`,
         observable_result: `${sliceId} is present in Git evidence`,
         allowed_paths: ["src"],
+        test_paths: ["src"],
         gate_ids: ["qualification"],
         inspection_method: "inspect exact durable evidence",
         stop_condition: "fresh pre-commit review passes",
@@ -478,8 +491,8 @@ describeIntegration(
       const approvedTransport = new QualificationTransport({
         caseId: approvedFixture.ids.caseId,
         runId: approvedFixture.ids.runId,
-        sliceIds: ["slice-1"],
-        implementationPaths: ["src/large.ts"],
+        sliceIds: ["slice-1", "slice-2", "slice-3"],
+        implementationPaths: ["src/large-1.ts", "src/large-2.ts", "src/large-3.ts"],
         processClass: "LARGE_OR_HIGH_RISK",
       });
       const approvedProduction = approvedFixture.makeProduction(approvedLease, {

@@ -123,6 +123,38 @@ function clipToBytes(value: string, limit: number): string {
   return value.slice(0, code >= 0xd800 && code <= 0xdbff ? best - 1 : best);
 }
 
+function clipTailToBytes(value: string, limit: number): string {
+  if (byteLength(value) <= limit) return value;
+  let low = 0;
+  let high = value.length;
+  let best = value.length;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (byteLength(value.slice(mid)) <= limit) {
+      best = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+  const code = best < value.length ? value.charCodeAt(best) : 0;
+  return value.slice(code >= 0xdc00 && code <= 0xdfff ? best + 1 : best);
+}
+
+/**
+ * Compiler and test runners usually print setup at the start and the actionable
+ * diagnostic at the end. Preserve both boundaries in the inline receipt while
+ * the full redacted stream remains available through the artifact reference.
+ */
+function diagnosticExcerpt(value: string, limit: number): string {
+  if (byteLength(value) <= limit) return value;
+  const marker = "\n[REMOTEAGENT_EXCERPT_TRUNCATED]\n";
+  const contentLimit = limit - byteLength(marker);
+  const headLimit = Math.floor(contentLimit / 2);
+  const tailLimit = contentLimit - headLimit;
+  return `${clipToBytes(value, headLimit)}${marker}${clipTailToBytes(value, tailLimit)}`;
+}
+
 /** Observed process facts, normalized. `launched: false` means it never started. */
 type Observation = Readonly<{
   launched: boolean;
@@ -318,7 +350,7 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
       outcome = TestOutcome.INFRASTRUCTURE;
     }
 
-    const clipped = clipToBytes(redacted, MAX_EXCERPT_BYTES);
+    const clipped = diagnosticExcerpt(redacted, MAX_EXCERPT_BYTES);
     const excerpt: EvidenceExcerpt = {
       trust: TrustLevel.UNTRUSTED_DATA,
       value: clipped,
