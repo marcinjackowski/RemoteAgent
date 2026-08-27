@@ -1,5 +1,5 @@
 {
-  "name": "@remoteagent/bedrock-runtime",
+  "name": "@remoteagent/model-runtime",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,13 +12,11 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "3.1113.0",
     "@remoteagent/contracts": "workspace:*",
-    "@remoteagent/model-runtime": "workspace:*",
     "zod": "4.4.3"
   }
 }

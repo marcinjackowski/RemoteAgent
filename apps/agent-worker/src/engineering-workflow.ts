@@ -49,10 +49,12 @@ import {
 import {
   defineStructuredContract,
   runStructuredContract,
+  subscriptionModelInvocationDescriptorV1,
   type RuntimeConfig,
   type RuntimeMessage,
   type RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+  type SubscriptionModelInvocationDescriptorV1,
+} from "@remoteagent/model-runtime";
 import {
   EngineeringControlPlaneRepository,
   EngineeringRecoveryRepository,
@@ -104,6 +106,7 @@ export const engineeringStageContextIntentDescriptor = z
     context_manifest: engineeringContextManifest,
     context_manifest_digest: sha256Digest,
     context_packet_digest: sha256Digest,
+    model_invocation: subscriptionModelInvocationDescriptorV1.optional(),
   })
   .strict();
 export type EngineeringStageContextIntentDescriptor = z.infer<
@@ -257,6 +260,10 @@ export interface EngineeringStageExecutor {
   readonly configDigest: string;
   readonly slicePlanningConstraints?: EngineeringSlicePlanningConstraints;
   readonly schemaDigest: (stage: EngineeringStageValue) => string;
+  /** Present only for an authenticated official subscription-provider invocation. */
+  readonly modelInvocation?: (
+    stage: EngineeringStageValue,
+  ) => SubscriptionModelInvocationDescriptorV1 | null;
   readonly execute: (input: {
     readonly binding: EngineeringStageBinding;
     readonly objective: string;
@@ -284,6 +291,7 @@ export type EngineeringSlicePlanningConstraints = Readonly<{
 export interface EngineeringReviewStageExecutor {
   readonly configDigest: string;
   readonly schemaDigest: (stage: EngineeringStageValue) => string;
+  readonly modelInvocation?: SubscriptionModelInvocationDescriptorV1;
   readonly execute: (input: {
     readonly binding: EngineeringStageBinding;
     readonly objective: string;
@@ -296,6 +304,7 @@ export interface EngineeringReviewStageExecutor {
 export interface EngineeringSliceImplementationStageExecutor {
   readonly configDigest: string;
   readonly schemaDigest: string;
+  readonly modelInvocation?: SubscriptionModelInvocationDescriptorV1;
   readonly execute: (input: {
     readonly binding: EngineeringStageBinding;
     readonly objective: string;
@@ -310,20 +319,22 @@ export interface EngineeringSliceImplementationStageExecutor {
   }) => Promise<void>;
 }
 
-export interface BedrockPreCommitReviewSessionFactory {
+export interface StructuredPreCommitReviewSessionFactory {
   readonly configDigest: string;
   readonly schemaDigest: string;
+  readonly modelInvocation?: SubscriptionModelInvocationDescriptorV1;
   readonly createSession: PreCommitReviewSessionFactory;
 }
 
 /**
  * Create fresh, one-shot structured reviewer sessions. Requests carry only data
- * and the Bedrock call receives an explicit empty tool set.
+ * and the provider call receives an explicit empty tool set.
  */
-export function createBedrockPreCommitReviewSessionFactory(input: {
+export function createStructuredPreCommitReviewSessionFactory(input: {
   readonly transport: RuntimeTransport;
   readonly config: RuntimeConfig;
-}): BedrockPreCommitReviewSessionFactory {
+  readonly modelInvocation?: SubscriptionModelInvocationDescriptorV1;
+}): StructuredPreCommitReviewSessionFactory {
   const configDigest = canonicalDigest({
     model: input.config.model,
     prompt: PRE_COMMIT_REVIEW_PROMPT_VERSION,
@@ -331,6 +342,11 @@ export function createBedrockPreCommitReviewSessionFactory(input: {
   return Object.freeze({
     configDigest,
     schemaDigest: preCommitReviewDefinition.schemaDigest,
+    ...(input.modelInvocation === undefined
+      ? {}
+      : {
+          modelInvocation: subscriptionModelInvocationDescriptorV1.parse(input.modelInvocation),
+        }),
     createSession: async (): Promise<PreCommitReviewSession> => {
       const sessionId = randomUUID();
       return Object.freeze({
@@ -372,6 +388,10 @@ export function createBedrockPreCommitReviewSessionFactory(input: {
     },
   });
 }
+
+/** Historical compatibility alias; production Engineering no longer composes this with Bedrock. */
+export const createBedrockPreCommitReviewSessionFactory =
+  createStructuredPreCommitReviewSessionFactory;
 
 function isStructuredStage(stage: EngineeringStageValue): stage is StructuredStage {
   return Object.prototype.hasOwnProperty.call(definitions, stage);
@@ -579,10 +599,13 @@ function materializeSliceContract(input: {
   return slice;
 }
 
-/** Schema-owned Bedrock adapter. System/write/gate stages remain unavailable until their tasks. */
-export function createBedrockEngineeringStageExecutor(input: {
+/** Schema-owned provider-neutral stage adapter. */
+export function createStructuredEngineeringStageExecutor(input: {
   readonly transport: RuntimeTransport;
   readonly config: RuntimeConfig;
+  readonly modelInvocation?: (
+    stage: EngineeringStageValue,
+  ) => SubscriptionModelInvocationDescriptorV1 | null;
   /** Optional task-specific, server-owned planning ceiling; the runtime still validates exact output. */
   readonly slicePlanningConstraints?: EngineeringSlicePlanningConstraints;
 }): EngineeringStageExecutor {
@@ -653,6 +676,14 @@ export function createBedrockEngineeringStageExecutor(input: {
   return {
     configDigest,
     ...(slicePlanningConstraints === undefined ? {} : { slicePlanningConstraints }),
+    ...(input.modelInvocation === undefined
+      ? {}
+      : {
+          modelInvocation: (stage: EngineeringStageValue) => {
+            const exact = input.modelInvocation!(stage);
+            return exact === null ? null : subscriptionModelInvocationDescriptorV1.parse(exact);
+          },
+        }),
     schemaDigest: (stage) =>
       isStructuredStage(stage) ? definitions[stage].schemaDigest : SYSTEM_SCHEMA_DIGEST,
     execute: async ({ binding, objective, context, processClass, reviewedArtifact }) => {
@@ -694,6 +725,9 @@ export function createBedrockEngineeringStageExecutor(input: {
     },
   };
 }
+
+/** Historical compatibility alias for tests and the isolated adapter package. */
+export const createBedrockEngineeringStageExecutor = createStructuredEngineeringStageExecutor;
 
 export interface EngineeringWorkflowPolicyOptions {
   readonly riskFacts: EngineeringProcessRiskFacts;
@@ -1464,6 +1498,11 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     ) {
       throw new Error("recovered engineering operation binding mismatch");
     }
+    const durableIntent = await this.#control.readOperationCompletion(this.#options.db, {
+      operationId: this.#operationId(binding),
+    });
+    if (durableIntent === null) throw new Error("recovered engineering intent is missing");
+    this.#assertModelInvocationBinding(binding, durableIntent.descriptor);
     this.#operations.set(stageAttemptKey(binding), recovered.operation);
     if (recovered.artifact !== null) {
       if (recovered.artifact.payload.artifact_kind === "SliceContract")
@@ -1729,6 +1768,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       throw new Error("compiled ContextManifest does not match the stage binding");
     }
     const contextManifestDigest = engineeringArtifactDigest(contextManifest);
+    const modelInvocation = this.#modelInvocation(binding);
     let descriptor: Record<string, unknown> = {
       case_id: binding.caseId,
       work_unit_id: binding.workUnitId,
@@ -1741,6 +1781,7 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       context_manifest: contextManifest,
       context_manifest_digest: contextManifestDigest,
       context_packet_digest: engineeringContextPacketDigest(context),
+      ...(modelInvocation === undefined ? {} : { model_invocation: modelInvocation }),
     };
     if (binding.stage === EngineeringStage.GATE_EXECUTION) {
       const exact = gateExecutionIntentDescriptor.parse({
@@ -2308,6 +2349,44 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       }).slice(7, 47)}`;
     }
     return operationId(binding);
+  }
+
+  #modelInvocation(
+    binding: EngineeringStageBinding,
+  ): SubscriptionModelInvocationDescriptorV1 | undefined {
+    const candidate =
+      binding.stage === EngineeringStage.SLICE_IMPLEMENTATION
+        ? this.#options.implementationExecutor?.modelInvocation
+        : binding.stage === EngineeringStage.SLICE_REVIEW
+          ? this.#options.reviewExecutor?.modelInvocation
+          : binding.stage === EngineeringStage.DISCOVERY ||
+              binding.stage === EngineeringStage.GATE_EXECUTION ||
+              binding.stage === EngineeringStage.LOCAL_COMMIT
+            ? undefined
+            : (this.#options.executor.modelInvocation?.(binding.stage) ?? undefined);
+    return candidate === undefined
+      ? undefined
+      : subscriptionModelInvocationDescriptorV1.parse(candidate);
+  }
+
+  #assertModelInvocationBinding(binding: EngineeringStageBinding, raw: unknown): void {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new Error("engineering intent descriptor is invalid");
+    }
+    const record = raw as Record<string, unknown>;
+    const actual =
+      record.model_invocation === undefined
+        ? undefined
+        : subscriptionModelInvocationDescriptorV1.parse(record.model_invocation);
+    const expected = this.#modelInvocation(binding);
+    if (
+      (actual === undefined) !== (expected === undefined) ||
+      (actual !== undefined &&
+        expected !== undefined &&
+        canonicalDigest(actual) !== canonicalDigest(expected))
+    ) {
+      throw new Error("engineering recovery model provider/profile binding mismatch");
+    }
   }
 
   #assertBinding(binding: EngineeringStageBinding): void {

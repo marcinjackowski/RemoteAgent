@@ -18,6 +18,7 @@ import {
   type EngineeringGateFailure,
   type EngineeringSliceContract,
   type EngineeringSliceImplementationReceipt,
+  type EngineeringStage as EngineeringStageValue,
   type EngineeringWriteDeploymentPolicyV1,
 } from "@remoteagent/contracts";
 import {
@@ -30,7 +31,8 @@ import {
   type RuntimeToolDefinition,
   type RuntimeTransport,
   type RuntimeUsage,
-} from "@remoteagent/bedrock-runtime";
+  type SubscriptionModelInvocationDescriptorV1,
+} from "@remoteagent/model-runtime";
 import {
   WorkspaceRepository,
   EngineeringControlPlaneRepository,
@@ -63,7 +65,7 @@ import * as z from "zod";
 
 import type { RoleContextReader } from "./context.js";
 import {
-  createBedrockEngineeringStageExecutor,
+  createStructuredEngineeringStageExecutor,
   createPostgresEngineeringRuntimePort,
   engineeringApprovalCandidateFromLease,
   type EngineeringLocalCommitStageExecutor,
@@ -426,17 +428,21 @@ export function engineeringImplementationPrompt(
 }
 
 /**
- * The only production Bedrock planning composition for an engineering deployment.
+ * The only production structured-model planning composition for an engineering deployment.
  * The deployment config, rather than a caller or model, supplies both path and gate ceilings.
  */
 export function createConfiguredEngineeringStageExecutor(input: {
   readonly transport: RuntimeTransport;
   readonly modelConfig: RuntimeConfig;
   readonly executionConfig: EngineeringExecutionConfig;
+  readonly modelInvocation?: (
+    stage: EngineeringStageValue,
+  ) => SubscriptionModelInvocationDescriptorV1 | null;
 }): EngineeringStageExecutor {
-  return createBedrockEngineeringStageExecutor({
+  return createStructuredEngineeringStageExecutor({
     transport: input.transport,
     config: input.modelConfig,
+    ...(input.modelInvocation === undefined ? {} : { modelInvocation: input.modelInvocation }),
     slicePlanningConstraints: {
       allowedPaths: input.executionConfig.writePathAllowlist,
       allowedTestPaths: input.executionConfig.testPathAllowlist,
@@ -994,6 +1000,8 @@ export function createEngineeringExecution(input: {
   modelConfig: RuntimeConfig;
   taskBrief: string;
   createReviewerSession: import("@remoteagent/review-loop").PreCommitReviewSessionFactory;
+  implementationModelInvocation?: SubscriptionModelInvocationDescriptorV1;
+  reviewModelInvocation?: SubscriptionModelInvocationDescriptorV1;
   platformAdapter?: VerificationGatePlatformAdapter;
   /** Recovery-only observation fence; never supplied by the normal writer path. */
   recoveryWriter?: VerticalSliceWriterFence;
@@ -1011,6 +1019,9 @@ export function createEngineeringExecution(input: {
       engineering_diff_policy: ENGINEERING_DIFF_POLICY,
     }),
     schemaDigest: implementationDefinition.schemaDigest,
+    ...(input.implementationModelInvocation === undefined
+      ? {}
+      : { modelInvocation: input.implementationModelInvocation }),
     execute: async ({ binding, objective, context, orderedArtifacts }) => {
       const slice = sliceContract(orderedArtifacts, binding, input.config.writePathAllowlist);
       const prior = [...orderedArtifacts]
@@ -1395,6 +1406,9 @@ export function createEngineeringExecution(input: {
       route: "PRE_COMMIT_REVIEW",
     }),
     schemaDigest: () => canonicalDigest({ contract: "PreCommitReviewOutput", version: 1 }),
+    ...(input.reviewModelInvocation === undefined
+      ? {}
+      : { modelInvocation: input.reviewModelInvocation }),
     execute: async ({ binding, orderedArtifacts }) => {
       const slice = sliceContract(orderedArtifacts, binding, input.config.writePathAllowlist);
       const receipt = implementationReceipt(orderedArtifacts, binding);
@@ -1556,6 +1570,8 @@ export function createProductionEngineeringRuntimePort(input: {
   readContext: RoleContextReader;
   stageExecutor: EngineeringStageExecutor;
   reviewSessionFactory: import("@remoteagent/review-loop").PreCommitReviewSessionFactory;
+  implementationModelInvocation?: SubscriptionModelInvocationDescriptorV1;
+  reviewModelInvocation?: SubscriptionModelInvocationDescriptorV1;
   policy: EngineeringWorkflowPolicyOptions;
   workflowDeadlineMs?: number;
   controlPlane?: EngineeringControlPlaneRepository;
@@ -1572,6 +1588,12 @@ export function createProductionEngineeringRuntimePort(input: {
     modelConfig: input.modelConfig,
     taskBrief: "Review the exact engineering work unit against its durable slice contract.",
     createReviewerSession: input.reviewSessionFactory,
+    ...(input.implementationModelInvocation === undefined
+      ? {}
+      : { implementationModelInvocation: input.implementationModelInvocation }),
+    ...(input.reviewModelInvocation === undefined
+      ? {}
+      : { reviewModelInvocation: input.reviewModelInvocation }),
     ...(input.platformAdapter === undefined ? {} : { platformAdapter: input.platformAdapter }),
   });
   return createPostgresEngineeringRuntimePort({

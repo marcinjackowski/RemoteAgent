@@ -13,7 +13,7 @@ import {
   type EngineeringWriteDeploymentPolicyV1,
 } from "@remoteagent/contracts";
 import type { EngineeringStageBinding } from "@remoteagent/agent-orchestrator";
-import type { RuntimeConfig, RuntimeTransport } from "@remoteagent/bedrock-runtime";
+import type { RuntimeConfig, RuntimeTransport } from "@remoteagent/model-runtime";
 import {
   EngineeringControlPlaneRepository,
   EngineeringRecoveryRepository,

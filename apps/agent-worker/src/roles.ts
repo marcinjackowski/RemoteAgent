@@ -5,7 +5,7 @@ import {
   type RuntimeConfig,
   type RuntimeMessage,
   type RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import { MetricName, type MetricRegistry } from "@remoteagent/observability";
 
 import type { RoleContextReader } from "./context.js";

@@ -17,6 +17,7 @@ import {
   type WorkUnit,
 } from "@remoteagent/contracts";
 import { FakeTransport, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
+import { subscriptionModelInvocationDescriptorV1 } from "@remoteagent/model-runtime";
 import {
   CaseRepository,
   ConnectionRepository,
@@ -41,8 +42,8 @@ import {
 } from "../../../packages/database/test/integration-base.js";
 import type { CompiledRoleContext } from "../src/context.js";
 import {
-  createBedrockEngineeringStageExecutor,
-  createBedrockPreCommitReviewSessionFactory,
+  createStructuredEngineeringStageExecutor,
+  createStructuredPreCommitReviewSessionFactory,
   assertEngineeringProgramDesignBlueprints,
   assertGateEvidenceAuthority,
   createPostgresEngineeringRuntimePort as createPostgresEngineeringRuntimePortProduction,
@@ -1074,6 +1075,17 @@ describeIntegration(
       const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
       if (lease === null) throw new Error("expected qualification lease");
       let modelCalls = 0;
+      const modelInvocation = subscriptionModelInvocationDescriptorV1.parse({
+        schema_version: 1,
+        role: "DESIGNER",
+        provider: "codex_cli",
+        profile_name: "codex-local",
+        client_version: "1.2.3",
+        model: "gpt-5.6-codex",
+        executable_digest: sha("1"),
+        deployment_config_digest: sha("2"),
+        profile_config_digest: sha("3"),
+      });
       const options = {
         db,
         lease,
@@ -1082,6 +1094,7 @@ describeIntegration(
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
+          modelInvocation: () => modelInvocation,
           execute: async ({ binding }) => {
             modelCalls += 1;
             return {
@@ -1104,11 +1117,29 @@ describeIntegration(
       const crashed = createPostgresEngineeringRuntimePort(options);
       await crashed.open(runtimeIdentity());
       await crashed.prepareContext(binding);
+      const intent = await db.query<{ descriptor: Record<string, unknown> }>(
+        `SELECT i.descriptor
+           FROM engineering_operations o
+           JOIN job_intents i ON i.intent_id=o.intent_id
+          WHERE o.run_id='run-1' AND o.stage='SLICE_PLANNING' AND o.stage_attempt=1`,
+      );
+      expect(intent.rows[0]!.descriptor.model_invocation).toEqual(modelInvocation);
       const intentOnly = createPostgresEngineeringRuntimePort(options);
       await intentOnly.open(runtimeIdentity());
       expect(await intentOnly.recoverStage(binding)).toEqual({ status: "NOT_STARTED" });
       expect(modelCalls).toBe(0);
       await crashed.commitStarted(binding);
+      const changedProvider = createPostgresEngineeringRuntimePort({
+        ...options,
+        executor: {
+          ...options.executor,
+          modelInvocation: () => ({ ...modelInvocation, model: "gpt-5.7-codex" }),
+        },
+      });
+      await changedProvider.open(runtimeIdentity());
+      await expect(changedProvider.recoverStage(binding)).rejects.toThrow(
+        /provider\/profile binding mismatch/u,
+      );
       const resumed = createPostgresEngineeringRuntimePort(options);
       await resumed.open(runtimeIdentity());
       expect(await resumed.recoverStage(binding)).toEqual({ status: "NOT_STARTED" });
@@ -3238,7 +3269,7 @@ describeIntegration(
   available,
 );
 
-it("binds a structured stage to its server-owned Bedrock schema", async () => {
+it("binds a structured stage to its server-owned provider-neutral schema", async () => {
   const config = createRuntimeConfig({
     model: { provider: "bedrock", model_id: "test-model" },
     timeoutMs: 1_000,
@@ -3248,7 +3279,7 @@ it("binds a structured stage to its server-owned Bedrock schema", async () => {
   const transport = new FakeTransport([
     { model: config.model, content: [{ type: "json", value: artifact }] },
   ]);
-  const executor = createBedrockEngineeringStageExecutor({
+  const executor = createStructuredEngineeringStageExecutor({
     transport,
     config,
     slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
@@ -3400,7 +3431,7 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
   const transport = new FakeTransport([
     { model: config.model, content: [{ type: "json", value: modelDesign }] },
   ]);
-  const executor = createBedrockEngineeringStageExecutor({
+  const executor = createStructuredEngineeringStageExecutor({
     transport,
     config,
     slicePlanningConstraints: constraints,
@@ -3430,7 +3461,7 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
   ]);
 });
 
-it("creates a fresh tools-disabled Bedrock pre-commit session", async () => {
+it("creates a fresh tools-disabled provider-neutral pre-commit session", async () => {
   const config = createRuntimeConfig({
     model: { provider: "bedrock", model_id: "test-model" },
     timeoutMs: 1_000,
@@ -3451,7 +3482,7 @@ it("creates a fresh tools-disabled Bedrock pre-commit session", async () => {
       };
     },
   };
-  const factory = createBedrockPreCommitReviewSessionFactory({ transport, config });
+  const factory = createStructuredPreCommitReviewSessionFactory({ transport, config });
   const first = await factory.createSession();
   const second = await factory.createSession();
   expect(first.sessionId).not.toBe(second.sessionId);

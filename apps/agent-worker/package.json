@@ -24,6 +24,7 @@
     "@remoteagent/discord": "workspace:*",
     "@remoteagent/implementation-tools": "workspace:*",
     "@remoteagent/git-lifecycle": "workspace:*",
+    "@remoteagent/model-runtime": "workspace:*",
     "@remoteagent/observability": "workspace:*",
     "@remoteagent/review-loop": "workspace:*",
     "@remoteagent/test-evidence": "workspace:*",

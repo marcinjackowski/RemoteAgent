@@ -147,7 +147,7 @@ describe("converseStream cancellation", () => {
       }),
     };
     await expect(converseStream(transport, config, request)).rejects.toMatchObject({
-      message: "Bedrock stream ended before completion",
+      message: "Model stream ended before completion",
     });
   });
 

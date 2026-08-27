@@ -16,7 +16,7 @@ import type {
   RuntimeJsonValue,
   RuntimeTransport,
   RuntimeUsage,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import * as z from "zod";
 
 const id = z.string().min(1).max(512);

@@ -41,6 +41,11 @@ import {
   type ProcessDefinition,
 } from "@remoteagent/observability";
 import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
+import type {
+  RuntimeConfig,
+  RuntimeTransport,
+  SubscriptionModelInvocationDescriptorV1,
+} from "@remoteagent/model-runtime";
 import { JiraRestClient } from "@remoteagent/connector-jira";
 import { ChannelRegistry } from "@remoteagent/discord";
 
@@ -50,7 +55,7 @@ import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.j
 import { WorkerPersistence } from "./persistence.js";
 import { createRoles, roleConfigFromEnv } from "./roles.js";
 import { createEngineeringRoleContextReader } from "./context.js";
-import { createBedrockPreCommitReviewSessionFactory } from "./engineering-workflow.js";
+import { createStructuredPreCommitReviewSessionFactory } from "./engineering-workflow.js";
 import {
   createConfiguredEngineeringStageExecutor,
   createProductionEngineeringRuntimePort,
@@ -92,6 +97,39 @@ export interface WorkerConfig {
   readonly intervalMs: number;
   readonly owner: string;
   readonly drainMs: number;
+}
+
+export type ProductionConversationModelBinding = Readonly<{
+  transport: RuntimeTransport;
+  config: RuntimeConfig;
+}>;
+
+export type ProductionEngineeringSubscriptionBinding = Readonly<{
+  authority: "OFFICIAL_SUBSCRIPTION_CLI";
+  transport: RuntimeTransport;
+  config: RuntimeConfig;
+  stageInvocation: (
+    stage: import("@remoteagent/contracts").EngineeringStage,
+  ) => SubscriptionModelInvocationDescriptorV1 | null;
+  implementationInvocation: SubscriptionModelInvocationDescriptorV1;
+  reviewInvocation: SubscriptionModelInvocationDescriptorV1;
+}>;
+
+/**
+ * Keep the legacy conversation model and the Engineering provider on separate composition slots.
+ * Missing subscription wiring is a deliberate null, never a fallback to the conversation transport.
+ */
+export function bindProductionModelRuntimes(input: {
+  conversation: ProductionConversationModelBinding;
+  subscriptionEngineering?: ProductionEngineeringSubscriptionBinding;
+}): Readonly<{
+  conversation: ProductionConversationModelBinding;
+  engineering: ProductionEngineeringSubscriptionBinding | null;
+}> {
+  return Object.freeze({
+    conversation: input.conversation,
+    engineering: input.subscriptionEngineering ?? null,
+  });
 }
 
 type Env = Record<string, string | undefined>;
@@ -323,8 +361,11 @@ export async function main(): Promise<void> {
   });
   // Async-local routing means the shared process transport writes usage/tool shape only while an
   // actual Engineering handler owns an invocation journal. Ordinary reply/Jira roles stay silent.
-  const transport = createEngineeringDebugTransport(rawTransport);
   const modelConfig = roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId });
+  const modelBindings = bindProductionModelRuntimes({
+    conversation: Object.freeze({ transport: rawTransport, config: modelConfig }),
+  });
+  const transport = modelBindings.conversation.transport;
   const readContext = createEngineeringRoleContextReader({
     db,
     metrics,
@@ -334,18 +375,28 @@ export async function main(): Promise<void> {
     },
   });
   const engineeringExecutionConfig = await engineeringExecutionConfigFromEnv();
+  const engineeringModel = modelBindings.engineering;
+  const engineeringTransport =
+    engineeringModel === null ? null : createEngineeringDebugTransport(engineeringModel.transport);
   const engineeringExecutor =
-    engineeringExecutionConfig === null
+    engineeringExecutionConfig === null ||
+    engineeringModel === null ||
+    engineeringTransport === null
       ? undefined
       : createConfiguredEngineeringStageExecutor({
-          transport,
-          modelConfig,
+          transport: engineeringTransport,
+          modelConfig: engineeringModel.config,
           executionConfig: engineeringExecutionConfig,
+          modelInvocation: engineeringModel.stageInvocation,
         });
-  const preCommitReview = createBedrockPreCommitReviewSessionFactory({
-    transport,
-    config: modelConfig,
-  });
+  const preCommitReview =
+    engineeringModel === null || engineeringTransport === null
+      ? null
+      : createStructuredPreCommitReviewSessionFactory({
+          transport: engineeringTransport,
+          config: engineeringModel.config,
+          modelInvocation: engineeringModel.reviewInvocation,
+        });
   const handlers = createWorkerHandlers(
     {
       persistence,
@@ -365,7 +416,7 @@ export async function main(): Promise<void> {
             engineeringInvocation: createEngineeringInvocationJournalRunner({
               artifactRoot: engineeringExecutionConfig.artifactRoot,
               db,
-              model: modelConfig.model.model_id,
+              model: engineeringModel?.config.model.model_id ?? "subscription-provider-unavailable",
               configDigest: engineeringExecutionConfig.configDigest,
               logger,
             }),
@@ -377,18 +428,29 @@ export async function main(): Promise<void> {
           );
         }
         if (engineeringExecutor === undefined) {
-          throw new Error("engineering planning executor is unavailable");
+          throw new Error(
+            "engineering subscription provider is unavailable; Bedrock fallback is disabled",
+          );
+        }
+        if (
+          engineeringModel === null ||
+          engineeringTransport === null ||
+          preCommitReview === null
+        ) {
+          throw new Error("engineering subscription provider binding is unavailable");
         }
         return createProductionEngineeringRuntimePort({
           db,
           lease,
           jobs,
           config: engineeringExecutionConfig,
-          transport,
-          modelConfig,
+          transport: engineeringTransport,
+          modelConfig: engineeringModel.config,
           readContext,
           stageExecutor: engineeringExecutor,
           reviewSessionFactory: preCommitReview.createSession,
+          implementationModelInvocation: engineeringModel.implementationInvocation,
+          reviewModelInvocation: engineeringModel.reviewInvocation,
           metrics,
           policy: {
             // Conservative deployment default. No model output can downgrade this class, and the
@@ -413,15 +475,19 @@ export async function main(): Promise<void> {
     extra,
   );
   const continuation =
-    engineeringExecutionConfig === null || engineeringExecutor === undefined
+    engineeringExecutionConfig === null ||
+    engineeringExecutor === undefined ||
+    engineeringModel === null ||
+    engineeringTransport === null ||
+    preCommitReview === null
       ? undefined
       : createProductionEngineeringRecoveryCoordinator({
           db,
           jobs,
           owner: config.owner,
           config: engineeringExecutionConfig,
-          transport,
-          modelConfig,
+          transport: engineeringTransport,
+          modelConfig: engineeringModel.config,
           readContext,
           stageExecutor: engineeringExecutor,
           createReviewerSession: preCommitReview.createSession,
