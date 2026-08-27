@@ -770,6 +770,11 @@ export interface EngineeringRuntimePortOptions {
   readonly jobs: JobStore;
   readonly readContext: RoleContextReader;
   readonly executor: EngineeringStageExecutor;
+  /** Exact subscription proof executed before binding any model-backed operation intent. */
+  readonly modelPreflight?: (input: {
+    readonly binding: EngineeringStageBinding;
+    readonly invocation: SubscriptionModelInvocationDescriptorV1;
+  }) => Promise<void>;
   /** Required production route for SLICE_REVIEW; absence fails closed. */
   readonly reviewExecutor?: EngineeringReviewStageExecutor;
   /** Required production route for SLICE_IMPLEMENTATION; reports real model calls. */
@@ -1752,6 +1757,14 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
     if (binding.stage === EngineeringStage.SLICE_IMPLEMENTATION) {
       await assertEngineeringModelCallBudgetBeforeStage();
     }
+    const modelInvocation = this.#modelInvocation(binding);
+    if (modelInvocation !== undefined) {
+      const preflight = this.#options.modelPreflight;
+      if (preflight === undefined) {
+        throw new Error("subscription model invocation lacks a pre-intent auth preflight");
+      }
+      await preflight({ binding, invocation: modelInvocation });
+    }
     const context = await this.#options.readContext({
       caseId: binding.caseId,
       workUnitId: binding.workUnitId,
@@ -1768,7 +1781,6 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
       throw new Error("compiled ContextManifest does not match the stage binding");
     }
     const contextManifestDigest = engineeringArtifactDigest(contextManifest);
-    const modelInvocation = this.#modelInvocation(binding);
     let descriptor: Record<string, unknown> = {
       case_id: binding.caseId,
       work_unit_id: binding.workUnitId,

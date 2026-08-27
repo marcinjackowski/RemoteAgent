@@ -1,12 +1,20 @@
 import { expect, it } from "vitest";
 
+import { EngineeringStage } from "@remoteagent/contracts";
+import { CodexCliTransport } from "@remoteagent/model-provider-codex-cli";
 import {
   createRuntimeConfig,
+  createSubscriptionModelInvocationDescriptor,
   subscriptionModelInvocationDescriptorV1,
+  subscriptionModelProfileV1,
+  type SubscriptionAuthPreflight,
   type RuntimeTransport,
 } from "@remoteagent/model-runtime";
 
-import { bindProductionModelRuntimes } from "../src/worker.js";
+import {
+  bindProductionModelRuntimes,
+  createCodexSubscriptionModelTransport,
+} from "../src/worker.js";
 
 const config = createRuntimeConfig({
   model: { provider: "legacy-conversation", model_id: "legacy-model" },
@@ -17,17 +25,35 @@ const conversation: RuntimeTransport = {
   converse: async () => ({ model: config.model, content: [] }),
 };
 
-const invocation = subscriptionModelInvocationDescriptorV1.parse({
+const codexProfile = subscriptionModelProfileV1.parse({
   schema_version: 1,
-  role: "IMPLEMENTER",
-  provider: "codex_cli",
   profile_name: "codex-local",
-  client_version: "1.2.3",
+  provider: "codex_cli",
+  executable: "/opt/remoteagent/bin/codex",
   model: "gpt-5.6-codex",
-  executable_digest: `sha256:${"1".repeat(64)}`,
-  deployment_config_digest: `sha256:${"2".repeat(64)}`,
-  profile_config_digest: `sha256:${"3".repeat(64)}`,
+  timeout_ms: 1_000,
+  kill_grace_ms: 50,
+  max_stdin_bytes: 65_536,
+  max_stdout_bytes: 65_536,
+  max_stderr_bytes: 4096,
 });
+const invocation = subscriptionModelInvocationDescriptorV1.parse(
+  createSubscriptionModelInvocationDescriptor({
+    role: "IMPLEMENTER",
+    profile: codexProfile,
+    clientVersion: "0.147.0",
+    deploymentConfigDigest: `sha256:${"2".repeat(64)}`,
+  }),
+);
+const authenticated: SubscriptionAuthPreflight = {
+  verify: async () => ({
+    status: "SUBSCRIPTION_AUTHENTICATED",
+    provider: "codex_cli",
+    profile_name: "codex-local",
+    client_version: "0.147.0",
+    model: "gpt-5.6-codex",
+  }),
+};
 
 it("does not reuse the legacy conversation transport as an Engineering fallback", () => {
   const bindings = bindProductionModelRuntimes({
@@ -37,18 +63,18 @@ it("does not reuse the legacy conversation transport as an Engineering fallback"
   expect(bindings.engineering).toBeNull();
 });
 
-it("accepts only an explicit official-subscription Engineering composition slot", () => {
-  const engineering: RuntimeTransport = {
-    converse: async () => ({
-      model: { provider: "codex_cli", model_id: "gpt-5.6-codex" },
-      content: [],
-    }),
-  };
+it("accepts only an explicit preflight-capable subscription Engineering slot", async () => {
+  const engineering = createCodexSubscriptionModelTransport({
+    profile: codexProfile,
+    preflight: authenticated,
+  });
+  expect(engineering).toBeInstanceOf(CodexCliTransport);
   const bound = bindProductionModelRuntimes({
     conversation: { transport: conversation, config },
     subscriptionEngineering: {
       authority: "OFFICIAL_SUBSCRIPTION_CLI",
       transport: engineering,
+      assertReadyForInvocation: (input) => engineering.assertInvocationReady(input),
       config: createRuntimeConfig({
         model: { provider: "codex_cli", model_id: "gpt-5.6-codex" },
         timeoutMs: 1_000,
@@ -62,4 +88,50 @@ it("accepts only an explicit official-subscription Engineering composition slot"
   expect(bound.engineering?.authority).toBe("OFFICIAL_SUBSCRIPTION_CLI");
   expect(bound.engineering?.transport).toBe(engineering);
   expect(bound.engineering?.transport).not.toBe(conversation);
+  await expect(
+    bound.engineering?.assertReadyForInvocation({ invocation }),
+  ).resolves.toBeUndefined();
+  await expect(
+    bound.engineering?.assertReadyForInvocation({
+      invocation: { ...invocation, model: "foreign-model" },
+    }),
+  ).rejects.toThrow(/identity does not match preflight/u);
+
+  const unauthorized = createCodexSubscriptionModelTransport({
+    profile: codexProfile,
+    preflight: {
+      verify: async () => ({
+        status: "API_CREDENTIALS_PRESENT",
+        reason_code: "API_KEY_LOGIN_ACTIVE",
+      }),
+    },
+  });
+  await expect(unauthorized.assertInvocationReady({ invocation })).rejects.toThrow(
+    /preflight refused with API_CREDENTIALS_PRESENT/u,
+  );
+});
+
+it("refuses an official production binding that omits a model-stage descriptor", () => {
+  const engineering = createCodexSubscriptionModelTransport({
+    profile: codexProfile,
+    preflight: authenticated,
+  });
+  const bound = bindProductionModelRuntimes({
+    conversation: { transport: conversation, config },
+    subscriptionEngineering: {
+      authority: "OFFICIAL_SUBSCRIPTION_CLI",
+      transport: engineering,
+      assertReadyForInvocation: (input) => engineering.assertInvocationReady(input),
+      config: createRuntimeConfig({
+        model: { provider: "codex_cli", model_id: "gpt-5.6-codex" },
+        timeoutMs: 1_000,
+        toolLimits: { maxIterations: 0, maxCalls: 0 },
+      }),
+      stageInvocation: (() => null) as never,
+      implementationInvocation: invocation,
+      reviewInvocation: { ...invocation, role: "REVIEWER" },
+    },
+  });
+
+  expect(() => bound.engineering?.stageInvocation(EngineeringStage.PROGRAM_DESIGN)).toThrow();
 });

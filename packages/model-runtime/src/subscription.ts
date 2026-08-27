@@ -6,6 +6,7 @@ import * as z from "zod";
 
 const boundedName = z.string().regex(/^[A-Za-z0-9._-]{1,128}$/u);
 const boundedVersion = z.string().regex(/^[A-Za-z0-9.+_-]{1,128}$/u);
+const opaqueSessionId = z.string().regex(/^[A-Za-z0-9._:-]{1,256}$/u);
 const modelName = z.string().regex(/^[A-Za-z0-9._:/-]{1,256}$/u);
 const absoluteExecutable = z
   .string()
@@ -265,6 +266,29 @@ export const normalizedSubscriptionModelEvent = z.discriminatedUnion("event", [
       outcome: subscriptionModelTerminalOutcome,
       exit_code: z.number().int().nullable(),
       signal: boundedName.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("MODEL_SESSION_STARTED"),
+      sequence: z.number().int().positive(),
+      provider: subscriptionModelProviderKind,
+      session_id: opaqueSessionId,
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("MODEL_TURN_FINISHED"),
+      sequence: z.number().int().positive(),
+      provider: subscriptionModelProviderKind,
+      session_id: opaqueSessionId.nullable(),
+      outcome: z.enum([
+        "SUCCEEDED",
+        "QUOTA_OR_PROVIDER_FAILED",
+        "MALFORMED_OUTPUT",
+        "TOOL_BOUNDARY_VIOLATION",
+      ]),
+      usage: subscriptionModelUsage.nullable(),
     })
     .strict(),
 ]);

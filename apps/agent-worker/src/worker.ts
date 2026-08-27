@@ -41,11 +41,18 @@ import {
   type ProcessDefinition,
 } from "@remoteagent/observability";
 import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
-import type {
-  RuntimeConfig,
-  RuntimeTransport,
-  SubscriptionModelInvocationDescriptorV1,
+import {
+  subscriptionModelInvocationDescriptorV1,
+  type RuntimeConfig,
+  type RuntimeTransport,
+  type SubscriptionModelInvocationDescriptorV1,
 } from "@remoteagent/model-runtime";
+import type { EngineeringStage } from "@remoteagent/contracts";
+import {
+  createCodexCliTransport,
+  type CodexCliTransport,
+  type CodexCliTransportOptions,
+} from "@remoteagent/model-provider-codex-cli";
 import { JiraRestClient } from "@remoteagent/connector-jira";
 import { ChannelRegistry } from "@remoteagent/discord";
 
@@ -108,12 +115,25 @@ export type ProductionEngineeringSubscriptionBinding = Readonly<{
   authority: "OFFICIAL_SUBSCRIPTION_CLI";
   transport: RuntimeTransport;
   config: RuntimeConfig;
-  stageInvocation: (
-    stage: import("@remoteagent/contracts").EngineeringStage,
-  ) => SubscriptionModelInvocationDescriptorV1 | null;
+  assertReadyForInvocation: (input: {
+    invocation: SubscriptionModelInvocationDescriptorV1;
+    signal?: AbortSignal;
+  }) => Promise<void>;
+  stageInvocation: (stage: EngineeringStage) => SubscriptionModelInvocationDescriptorV1;
   implementationInvocation: SubscriptionModelInvocationDescriptorV1;
   reviewInvocation: SubscriptionModelInvocationDescriptorV1;
 }>;
+
+/**
+ * Construct the Codex subscription transport without assigning it to an
+ * Engineering role. Immutable per-role routing is deliberately owned by
+ * RA-052; this seam only makes the qualified adapter available to composition.
+ */
+export function createCodexSubscriptionModelTransport(
+  options: CodexCliTransportOptions,
+): CodexCliTransport {
+  return createCodexCliTransport(options);
+}
 
 /**
  * Keep the legacy conversation model and the Engineering provider on separate composition slots.
@@ -126,9 +146,23 @@ export function bindProductionModelRuntimes(input: {
   conversation: ProductionConversationModelBinding;
   engineering: ProductionEngineeringSubscriptionBinding | null;
 }> {
+  const engineering = input.subscriptionEngineering;
   return Object.freeze({
     conversation: input.conversation,
-    engineering: input.subscriptionEngineering ?? null,
+    engineering:
+      engineering === undefined
+        ? null
+        : Object.freeze({
+            ...engineering,
+            implementationInvocation: subscriptionModelInvocationDescriptorV1.parse(
+              engineering.implementationInvocation,
+            ),
+            reviewInvocation: subscriptionModelInvocationDescriptorV1.parse(
+              engineering.reviewInvocation,
+            ),
+            stageInvocation: (stage: EngineeringStage) =>
+              subscriptionModelInvocationDescriptorV1.parse(engineering.stageInvocation(stage)),
+          }),
   });
 }
 
@@ -451,6 +485,7 @@ export async function main(): Promise<void> {
           reviewSessionFactory: preCommitReview.createSession,
           implementationModelInvocation: engineeringModel.implementationInvocation,
           reviewModelInvocation: engineeringModel.reviewInvocation,
+          modelPreflight: engineeringModel.assertReadyForInvocation,
           metrics,
           policy: {
             // Conservative deployment default. No model output can downgrade this class, and the

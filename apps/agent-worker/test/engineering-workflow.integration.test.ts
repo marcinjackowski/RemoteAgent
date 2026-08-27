@@ -1086,6 +1086,7 @@ describeIntegration(
         deployment_config_digest: sha("2"),
         profile_config_digest: sha("3"),
       });
+      let preflightCalls = 0;
       const options = {
         db,
         lease,
@@ -1104,6 +1105,16 @@ describeIntegration(
             };
           },
         } satisfies EngineeringStageExecutor,
+        modelPreflight: async (input: { invocation: typeof modelInvocation }) => {
+          preflightCalls += 1;
+          expect(input.invocation).toEqual(modelInvocation);
+          if (preflightCalls === 1) {
+            const operations = await db.query<{ count: string }>(
+              `SELECT count(*)::text AS count FROM engineering_operations WHERE run_id='run-1'`,
+            );
+            expect(operations.rows[0]?.count).toBe("0");
+          }
+        },
         policy: { riskFacts: smallRiskFacts },
       };
       const binding = {
@@ -1114,9 +1125,25 @@ describeIntegration(
         stage: EngineeringStage.SLICE_PLANNING,
         attempt: 1,
       } as const;
+      const refused = createPostgresEngineeringRuntimePort({
+        ...options,
+        modelPreflight: async () => {
+          throw new Error("subscription auth refused");
+        },
+      });
+      await refused.open(runtimeIdentity());
+      await expect(refused.prepareContext(binding)).rejects.toThrow(/subscription auth refused/u);
+      expect(
+        (
+          await db.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM engineering_operations WHERE run_id='run-1'`,
+          )
+        ).rows[0]?.count,
+      ).toBe("0");
       const crashed = createPostgresEngineeringRuntimePort(options);
       await crashed.open(runtimeIdentity());
       await crashed.prepareContext(binding);
+      expect(preflightCalls).toBe(1);
       const intent = await db.query<{ descriptor: Record<string, unknown> }>(
         `SELECT i.descriptor
            FROM engineering_operations o

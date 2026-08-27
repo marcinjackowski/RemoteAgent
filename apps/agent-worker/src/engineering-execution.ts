@@ -1572,6 +1572,10 @@ export function createProductionEngineeringRuntimePort(input: {
   reviewSessionFactory: import("@remoteagent/review-loop").PreCommitReviewSessionFactory;
   implementationModelInvocation?: SubscriptionModelInvocationDescriptorV1;
   reviewModelInvocation?: SubscriptionModelInvocationDescriptorV1;
+  modelPreflight?: (input: {
+    binding: import("@remoteagent/agent-orchestrator").EngineeringStageBinding;
+    invocation: SubscriptionModelInvocationDescriptorV1;
+  }) => Promise<void>;
   policy: EngineeringWorkflowPolicyOptions;
   workflowDeadlineMs?: number;
   controlPlane?: EngineeringControlPlaneRepository;
@@ -1602,6 +1606,7 @@ export function createProductionEngineeringRuntimePort(input: {
     jobs: input.jobs,
     readContext: input.readContext,
     executor: input.stageExecutor,
+    ...(input.modelPreflight === undefined ? {} : { modelPreflight: input.modelPreflight }),
     implementationExecutor: execution.implementationExecutor,
     gateExecutor: execution.gateExecutor,
     reviewExecutor: execution.reviewExecutor,

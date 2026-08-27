@@ -38,6 +38,9 @@ importers:
       '@remoteagent/infra-cdk':
         specifier: workspace:*
         version: link:infra/cdk
+      '@remoteagent/model-provider-codex-cli':
+        specifier: workspace:*
+        version: link:packages/model-provider-codex-cli
       '@remoteagent/model-runtime':
         specifier: workspace:*
         version: link:packages/model-runtime
@@ -122,6 +125,9 @@ importers:
       '@remoteagent/implementation-tools':
         specifier: workspace:*
         version: link:../../packages/implementation-tools
+      '@remoteagent/model-provider-codex-cli':
+        specifier: workspace:*
+        version: link:../../packages/model-provider-codex-cli
       '@remoteagent/model-runtime':
         specifier: workspace:*
         version: link:../../packages/model-runtime
@@ -368,6 +374,18 @@ importers:
       '@remoteagent/test-evidence':
         specifier: workspace:*
         version: link:../test-evidence
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  packages/model-provider-codex-cli:
+    dependencies:
+      '@remoteagent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@remoteagent/model-runtime':
+        specifier: workspace:*
+        version: link:../model-runtime
       zod:
         specifier: 4.4.3
         version: 4.4.3

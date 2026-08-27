@@ -25,6 +25,7 @@
     "@remoteagent/implementation-tools": "workspace:*",
     "@remoteagent/git-lifecycle": "workspace:*",
     "@remoteagent/model-runtime": "workspace:*",
+    "@remoteagent/model-provider-codex-cli": "workspace:*",
     "@remoteagent/observability": "workspace:*",
     "@remoteagent/review-loop": "workspace:*",
     "@remoteagent/test-evidence": "workspace:*",
