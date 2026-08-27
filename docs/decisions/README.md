@@ -34,3 +34,9 @@ Aktualne decyzje:
 - `ADR-0014` — bezpieczny core dostaje brakujący produkcyjny approval ingress i stage-aware
   cross-fence reconciliation (`RA-046`, `RA-047`) przed live smoke RA-045; generic decisions,
   external actions i swobodny fence rollover nie zastępują tych granic.
+- `ADR-0015` — bounded progressive Engineering execution: strict małe slice blueprints,
+  test-first chronology, code-owned generator receipts, round/token reserves, working-context
+  compaction, destructive-change guard i content-free progress journal.
+- `ADR-0016` — provider-neutral Engineering przez oficjalne klienty Codex CLI i Claude Code
+  uwierzytelnione subskrypcją; role są wybierane konfiguracją, a Bedrock i OpenCode nie należą
+  do aktywnej ścieżki.

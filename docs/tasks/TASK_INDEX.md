@@ -74,6 +74,12 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 45 | [RA-046](RA-046.md) Engineering approval ingress: Discord → grant → writer job | DONE | RA-044 | M8 |
 | 46 | [RA-047](RA-047.md) Stage-aware cross-fence recovery i continuation | DONE | RA-046 | M8 |
 | 47 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | DONE | RA-047 | M9 |
+| 48 | [RA-048](RA-048.md) Bounded progressive Engineering execution | DONE | RA-045 | M9 |
+| 49 | [RA-049](RA-049.md) Provider-neutral subscription model runtime | READY | RA-048 | M10 |
+| 50 | [RA-050](RA-050.md) Codex CLI subscription adapter | BLOCKED_BY_DEPENDENCIES | RA-049 | M10 |
+| 51 | [RA-051](RA-051.md) Claude Code subscription adapter | BLOCKED_BY_DEPENDENCIES | RA-050 | M10 |
+| 52 | [RA-052](RA-052.md) Configurable Engineering role routing and recovery | BLOCKED_BY_DEPENDENCIES | RA-051 | M10 |
+| 53 | [RA-053](RA-053.md) Subscription-provider qualification and Bedrock retirement | BLOCKED_BY_DEPENDENCIES | RA-052 | M10 |
 
 ## Milestone gates
 
@@ -91,6 +97,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
   ingress i stage-aware cross-fence continuation (`ADR-0014`); zastępuje RA-034.
 - **M9 iOS Qualification:** jawnie uruchamiany live smoke M8 na macOS/Xcode i `sondermind-ios`;
   brak środowiska live nie blokuje kwalifikacji core.
+- **M10 Subscription Model Runtime:** oficjalne Codex CLI i Claude Code przez
+  subscription OAuth, wybierane per rola i per test; bez API keys, Bedrock i OpenCode.
 
 ## Prepared execution plans
 
@@ -151,3 +159,7 @@ tymczasowy migration lane nie jest kodowany jako fałszywa zależność domenowa
 - RA-042 może rozwijać bezpieczne command/evidence boundary po RA-038, równolegle do model flow.
 - RA-043 łączy gotowy workflow i gates z jedynym writerem, `GitLifecycle` i `review-loop`.
 - RA-044 kwalifikuje core na deterministycznych boundary fakes; RA-045 osobno kwalifikuje Xcode/live.
+- RA-049 odłącza domenowy runtime od Bedrock i definiuje fail-closed subscription process boundary.
+- RA-050 i RA-051 kwalifikują kolejno oficjalne klienty Codex i Claude bez trzeciego pośrednika.
+- RA-052 dopiero po obu adapterach utrwala wybór providerów per rola i recovery.
+- RA-053 wykonuje porównywalną macierz opt-in i usuwa aktywny Bedrock/OpenCode configuration surface.

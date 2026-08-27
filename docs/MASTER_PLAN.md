@@ -56,7 +56,9 @@ packages/
   connector-gmail/
   connector-calendar/
   connector-gitlab/
-  bedrock-runtime/
+  model-runtime/
+  model-provider-codex-cli/
+  model-provider-claude-code/
   agent-orchestrator/
   workspace-runner/
   mcp-tool-broker/
@@ -77,9 +79,15 @@ infra/
 - W AWS kolejki mogą być realizowane przez SQS z DLQ; lokalnie adapter może
   działać na PostgreSQL. Semantyka musi pozostać taka sama.
 
-### 3.3 Modele i Bedrock
+### 3.3 Modele i providerzy
 
-- Pierwszy runtime używa Amazon Bedrock `Converse`/`ConverseStream`.
+- Historyczny pierwszy runtime używał Amazon Bedrock `Converse`/`ConverseStream`.
+- Engineering docelowo używa provider-neutralnego portu i oficjalnych klientów
+  `codex` oraz `claude`, zalogowanych subskrypcją właściciela (`ADR-0016`).
+- Provider jest wybierany osobno dla ról przez code-owned config; nie jest
+  hardcodowany ani wybierany przez model.
+- Bedrock i OpenCode nie należą do aktywnej ścieżki Engineering. Brak
+  subscription auth fail-closuje bez API-key albo provider fallbacku.
 - Historia rozmowy i stan taska są składane przez aplikację; pamięć modelu nie
   jest źródłem prawdy.
 - Każdy model call zapisuje intent przed wywołaniem i completion po walidacji.
@@ -483,7 +491,7 @@ wykonaniem.
 Wymagane:
 
 - trace od external event do Discord message, runu, tool call i receipt;
-- metryki backlogu, lease expiry, retry, DLQ, kosztu/tokens Bedrock i rate limitów;
+- metryki backlogu, lease expiry, retry, DLQ, usage providerów i rate limitów;
 - redakcja sekretów oraz danych wrażliwych przed logowaniem;
 - szyfrowanie transportu i storage;
 - retencja osobna dla raw payload, normalized events, audit i artefaktów;
@@ -493,7 +501,7 @@ Wymagane:
 
 ## 12. Strategia dostarczenia
 
-Najpierw powstaje golden path Jira -> Discord -> Bedrock -> workspace -> GitLab
+Najpierw powstaje golden path Jira -> Discord -> model runtime -> workspace -> GitLab
 MR. Gmail i Calendar są dodawane dopiero po udowodnieniu trwałości coding loop.
 
 Każdy task z `docs/tasks/TASK_INDEX.md` przechodzi osobną bramkę audytową Sol.
@@ -521,7 +529,7 @@ Podczas implementacji wolno adaptować koncepcje, ale nie kopiować bez audytu:
 
 - `../Wizard` — Discord, event envelope, policy, approval, audit;
 - `../EngineeringLoop` — pending intent, completion envelope, recovery i role;
-- `../board/src/lib/orchestrator/llm.ts` — klient Bedrock i tool loop;
+- `../board/src/lib/orchestrator/llm.ts` — historyczny klient Bedrock i tool loop;
 - `../Agent` oraz `../Test` — wyłącznie pomocnicze wzorce DAG/concurrency.
 
 Każdy import kodu wymaga sprawdzenia licencji, zależności, sekretów i dopasowania

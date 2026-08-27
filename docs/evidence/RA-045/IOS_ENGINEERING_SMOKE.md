@@ -34,7 +34,6 @@ Komenda wywołania, z obowiązkowo zredagowanymi sekretami i lokalnymi ścieżka
 RA_RUN_LIVE_IOS_ENGINEERING=1 \
 RA_LIVE_ENGINEERING_OBJECTIVE='<MOBL-2021 description>' \
 RA_ENGINEERING_CONFIG_PATH='<server-owned config>' \
-RA_XCODE_DESTINATION='<server-owned simulator destination>' \
 RA_XCODEBUILD_PATH='<canonical xcodebuild>' \
 DEVELOPER_DIR='<selected Xcode Developer directory>' \
 RA_REQUIRE_POSTGRES=1 \
