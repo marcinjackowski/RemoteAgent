@@ -76,8 +76,8 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 47 | [RA-045](RA-045.md) Kwalifikacja iOS/Xcode na sondermind-ios | DONE | RA-047 | M9 |
 | 48 | [RA-048](RA-048.md) Bounded progressive Engineering execution | DONE | RA-045 | M9 |
 | 49 | [RA-049](RA-049.md) Provider-neutral subscription model runtime | DONE | RA-048 | M10 |
-| 50 | [RA-050](RA-050.md) Codex CLI subscription adapter | READY | RA-049 | M10 |
-| 51 | [RA-051](RA-051.md) Claude Code subscription adapter | BLOCKED_BY_DEPENDENCIES | RA-050 | M10 |
+| 50 | [RA-050](RA-050.md) Codex CLI subscription adapter | DONE | RA-049 | M10 |
+| 51 | [RA-051](RA-051.md) Claude Code subscription adapter | READY | RA-050 | M10 |
 | 52 | [RA-052](RA-052.md) Configurable Engineering role routing and recovery | BLOCKED_BY_DEPENDENCIES | RA-051 | M10 |
 | 53 | [RA-053](RA-053.md) Subscription-provider qualification and Bedrock retirement | BLOCKED_BY_DEPENDENCIES | RA-052 | M10 |
 
