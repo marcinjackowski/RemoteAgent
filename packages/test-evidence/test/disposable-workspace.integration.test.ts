@@ -77,6 +77,7 @@ describe("disposable verification workspace", () => {
       ),
     ).rejects.toMatchObject({
       code: DisposableWorkspaceErrorCode.PROTECTED_TREE_CHANGED,
+      protectedChanges: [{ path: "artifacts/sibling", change: "ADDED" }],
     });
     await expect(access(disposableRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });

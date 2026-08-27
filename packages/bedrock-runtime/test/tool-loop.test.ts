@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FakeTransport,
+  ToolInputError,
   ToolLimitError,
   TransportError,
   createRuntimeConfig,
@@ -111,6 +112,45 @@ describe("runToolLoop", () => {
     expect(transport.requests[1]?.messages).toHaveLength(3);
     expect(transport.requests[1]?.messages[1]?.role).toBe("assistant");
     expect(transport.requests[1]?.messages[2]?.role).toBe("tool");
+    expect(transport.requests[1]?.messages[2]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "u1",
+        output: {
+          ok: true,
+          value: { value: 1 },
+          progress: { tool_iterations_remaining: 1, tool_calls_remaining: 2 },
+        },
+      },
+    ]);
+  });
+
+  it("shows the same bounded remaining budget after a safe tool failure", async () => {
+    const transport = new FakeTransport([
+      { model: config(2, 3).model, content: [use("bad")] },
+      { model: config(2, 3).model, content: [{ type: "text", text: "done" }] },
+    ]);
+    await runToolLoop(transport, config(2, 3), {
+      messages: [user],
+      tools: [tool],
+      execute: async () => {
+        throw new ToolInputError([{ path: ["relative_path"], code: "invalid_format" }]);
+      },
+    });
+    expect(transport.requests[1]?.messages[2]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "bad",
+        output: {
+          ok: false,
+          error: {
+            code: "TOOL_INPUT_INVALID",
+            issues: [{ path: ["relative_path"], code: "invalid_format" }],
+          },
+          progress: { tool_iterations_remaining: 1, tool_calls_remaining: 2 },
+        },
+      },
+    ]);
   });
 
   it("preflights an over-limit batch before any executor side effect", async () => {
@@ -208,7 +248,7 @@ describe("runToolLoop", () => {
     expect(count).toBe(1);
   });
 
-  it("returns a deterministic failed tool result without retrying", async () => {
+  it("returns bounded machine-readable tool errors without leaking exception text", async () => {
     const transport = new FakeTransport([
       { model: config(2, 2).model, content: [use("failed")] },
       { model: config(2, 2).model, content: [{ type: "text", text: "ack" }] },
@@ -217,12 +257,62 @@ describe("runToolLoop", () => {
       messages: [user],
       tools: [tool],
       execute: async () => {
-        throw new Error("secret");
+        throw new ToolInputError([{ path: ["files", "0", "content"], code: "invalid_type" }]);
       },
     });
     expect(result.content).toEqual([{ type: "text", text: "ack" }]);
     expect(transport.requests[1]?.messages[2]?.content).toEqual([
-      { type: "tool-result", id: "failed", output: { ok: false, error: "Tool execution failed" } },
+      {
+        type: "tool-result",
+        id: "failed",
+        output: {
+          ok: false,
+          error: {
+            code: "TOOL_INPUT_INVALID",
+            issues: [{ path: ["files", "0", "content"], code: "invalid_type" }],
+          },
+          progress: { tool_iterations_remaining: 1, tool_calls_remaining: 1 },
+        },
+      },
     ]);
+  });
+
+  it("stops a third identical invalid input as bounded no-progress", async () => {
+    let executions = 0;
+    const transport = new FakeTransport([
+      { model: config(4, 4).model, content: [use("bad-1")] },
+      { model: config(4, 4).model, content: [use("bad-2")] },
+      { model: config(4, 4).model, content: [use("bad-3")] },
+    ]);
+    await expect(
+      runToolLoop(transport, config(4, 4), {
+        messages: [user],
+        tools: [tool],
+        execute: async () => {
+          executions += 1;
+          throw new ToolInputError([{ path: ["relative_path"], code: "invalid_format" }]);
+        },
+      }),
+    ).rejects.toThrow("Repeated invalid tool input made no progress");
+    expect(executions).toBe(3);
+    expect(transport.requests).toHaveLength(3);
+  });
+
+  it("does not expose arbitrary executor exception messages", async () => {
+    const transport = new FakeTransport([
+      { model: config(2, 2).model, content: [use("failed")] },
+      { model: config(2, 2).model, content: [{ type: "text", text: "ack" }] },
+    ]);
+    await runToolLoop(transport, config(2, 2), {
+      messages: [user],
+      tools: [tool],
+      execute: async () => {
+        throw new Error("/Users/private/path secret-token");
+      },
+    });
+    const serialized = JSON.stringify(transport.requests[1]);
+    expect(serialized).toContain("TOOL_EXECUTION_FAILED");
+    expect(serialized).not.toContain("/Users/private/path");
+    expect(serialized).not.toContain("secret-token");
   });
 });

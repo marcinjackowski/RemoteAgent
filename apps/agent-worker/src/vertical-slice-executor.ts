@@ -72,6 +72,11 @@ import {
   type WorkspaceIdentity,
 } from "@remoteagent/workspace-runner";
 
+import {
+  recordEngineeringDebugGateBoundaryError,
+  recordEngineeringDebugToolResult,
+} from "./engineering-debug-journal.js";
+
 import type { WorkspaceConfig } from "./workspace-config.js";
 
 export type VerticalSliceWriterFence = DurableWorkspaceFence<Queryable>;
@@ -720,7 +725,10 @@ export async function executeVerticalSlice(
       sliceId: slice.slice_id,
       attempt: input.attempt,
     }),
-    onResult: (result) => operationResults.push(result),
+    onResult: (result) => {
+      operationResults.push(result);
+      recordEngineeringDebugToolResult(result);
+    },
   });
   const implementerReport = await input.implement(tools, {
     caseId: input.caseId,
@@ -748,7 +756,12 @@ export async function executeVerticalSlice(
     claimedChangedFiles: report.changed_files,
     assertCurrent,
   });
-
+  // A first attempt with no cumulative patch made no progress. A correction may legitimately
+  // produce no new leaf delta while the rejected patch is still present; the fresh review
+  // boundary compares that cumulative raw patch and terminalizes exact no-change safely.
+  if (actual.changedFiles.length === 0 && actual.cumulativeAgentPaths.length === 0) {
+    throw new Error("NO_PROGRESS: slice implementation produced no actual file change");
+  }
   return Object.freeze({
     caseId: input.caseId,
     workspaceId,
@@ -1100,6 +1113,7 @@ export async function executeVerticalSliceGates(
         deadline_at: input.deadlineAt,
         store: input.store,
         ...(input.platformAdapter === undefined ? {} : { platform_adapter: input.platformAdapter }),
+        boundary_error_observer: recordEngineeringDebugGateBoundaryError,
         ...(input.recoveryObserveCompletion === undefined
           ? {}
           : { recovery_observe_completion: input.recoveryObserveCompletion }),

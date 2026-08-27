@@ -641,7 +641,9 @@ describeIntegration(
       await expect(production.handler(lease, async () => undefined)).rejects.toThrow(
         /did not complete its work/,
       );
-      expect(transport.implementationAttempts).toBe(1);
+      // The production planning schema binds the exact server-required gate set, so an invalid
+      // SliceContract is rejected before an implementation tool or workspace mutation can run.
+      expect(transport.implementationAttempts).toBe(0);
       expect(transport.reviewAttempts).toBe(0);
       await assertNoAcceptedWrite(fixture);
     });

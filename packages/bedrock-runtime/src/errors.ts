@@ -1,5 +1,10 @@
 export type RuntimeErrorCode =
-  "CONFIGURATION_INVALID" | "TIMEOUT" | "CANCELLED" | "LIMIT_EXCEEDED" | "TRANSPORT_ERROR";
+  | "CONFIGURATION_INVALID"
+  | "TIMEOUT"
+  | "CANCELLED"
+  | "LIMIT_EXCEEDED"
+  | "TOOL_INPUT_INVALID"
+  | "TRANSPORT_ERROR";
 
 export type TransportFailureKind = "THROTTLING" | "TRANSIENT" | "FATAL";
 
@@ -48,6 +53,35 @@ export class ToolLimitError extends RuntimeError {
   constructor(message: string) {
     super("LIMIT_EXCEEDED", message);
     this.name = "ToolLimitError";
+  }
+}
+
+export type ToolInputIssue = Readonly<{
+  readonly path: readonly string[];
+  readonly code: string;
+}>;
+
+/**
+ * Safe, provider-neutral validation feedback for a model-proposed tool input.
+ *
+ * Values and the original exception message are deliberately absent. Only bounded schema
+ * coordinates cross back into model context, so a parser error cannot echo source bytes,
+ * credentials, or host paths.
+ */
+export class ToolInputError extends RuntimeError {
+  readonly issues: readonly ToolInputIssue[];
+
+  constructor(issues: readonly ToolInputIssue[]) {
+    super("TOOL_INPUT_INVALID", "Tool input does not match the server-owned schema");
+    this.name = "ToolInputError";
+    this.issues = Object.freeze(
+      issues.slice(0, 8).map((issue) =>
+        Object.freeze({
+          path: Object.freeze(issue.path.slice(0, 8).map((part) => part.slice(0, 64))),
+          code: /^[A-Za-z0-9._-]{1,64}$/u.test(issue.code) ? issue.code : "invalid",
+        }),
+      ),
+    );
   }
 }
 

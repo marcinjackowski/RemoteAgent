@@ -3430,7 +3430,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "items": {
           "maxLength": 1024,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9._/-]+$",
+          "pattern": "^[A-Za-z0-9._+/-]+$",
           "type": "string",
         },
         "maxItems": 256,
@@ -3567,7 +3567,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "items": {
           "maxLength": 1024,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9._/-]+$",
+          "pattern": "^[A-Za-z0-9._+/-]+$",
           "type": "string",
         },
         "maxItems": 512,
@@ -3577,7 +3577,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "items": {
           "maxLength": 1024,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9._/-]+$",
+          "pattern": "^[A-Za-z0-9._+/-]+$",
           "type": "string",
         },
         "maxItems": 512,
@@ -4071,7 +4071,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "items": {
           "maxLength": 1024,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9._/-]+$",
+          "pattern": "^[A-Za-z0-9._+/-]+$",
           "type": "string",
         },
         "maxItems": 256,
@@ -4116,7 +4116,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "items": {
           "maxLength": 1024,
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9._/-]+$",
+          "pattern": "^[A-Za-z0-9._+/-]+$",
           "type": "string",
         },
         "maxItems": 256,
@@ -4230,7 +4230,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
             "items": {
               "maxLength": 1024,
               "minLength": 1,
-              "pattern": "^[A-Za-z0-9._/-]+$",
+              "pattern": "^[A-Za-z0-9._+/-]+$",
               "type": "string",
             },
             "maxItems": 256,

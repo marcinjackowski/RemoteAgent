@@ -1,4 +1,6 @@
-import { ToolLimitError, TransportError } from "./errors.js";
+import { canonicalDigest } from "@remoteagent/contracts";
+
+import { ToolInputError, ToolLimitError, TransportError } from "./errors.js";
 import { executeTransportDetailed, type TransportExecutionDependencies } from "./retry.js";
 import type {
   RuntimeConfig,
@@ -42,6 +44,30 @@ function toolUses(content: readonly RuntimeContent[]) {
   );
 }
 
+function safeToolFailure(error: unknown): Readonly<Record<string, RuntimeJsonValue>> {
+  if (error instanceof ToolInputError) {
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        issues: error.issues.map((issue) => ({ path: [...issue.path], code: issue.code })),
+      },
+    };
+  }
+  return { ok: false, error: { code: "TOOL_EXECUTION_FAILED" } };
+}
+
+function remainingBudget(
+  config: RuntimeConfig,
+  iterationsAfterBatch: number,
+  callsAfterBatch: number,
+): RuntimeJsonValue {
+  return {
+    tool_iterations_remaining: Math.max(0, config.toolLimits.maxIterations - iterationsAfterBatch),
+    tool_calls_remaining: Math.max(0, config.toolLimits.maxCalls - callsAfterBatch),
+  };
+}
+
 /** Execute model-proposed tools exactly once, with limits checked before execution. */
 export async function runToolLoop(
   transport: RuntimeTransport,
@@ -54,6 +80,8 @@ export async function runToolLoop(
   let calls = 0;
   let transportAttempts = 0;
   const modelCompletions: RuntimeCompletionMetadata[] = [];
+  let repeatedInvalidFingerprint: string | undefined;
+  let repeatedInvalidCount = 0;
   let response: RuntimeResponse;
   const enabledTools =
     config.toolLimits.maxIterations === 0 || config.toolLimits.maxCalls === 0
@@ -114,18 +142,41 @@ export async function runToolLoop(
 
     messages = [...messages, { role: "assistant", content: [...response.content] }];
     const results: RuntimeContent[] = [];
+    const progress = remainingBudget(config, iterations + 1, calls + uses.length);
     for (const use of uses) {
       executed.add(use.id);
       try {
         const output = await request.execute(use.name, use.input, request.signal);
-        results.push({ type: "tool-result", id: use.id, output: { ok: true, value: output } });
-      } catch {
+        results.push({
+          type: "tool-result",
+          id: use.id,
+          output: { ok: true, value: output, progress },
+        });
+        repeatedInvalidFingerprint = undefined;
+        repeatedInvalidCount = 0;
+      } catch (error) {
         // Errors are data, so a failed tool never causes a side-effecting retry.
         results.push({
           type: "tool-result",
           id: use.id,
-          output: { ok: false, error: "Tool execution failed" },
+          output: { ...safeToolFailure(error), progress },
         });
+        if (error instanceof ToolInputError && uses.length === 1) {
+          const fingerprint = canonicalDigest({
+            tool: use.name,
+            input: use.input,
+            issues: error.issues,
+          });
+          repeatedInvalidCount =
+            fingerprint === repeatedInvalidFingerprint ? repeatedInvalidCount + 1 : 1;
+          repeatedInvalidFingerprint = fingerprint;
+          if (repeatedInvalidCount >= 3) {
+            throw new ToolLimitError("Repeated invalid tool input made no progress");
+          }
+        } else {
+          repeatedInvalidFingerprint = undefined;
+          repeatedInvalidCount = 0;
+        }
       }
     }
     messages = [...messages, { role: "tool", content: results }];

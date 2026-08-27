@@ -710,6 +710,12 @@ export class GitLifecycle {
   }
 
   async #safeFilterConfig(paths: readonly string[]): Promise<readonly GitConfigOverride[]> {
+    // An empty declared surface is a valid observation: there are no paths whose
+    // attributes can select a repository-controlled filter. Avoid issuing an
+    // invalid `git check-attr ... --` invocation and keep the no-change path
+    // read-only. Mutating entry points retain their independent empty-surface
+    // refusal/short-circuit.
+    if (paths.length === 0) return Object.freeze([]);
     const attributes = await git(["check-attr", "-z", "filter", "--", ...paths], this.#worktree);
     if (attributes.truncated) {
       throw new GitLifecycleError(GIT_COMMAND_FAILED, "filter attributes exceeded their bound");

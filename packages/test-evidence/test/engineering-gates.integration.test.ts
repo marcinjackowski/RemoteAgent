@@ -411,6 +411,19 @@ describeIntegration("durable engineering gate executor", () => {
     expect((await db.query("SELECT 1 FROM job_completions")).rowCount).toBe(0);
   });
 
+  it("keeps portable gates on the hermetic runner when a platform adapter is available", async () => {
+    const platformRun = vi.fn<VerificationGatePlatformAdapter["run"]>();
+
+    const result = await executeVerificationGate(
+      executorInput({ platform_adapter: { run: platformRun } }),
+    );
+
+    expect(result.status).toBe("RECORDED");
+    if (result.status !== "RECORDED") throw new Error("expected a portable receipt");
+    expect(result.receipt.outcome).toBe(VerificationGateOutcome.PASSED);
+    expect(platformRun).not.toHaveBeenCalled();
+  });
+
   it("refuses to create or dispatch a missing command during receipt-only recovery", async () => {
     const platformRun = vi.fn<VerificationGatePlatformAdapter["run"]>();
 
@@ -601,11 +614,13 @@ describeIntegration("durable engineering gate executor", () => {
         };
       },
     };
+    const boundaryErrors = vi.fn();
     const foreignRun = await executeVerificationGate(
       executorInput({
         catalog: nonportable,
         stage_attempt: 4,
         platform_adapter: foreignAdapter,
+        boundary_error_observer: boundaryErrors,
       }),
     );
     expect(foreignRun.status).toBe("RECORDED");
@@ -613,6 +628,14 @@ describeIntegration("durable engineering gate executor", () => {
       expect(foreignRun.receipt.outcome).toBe(VerificationGateOutcome.INFRASTRUCTURE);
       expect(foreignRun.receipt.log_artifact).toBeNull();
     }
+    expect(boundaryErrors).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        gate_id: "unit-gate",
+        target: "CURRENT",
+        phase: "RECEIPT_VALIDATION",
+        error: expect.any(Error),
+      }),
+    );
 
     const invalidDigestRun = await executeVerificationGate(
       executorInput({
@@ -624,12 +647,14 @@ describeIntegration("durable engineering gate executor", () => {
             receipt_digest: `sha256:${"f".repeat(64)}`,
           }),
         },
+        boundary_error_observer: boundaryErrors,
       }),
     );
     expect(invalidDigestRun.status).toBe("RECORDED");
     if (invalidDigestRun.status === "RECORDED") {
       expect(invalidDigestRun.receipt.outcome).toBe(VerificationGateOutcome.INFRASTRUCTURE);
     }
+    expect(boundaryErrors).toHaveBeenCalledTimes(2);
   });
 
   it("durably maps a disposable write-boundary violation to INFRASTRUCTURE", async () => {

@@ -92,6 +92,80 @@ describe("sealed read-only discovery tools", () => {
     await expect(port.read({ relative_path: ".environment.ts" })).resolves.toBeDefined();
   });
 
+  it("finds canonical existing paths by filename without guessing their contents", async () => {
+    const root = await fixture();
+    await writeFile(join(root, "src", "Strings+Generated.swift"), "unrepresentable but safe\n");
+    await mkdir(join(root, "src", "Feature"), { recursive: true });
+    await writeFile(join(root, "src", "Feature", "PrivacyPolicyView.swift"), "struct View {}\n");
+    for (let index = 0; index < 600; index += 1) {
+      await writeFile(join(root, `decoy-${String(index).padStart(3, "0")}.txt`), "decoy\n");
+    }
+    const port = await createPlannerReadPort(root);
+
+    const result = await port.search({ query: "privacypolicy" });
+
+    expect(result.matches).toContainEqual(
+      expect.objectContaining({
+        provenance: expect.objectContaining({
+          relative_path: "src/Feature/PrivacyPolicyView.swift",
+        }),
+        line: 1,
+        content: { trust: "UNTRUSTED_DATA", value: "[filename match]" },
+      }),
+    );
+    await expect(port.tree({})).rejects.toMatchObject({ code: "OVERSIZE" });
+  });
+
+  it("searches a known large file without returning or scanning its complete contents", async () => {
+    const root = await fixture();
+    const large = `${"distant-padding\n".repeat(9_993)}${"nearby-padding\n".repeat(
+      7,
+    )}unique.localization.key = value\nfollowing-line\n`;
+    await writeFile(join(root, "src", "Localizable.strings"), large);
+    for (let index = 0; index < 513; index += 1) {
+      await writeFile(join(root, `outside-${String(index).padStart(3, "0")}.txt`), "decoy\n");
+    }
+    const port = await createPlannerReadPort(root);
+
+    const result = await port.search({
+      query: "unique.localization.key",
+      relative_path: "src/Localizable.strings",
+    });
+
+    expect(result.matches).toEqual([
+      expect.objectContaining({
+        provenance: expect.objectContaining({ relative_path: "src/Localizable.strings" }),
+        line: 10_001,
+        content: {
+          trust: "UNTRUSTED_DATA",
+          value: expect.stringContaining(
+            "nearby-padding\nunique.localization.key = value\nfollowing-line",
+          ),
+        },
+      }),
+    ]);
+    expect(result.matches[0]?.content.value).not.toContain("distant-padding");
+  });
+
+  it("finds text beyond the tree-listing entry budget without reading files twice", async () => {
+    const root = await fixture();
+    for (let index = 0; index < 600; index += 1) {
+      await writeFile(join(root, `middle-${String(index).padStart(3, "0")}.txt`), "small decoy\n");
+    }
+    await writeFile(join(root, "z-target.swift"), "let uniqueNeedle = true\n");
+    const port = await createPlannerReadPort(root);
+
+    const result = await port.search({ query: "uniqueNeedle" });
+
+    expect(result.matches).toEqual([
+      expect.objectContaining({
+        provenance: expect.objectContaining({ relative_path: "z-target.swift" }),
+        line: 1,
+      }),
+    ]);
+    await expect(port.tree({})).rejects.toMatchObject({ code: "OVERSIZE" });
+  });
+
   it("rejects git, secret, binary, oversize and non-canonical paths before content", async () => {
     const root = await fixture();
     const port = await createPlannerReadPort(root);
@@ -130,10 +204,10 @@ describe("sealed read-only discovery tools", () => {
     await writeFile(root + "/second.txt", Buffer.alloc(600_000, 66));
     const port = await createPlannerReadPort(root);
     await expect(port.tree({})).resolves.toBeDefined();
-    for (let index = 0; index < 14; index += 1)
+    for (let index = 0; index < 17; index += 1)
       await writeFile(
         root + `/search-${index}.txt`,
-        Buffer.concat([Buffer.from("needle\n"), Buffer.alloc(999_990, 65)]),
+        Buffer.concat([Buffer.from("no match\n"), Buffer.alloc(999_990, 65)]),
       );
     const searchPort = await createPlannerReadPort(root);
     await expect(searchPort.search({ query: "needle" })).rejects.toMatchObject({

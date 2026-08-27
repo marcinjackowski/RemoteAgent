@@ -56,7 +56,12 @@ import {
   runProcess,
   validateWorkspaceRoot,
 } from "@remoteagent/workspace-runner";
-import type { NetworkMode, VerifiedWorkspacePath } from "@remoteagent/workspace-runner";
+import type {
+  NetworkMode,
+  ProcessRunInput,
+  ProcessRunResult,
+  VerifiedWorkspacePath,
+} from "@remoteagent/workspace-runner";
 import { TrustLevel, canonicalDigest } from "@remoteagent/contracts";
 
 import {
@@ -178,6 +183,14 @@ export type TestRunnerOptions = Readonly<{
   store: ArtifactStore;
   network?: NetworkMode;
   knownSecrets?: readonly string[];
+  /**
+   * Platform adapters may inject one server-owned process boundary when the portable macOS
+   * sandbox cannot host the toolchain (for example Xcode). Receipt construction, redaction,
+   * output bounds and tree binding remain owned by this runner.
+   */
+  processRunner?: (input: ProcessRunInput) => Promise<ProcessRunResult>;
+  /** Exact environment observed by the injected runner; values are fingerprinted, never stored. */
+  environment?: Readonly<Record<string, string>>;
   /** Injected for tests; defaults to `Date.now`. */
   now?: () => number;
 }>;
@@ -209,6 +222,8 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
   const { scope, manifest, store } = options;
   const now = options.now ?? (() => Date.now());
   const knownSecrets = options.knownSecrets ?? [];
+  const processRunner = options.processRunner ?? runProcess;
+  const environment = Object.freeze({ ...(options.environment ?? { LANG: "C", TZ: "UTC" }) });
 
   const entries = new Map<string, TestCommandEntry>(
     manifest.entries.map((entry) => [entry.name, entry]),
@@ -230,7 +245,7 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
       throw new TestRunnerError(PRE_STATE_UNREADABLE, "workspace pre-state is unreadable");
     }
 
-    const env: Readonly<Record<string, string>> = Object.freeze({ LANG: "C", TZ: "UTC" });
+    const env: Readonly<Record<string, string>> = environment;
     const started = now();
     let observation: Observation;
 
@@ -245,7 +260,7 @@ export async function createTestRunner(options: TestRunnerOptions): Promise<Test
       };
     } else {
       try {
-        const result = await runProcess({
+        const result = await processRunner({
           executable: entry.executable,
           args: entry.argv,
           workspaceRoot: root,

@@ -8,7 +8,7 @@ import {
   plannerSearchResult,
   plannerTreeResult,
 } from "../src/planner-port.js";
-import { repositoryProfile } from "../src/repository-profile.js";
+import { relativeRepositoryPath, repositoryProfile } from "../src/repository-profile.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const profile = {
@@ -91,6 +91,15 @@ describe("repository planning contracts", () => {
   it("accepts valid profile and plan", () => {
     expect(repositoryProfile.parse(profile)).toEqual(profile);
     expect(implementationPlan.parse(plan)).toEqual(plan);
+  });
+
+  it("accepts canonical generated-source paths containing plus without widening traversal", () => {
+    expect(relativeRepositoryPath.parse("Sources/Resources/Strings+Generated.swift")).toBe(
+      "Sources/Resources/Strings+Generated.swift",
+    );
+    expect(relativeRepositoryPath.safeParse("Sources/../Strings+Generated.swift").success).toBe(
+      false,
+    );
   });
 
   it("rejects unknown fields, future versions, invalid paths, SHA and digest", () => {

@@ -58,6 +58,7 @@ import {
   ToolOutcome,
   WRITE_PARENT_NOT_A_DIRECTORY,
   WRITE_PRE_STATE_MISMATCH,
+  WRITE_REPLACEMENT_MISMATCH,
   WRITE_TARGET_NOT_A_FILE,
   createImplementationWriteTools,
   implementationToolResult,
@@ -330,6 +331,44 @@ describeIntegration(
         const record = await ledger.find(db, "op-success", identity);
         expect(record?.status).toBe(OperationStatus.SUCCEEDED);
         expect(record?.requiresReconciliation).toBe(false);
+      });
+
+      it("applies exact replacements to a file larger than the model output bound", async () => {
+        const path = "src/Localizable.strings";
+        const original = `${"padding.line = value\n".repeat(4_000)}target.key = old value\n`;
+        expect(Buffer.byteLength(original)).toBeGreaterThan(MAX_WRITE_FILE_BYTES);
+        await writeFile(join(root, path), original);
+        const write = await tools();
+
+        const result = await write.patch({
+          operation_id: "op-exact-replacement",
+          replacement_files: [
+            {
+              relative_path: path,
+              replacements: [
+                { old_content: "target.key = old value", new_content: "target.key = new value" },
+              ],
+            },
+          ],
+        });
+
+        expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await onDisk(path)).toBe(original.replace("old value", "new value"));
+
+        const refused = await write.patch({
+          operation_id: "op-replacement-mismatch",
+          replacement_files: [
+            {
+              relative_path: path,
+              replacements: [{ old_content: "missing exact text", new_content: "must not land" }],
+            },
+          ],
+        });
+        expect(refused.outcome).toBe(ToolOutcome.FAILED);
+        if (refused.outcome !== ToolOutcome.FAILED) throw new Error("expected FAILED");
+        expect(refused.failure_code).toBe(WRITE_REPLACEMENT_MISMATCH);
+        expect(await ledger.find(db, "op-replacement-mismatch", identity)).toBeNull();
+        expect(await onDisk(path)).toBe(original.replace("old value", "new value"));
       });
     });
 

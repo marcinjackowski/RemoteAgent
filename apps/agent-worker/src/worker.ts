@@ -50,15 +50,17 @@ import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.j
 import { WorkerPersistence } from "./persistence.js";
 import { createRoles, roleConfigFromEnv } from "./roles.js";
 import { createEngineeringRoleContextReader } from "./context.js";
+import { createBedrockPreCommitReviewSessionFactory } from "./engineering-workflow.js";
 import {
-  createBedrockEngineeringStageExecutor,
-  createBedrockPreCommitReviewSessionFactory,
-} from "./engineering-workflow.js";
-import {
+  createConfiguredEngineeringStageExecutor,
   createProductionEngineeringRuntimePort,
   engineeringExecutionConfigFromEnv,
 } from "./engineering-execution.js";
 import { createProductionEngineeringRecoveryCoordinator } from "./engineering-recovery.js";
+import {
+  createEngineeringDebugTransport,
+  createEngineeringInvocationJournalRunner,
+} from "./engineering-debug-journal.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -315,10 +317,13 @@ export async function main(): Promise<void> {
   const awsRegion = process.env.AWS_REGION?.trim();
   const persistence = new WorkerPersistence(db, runtime);
   const jobs = new JobStore(runtime);
-  const transport = new AwsBedrockTransport({
+  const rawTransport = new AwsBedrockTransport({
     ...(bearerToken !== undefined && bearerToken !== "" ? { bearerToken } : {}),
     ...(awsRegion !== undefined && awsRegion !== "" ? { region: awsRegion } : {}),
   });
+  // Async-local routing means the shared process transport writes usage/tool shape only while an
+  // actual Engineering handler owns an invocation journal. Ordinary reply/Jira roles stay silent.
+  const transport = createEngineeringDebugTransport(rawTransport);
   const modelConfig = roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId });
   const readContext = createEngineeringRoleContextReader({
     db,
@@ -328,11 +333,15 @@ export async function main(): Promise<void> {
       await persistence.ensureBaselineCheckpoint(caseId);
     },
   });
-  const engineeringExecutor = createBedrockEngineeringStageExecutor({
-    transport,
-    config: modelConfig,
-  });
   const engineeringExecutionConfig = await engineeringExecutionConfigFromEnv();
+  const engineeringExecutor =
+    engineeringExecutionConfig === null
+      ? undefined
+      : createConfiguredEngineeringStageExecutor({
+          transport,
+          modelConfig,
+          executionConfig: engineeringExecutionConfig,
+        });
   const preCommitReview = createBedrockPreCommitReviewSessionFactory({
     transport,
     config: modelConfig,
@@ -350,11 +359,25 @@ export async function main(): Promise<void> {
       logger,
       db,
       jobs,
+      ...(engineeringExecutionConfig === null
+        ? {}
+        : {
+            engineeringInvocation: createEngineeringInvocationJournalRunner({
+              artifactRoot: engineeringExecutionConfig.artifactRoot,
+              db,
+              model: modelConfig.model.model_id,
+              configDigest: engineeringExecutionConfig.configDigest,
+              logger,
+            }),
+          }),
       engineering: (lease) => {
         if (engineeringExecutionConfig === null) {
           throw new Error(
             "engineering execution is not configured: RA_ENGINEERING_CONFIG_PATH is required",
           );
+        }
+        if (engineeringExecutor === undefined) {
+          throw new Error("engineering planning executor is unavailable");
         }
         return createProductionEngineeringRuntimePort({
           db,
@@ -390,7 +413,7 @@ export async function main(): Promise<void> {
     extra,
   );
   const continuation =
-    engineeringExecutionConfig === null
+    engineeringExecutionConfig === null || engineeringExecutor === undefined
       ? undefined
       : createProductionEngineeringRecoveryCoordinator({
           db,

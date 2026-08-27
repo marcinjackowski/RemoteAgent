@@ -121,24 +121,27 @@ describe("AwsBedrockTransport", () => {
     expect(new TransportError("x", "FATAL")).toMatchObject({ kind: "FATAL", retryable: false });
   });
 
-  it("rejects unsupported content before sending", async () => {
-    let sent = false;
+  it("serializes provider-neutral JSON history for a structured repair turn", async () => {
+    let input: Record<string, unknown> | undefined;
     const transport = new AwsBedrockTransport({
       client: {
-        send: async () => {
-          sent = true;
-          return {};
+        send: async (command) => {
+          input = command.input;
+          return {
+            output: { message: { role: "assistant", content: [{ text: "ok" }] } },
+            $metadata: {},
+          };
         },
       },
     });
 
-    await expect(
-      transport.converse(
-        { messages: [{ role: "user", content: [{ type: "json", value: { ok: true } }] }] },
-        config,
-      ),
-    ).rejects.toThrow("Unsupported Bedrock content");
-    expect(sent).toBe(false);
+    await transport.converse(
+      { messages: [{ role: "assistant", content: [{ type: "json", value: { ok: true } }] }] },
+      config,
+    );
+    expect(input).toMatchObject({
+      messages: [{ role: "assistant", content: [{ text: '{"ok":true}' }] }],
+    });
   });
 
   it("maps tool definitions, tool use responses, and tool results", async () => {
@@ -316,6 +319,35 @@ describe("AwsBedrockTransport", () => {
               role: "assistant",
               // The model returns the completion wrapped under `output`; the transport unwraps it.
               content: [
+                {
+                  toolUse: { toolUseId: "t1", name: "answer", input: { output: { answer: "hi" } } },
+                },
+              ],
+            },
+          },
+          $metadata: {},
+        }),
+      },
+    });
+    const res = await transport.converse(
+      {
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+        outputSchema: { name: "answer", schema: { type: "object" } },
+      },
+      config,
+    );
+    expect(res.content).toEqual([{ type: "json", value: { answer: "hi" } }]);
+  });
+
+  it("keeps one forced output tool authoritative over companion model prose", async () => {
+    const transport = new AwsBedrockTransport({
+      client: {
+        send: async () => ({
+          output: {
+            message: {
+              role: "assistant",
+              content: [
+                { text: "Here is the requested result." },
                 {
                   toolUse: { toolUseId: "t1", name: "answer", input: { output: { answer: "hi" } } },
                 },

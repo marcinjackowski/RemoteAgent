@@ -82,6 +82,7 @@ export const engineeringContextSourcePolicy: Readonly<
   ),
   [EngineeringStage.SLICE_PLANNING]: sourceTypes(
     ...baseSources,
+    "CASE_MESSAGE",
     "ISSUE_CONTEXT",
     "OUTCOME_CONTRACT",
     "SYSTEM_DESIGN",
@@ -94,6 +95,7 @@ export const engineeringContextSourcePolicy: Readonly<
   ),
   [EngineeringStage.SLICE_IMPLEMENTATION]: sourceTypes(
     ...baseSources,
+    "CASE_MESSAGE",
     "ISSUE_CONTEXT",
     "PROGRAM_DESIGN",
     "DESIGN_DECISION",

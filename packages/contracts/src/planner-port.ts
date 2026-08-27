@@ -44,7 +44,10 @@ const plannerUntrustedContent = valueObject({
 });
 
 export const plannerReadRequest = valueObject({ relative_path: relativeRepositoryPath });
-export const plannerSearchRequest = valueObject({ query: z.string().trim().min(1).max(4096) });
+export const plannerSearchRequest = valueObject({
+  query: z.string().trim().min(1).max(4096),
+  relative_path: relativeRepositoryPath.optional(),
+});
 export const plannerTreeRequest = valueObject({ relative_path: relativeRepositoryPath.optional() });
 export const plannerSymbolsRequest = valueObject({ relative_path: relativeRepositoryPath });
 export const plannerConfigRequest = valueObject({ relative_path: relativeRepositoryPath });

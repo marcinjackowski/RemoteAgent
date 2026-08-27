@@ -23,10 +23,16 @@ export const DisposableWorkspaceErrorCode = {
 export type DisposableWorkspaceErrorCode =
   (typeof DisposableWorkspaceErrorCode)[keyof typeof DisposableWorkspaceErrorCode];
 
+export type DisposableWorkspaceProtectedChange = Readonly<{
+  path: string;
+  change: "ADDED" | "REMOVED" | "MODIFIED";
+}>;
+
 export class DisposableWorkspaceError extends Error {
   public constructor(
     public readonly code: DisposableWorkspaceErrorCode,
     message: string,
+    public readonly protectedChanges: readonly DisposableWorkspaceProtectedChange[] = [],
   ) {
     super(message);
     this.name = "DisposableWorkspaceError";
@@ -210,6 +216,32 @@ async function protectedTreeDigest(
   return `sha256:${hash.digest("hex")}`;
 }
 
+function protectedInventoryChanges(
+  before: readonly InventoryEntry[],
+  after: readonly InventoryEntry[],
+): DisposableWorkspaceProtectedChange[] {
+  const beforeByPath = new Map(before.map((entry) => [entry.path, entry]));
+  const afterByPath = new Map(after.map((entry) => [entry.path, entry]));
+  const changes: DisposableWorkspaceProtectedChange[] = [];
+  for (const path of [...new Set([...beforeByPath.keys(), ...afterByPath.keys()])].sort((a, b) =>
+    Buffer.from(a).compare(Buffer.from(b)),
+  )) {
+    const oldEntry = beforeByPath.get(path);
+    const newEntry = afterByPath.get(path);
+    if (oldEntry === undefined) changes.push({ path, change: "ADDED" });
+    else if (newEntry === undefined) changes.push({ path, change: "REMOVED" });
+    else if (
+      oldEntry.kind !== newEntry.kind ||
+      oldEntry.mode !== newEntry.mode ||
+      oldEntry.content !== newEntry.content
+    ) {
+      changes.push({ path, change: "MODIFIED" });
+    }
+    if (changes.length === 128) break;
+  }
+  return changes;
+}
+
 async function validateMutableOutputs(
   root: string,
   paths: readonly string[],
@@ -367,6 +399,10 @@ export async function runInDisposableWorkspace<T>(
       options.mutableOutputs,
     );
     await assertMutableBoundary(verifiedDisposableRoot, mutableRoots);
+    const protectedInventoryBefore = await collectProtectedInventory(
+      verifiedDisposableRoot,
+      mutableRoots,
+    );
     const protectedTreeDigestBefore = await protectedTreeDigest(
       verifiedDisposableRoot,
       mutableRoots,
@@ -387,6 +423,10 @@ export async function runInDisposableWorkspace<T>(
     await assertMutableBoundary(verifiedDisposableRoot, mutableRoots);
     const authoritativeTreeDigestAfter = await computeTreeDigest(authoritativeRoot);
     const disposableTreeDigestAfter = await computeTreeDigest(verifiedDisposableRoot);
+    const protectedInventoryAfter = await collectProtectedInventory(
+      verifiedDisposableRoot,
+      mutableRoots,
+    );
     const protectedTreeDigestAfter = await protectedTreeDigest(
       verifiedDisposableRoot,
       mutableRoots,
@@ -401,6 +441,7 @@ export async function runInDisposableWorkspace<T>(
       throw new DisposableWorkspaceError(
         DisposableWorkspaceErrorCode.PROTECTED_TREE_CHANGED,
         "Disposable tree changed outside canonical mutable outputs",
+        protectedInventoryChanges(protectedInventoryBefore, protectedInventoryAfter),
       );
     }
     if (operationFailed) throw operationError;

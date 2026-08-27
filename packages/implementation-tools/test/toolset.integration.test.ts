@@ -42,11 +42,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createTestDatabase } from "../../database/test/harness.js";
 import { describeIntegration, ensurePostgres } from "../../database/test/integration-base.js";
 import {
+  BOUNDED_DISCOVERY_BUDGET_EXHAUSTED,
   OperationLedgerRepository,
   OperationStatus,
   TOOLSET_PATH_PROTECTED,
   ToolKind,
   ToolOutcome,
+  createBoundedImplementationToolset,
   createImplementationToolset,
   implementationToolResult,
   isProtectedPath,
@@ -427,6 +429,20 @@ describeIntegration(
         expect(write.outcome).toBe(ToolOutcome.SUCCEEDED);
         expect(await readFile(join(root, "src", "new.ts"), "utf8")).toBe("export const b = 2;\n");
 
+        const replacement = await set.patch({
+          operation_id: "a-replacement",
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [
+                { old_content: "export const a = 1;", new_content: "export const a = 3;" },
+              ],
+            },
+          ],
+        });
+        expect(replacement.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 3;\n");
+
         const made = await set.mkdir({ operation_id: "a-mkdir", relative_path: "build" });
         expect(made.outcome).toBe(ToolOutcome.SUCCEEDED);
       });
@@ -605,6 +621,48 @@ describeIntegration(
         expect([...set.commands]).toEqual(["echo"]);
         const unknown = await set.command({ operation_id: "u-cmd", command: "rm-rf" });
         expect(unknown.outcome).toBe(ToolOutcome.FAILED);
+      });
+    });
+
+    describe("criterion: implementation-attempt discovery is bounded", () => {
+      it("requires mutation after 10 discovery calls and does not reset the budget after a patch", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `bounded-${tool}-${String(sequence)}`,
+        });
+
+        for (let index = 0; index < 10; index += 1) {
+          const result = await bounded.search({ query: `absent-${String(index)}` });
+          expect(result.outcome, `discovery call ${String(index + 1)}`).toBe(ToolOutcome.SUCCEEDED);
+        }
+
+        const exhausted = await bounded.read({ relative_path: "src/app.ts" });
+        expect(failureOf(exhausted)).toBe(BOUNDED_DISCOVERY_BUDGET_EXHAUSTED);
+        expect(body(exhausted)).toMatchObject({
+          failure_code: BOUNDED_DISCOVERY_BUDGET_EXHAUSTED,
+          next_action: "Use write or patch with the evidence already gathered.",
+        });
+
+        const mutation = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [
+                { old_content: "export const a = 1;", new_content: "export const a = 2;" },
+              ],
+            },
+          ],
+        });
+        expect(mutation.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 2;\n");
+
+        const stillExhausted = await bounded.read({ relative_path: "src/app.ts" });
+        expect(failureOf(stillExhausted)).toBe(BOUNDED_DISCOVERY_BUDGET_EXHAUSTED);
       });
     });
   },

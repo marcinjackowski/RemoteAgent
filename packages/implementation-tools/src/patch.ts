@@ -104,6 +104,9 @@ export const WRITE_TARGET_NOT_A_FILE = "TARGET_NOT_A_FILE";
 /** The target's parent directory does not exist; this tool never creates one. */
 export const WRITE_PARENT_NOT_A_DIRECTORY = "PARENT_NOT_A_DIRECTORY";
 
+/** An exact text replacement did not occur exactly once; nothing was written. */
+export const WRITE_REPLACEMENT_MISMATCH = "REPLACEMENT_MISMATCH";
+
 /** Last-resort code for a fault with no stable classification. */
 export const WRITE_TOOL_FAILED = "WRITE_TOOL_FAILED";
 
@@ -132,6 +135,33 @@ const requestedFile = z.strictObject({
   content: text,
 });
 
+const requestedReplacementFile = z.strictObject({
+  relative_path: workspaceRelativePath,
+  replacements: z
+    .array(
+      z.strictObject({
+        old_content: z.string().min(1),
+        new_content: z.string(),
+      }),
+    )
+    .min(1)
+    .max(128),
+});
+
+function uniquePaths(
+  values: readonly Readonly<{ relative_path: string }>[],
+  field: "files" | "replacement_files",
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value.relative_path)) {
+      ctx.addIssue({ code: "custom", message: "paths must be unique", path: [field] });
+    }
+    seen.add(value.relative_path);
+  }
+}
+
 /**
  * A multi-file write request.
  *
@@ -140,7 +170,7 @@ const requestedFile = z.strictObject({
  * the surviving content depend on iteration order — an ordering the caller cannot
  * observe and reconciliation could not reproduce.
  */
-export const implementationPatchRequest = z
+const completePatchRequest = z
   .strictObject({
     operation_id: idString,
     files: z.array(requestedFile).min(1).max(MAX_CHANGED_FILES),
@@ -148,13 +178,7 @@ export const implementationPatchRequest = z
     expected_before_digest: sha256Digest.nullish(),
   })
   .superRefine((request, ctx) => {
-    const seen = new Set<string>();
-    for (const file of request.files) {
-      if (seen.has(file.relative_path)) {
-        ctx.addIssue({ code: "custom", message: "paths must be unique", path: ["files"] });
-      }
-      seen.add(file.relative_path);
-    }
+    uniquePaths(request.files, "files", ctx);
     let total = 0;
     for (const file of request.files) {
       const bytes = byteLength(file.content);
@@ -175,6 +199,48 @@ export const implementationPatchRequest = z
       });
     }
   });
+
+const replacementPatchRequest = z
+  .strictObject({
+    operation_id: idString,
+    replacement_files: z.array(requestedReplacementFile).min(1).max(MAX_CHANGED_FILES),
+    expected_before_digest: sha256Digest.nullish(),
+  })
+  .superRefine((request, ctx) => {
+    uniquePaths(request.replacement_files, "replacement_files", ctx);
+    let total = 0;
+    for (const [fileIndex, file] of request.replacement_files.entries()) {
+      const seen = new Set<string>();
+      for (const [replacementIndex, replacement] of file.replacements.entries()) {
+        if (seen.has(replacement.old_content)) {
+          ctx.addIssue({
+            code: "custom",
+            message: "old_content values must be unique per file",
+            path: ["replacement_files", fileIndex, "replacements", replacementIndex],
+          });
+        }
+        seen.add(replacement.old_content);
+        const bytes = byteLength(replacement.old_content) + byteLength(replacement.new_content);
+        total += bytes;
+        if (bytes > MAX_WRITE_FILE_BYTES) {
+          ctx.addIssue({
+            code: "custom",
+            message: `one replacement must not exceed ${String(MAX_WRITE_FILE_BYTES)} bytes`,
+            path: ["replacement_files", fileIndex, "replacements", replacementIndex],
+          });
+        }
+      }
+    }
+    if (total > MAX_WRITE_TOTAL_BYTES) {
+      ctx.addIssue({
+        code: "custom",
+        message: `total replacement text must not exceed ${String(MAX_WRITE_TOTAL_BYTES)} bytes`,
+        path: ["replacement_files"],
+      });
+    }
+  });
+
+export const implementationPatchRequest = z.union([completePatchRequest, replacementPatchRequest]);
 
 export type ImplementationPatchRequest = z.infer<typeof implementationPatchRequest>;
 
@@ -228,11 +294,20 @@ export type ImplementationWriteInput = Readonly<{
   expected_before_digest?: string | null;
 }>;
 
-export type ImplementationPatchInput = Readonly<{
-  operation_id: string;
-  files: readonly Readonly<{ relative_path: string; content: string }>[];
-  expected_before_digest?: string | null;
-}>;
+export type ImplementationPatchInput =
+  | Readonly<{
+      operation_id: string;
+      files: readonly Readonly<{ relative_path: string; content: string }>[];
+      expected_before_digest?: string | null;
+    }>
+  | Readonly<{
+      operation_id: string;
+      replacement_files: readonly Readonly<{
+        relative_path: string;
+        replacements: readonly Readonly<{ old_content: string; new_content: string }>[];
+      }>[];
+      expected_before_digest?: string | null;
+    }>;
 
 export type ImplementationWriteTools = Readonly<{
   write(input: ImplementationWriteInput): Promise<ImplementationToolResult>;
@@ -298,7 +373,47 @@ async function preflight(
   if (pinned !== undefined && pinned !== null && pinned !== beforeDigest) {
     throw new ImplementationWriteError(WRITE_PRE_STATE_MISMATCH);
   }
-  const ordered = [...request.files].sort((left, right) =>
+  const requested =
+    "files" in request
+      ? request.files
+      : await Promise.all(
+          request.replacement_files.map(async (file) => {
+            const target = await policy.validateCreateTarget(file.relative_path);
+            const existing = await lstat(target).catch(() => null);
+            if (existing === null || !existing.isFile()) {
+              throw new ImplementationWriteError(WRITE_TARGET_NOT_A_FILE);
+            }
+            const handle = await open(target, constants.O_RDONLY | NOFOLLOW).catch(() => {
+              throw new ImplementationWriteError(WRITE_TOOL_FAILED);
+            });
+            let content: string;
+            try {
+              const stat = await handle.stat();
+              if (!stat.isFile() || stat.size > MAX_WRITE_TOTAL_BYTES) {
+                throw new ImplementationWriteError(WRITE_TARGET_NOT_A_FILE);
+              }
+              const bytes = await handle.readFile();
+              content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            } catch (error) {
+              if (error instanceof ImplementationWriteError) throw error;
+              throw new ImplementationWriteError(WRITE_TOOL_FAILED);
+            } finally {
+              await handle.close();
+            }
+            for (const replacement of file.replacements) {
+              const occurrences = content.split(replacement.old_content).length - 1;
+              if (occurrences !== 1) {
+                throw new ImplementationWriteError(WRITE_REPLACEMENT_MISMATCH);
+              }
+              content = content.replace(replacement.old_content, replacement.new_content);
+            }
+            if (byteLength(content) > MAX_WRITE_TOTAL_BYTES) {
+              throw new ImplementationWriteError(INVALID_WRITE_REQUEST);
+            }
+            return { relative_path: file.relative_path, content };
+          }),
+        );
+  const ordered = [...requested].sort((left, right) =>
     left.relative_path < right.relative_path
       ? -1
       : left.relative_path > right.relative_path
@@ -686,13 +801,27 @@ export async function createImplementationWriteTools(
         expected_before_digest: input.expected_before_digest ?? null,
       }),
     patch: (input) =>
-      apply("patch", ToolKind.APPLY_PATCH, input.operation_id, {
-        operation_id: input.operation_id,
-        files: input.files.map((file) => ({
-          relative_path: file.relative_path,
-          content: file.content,
-        })),
-        expected_before_digest: input.expected_before_digest ?? null,
-      }),
+      apply(
+        "patch",
+        ToolKind.APPLY_PATCH,
+        input.operation_id,
+        "files" in input
+          ? {
+              operation_id: input.operation_id,
+              files: input.files.map((file) => ({
+                relative_path: file.relative_path,
+                content: file.content,
+              })),
+              expected_before_digest: input.expected_before_digest ?? null,
+            }
+          : {
+              operation_id: input.operation_id,
+              replacement_files: input.replacement_files.map((file) => ({
+                relative_path: file.relative_path,
+                replacements: file.replacements.map((replacement) => ({ ...replacement })),
+              })),
+              expected_before_digest: input.expected_before_digest ?? null,
+            },
+      ),
   });
 }

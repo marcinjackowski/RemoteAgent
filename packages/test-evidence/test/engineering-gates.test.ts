@@ -34,6 +34,12 @@ async function fixture() {
     environment_profile: "HERMETIC",
     network_profile: "DENY",
     mutable_outputs: ["coverage"],
+    implementation_guidance:
+      "Change the existing settings view and its focused tests; do not create disconnected constants.",
+    implementation_context: [
+      { kind: "READ", relative_path: "src/settings.ts" },
+      { kind: "SEARCH", relative_path: "src/strings.ts", query: "privacy-policy" },
+    ],
   });
   const catalog = await VerificationGateCatalog.create({
     definitions: [definition],
@@ -96,6 +102,15 @@ describe("VerificationGate contracts and catalog", () => {
     const { definition, receipt } = await fixture();
     expect(() => VerificationGateDefinition.parse({ ...definition, injected: true })).toThrow();
     expect(() =>
+      VerificationGateDefinition.parse({
+        ...definition,
+        implementation_context: [
+          { kind: "READ", relative_path: "src/settings.ts" },
+          { kind: "READ", relative_path: "src/settings.ts" },
+        ],
+      }),
+    ).toThrow(/unique/u);
+    expect(() =>
       VerificationGateReceipt.parse({ ...receipt("CURRENT", "PASSED"), verdict: "PASSED" }),
     ).toThrow();
     expect(() => VerificationGateAggregate.parse({ schema_version: 1 })).toThrow();
@@ -109,6 +124,8 @@ describe("VerificationGate contracts and catalog", () => {
       VerificationGateDefinition.parse({ ...definition, gate_class: "MODEL_INVENTED" }),
     ).toThrow();
     expect(definition.argv).toEqual(["--test", "literal;touch /tmp/not-a-shell"]);
+    expect(definition.implementation_guidance).toMatch(/settings view/u);
+    expect(definition.implementation_context).toHaveLength(2);
   });
 
   it("requires an exact scoped durable log and consistent process facts", async () => {

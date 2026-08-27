@@ -132,7 +132,10 @@ export type ImplementationReadTools = Readonly<{
     input: ImplementationReadToolsInput & { readonly relative_path: string },
   ): Promise<ImplementationToolResult>;
   search(
-    input: ImplementationReadToolsInput & { readonly query: string },
+    input: ImplementationReadToolsInput & {
+      readonly query: string;
+      readonly relative_path?: string;
+    },
   ): Promise<ImplementationToolResult>;
   tree(
     input: ImplementationReadToolsInput & { readonly relative_path?: string },
@@ -282,7 +285,14 @@ function refuse(
   error: unknown,
 ): ImplementationToolResult {
   const code = failureCode(error);
-  const value = canonicalJsonStringify({ tool, refused: true, failure_code: code });
+  const value = canonicalJsonStringify({
+    tool,
+    refused: true,
+    failure_code: code,
+    ...(code === "DISCOVERY_FAILED"
+      ? { next_action: "Use search with a filename fragment before another read." }
+      : {}),
+  });
   return implementationToolResult.parse({
     schema_version: 1,
     operation_id: operationId,
@@ -375,7 +385,10 @@ export async function createImplementationReadTools(
       }),
     search: (input) =>
       run("search", identity, input.operation_id, async () => {
-        const parsed = request(plannerSearchRequest, { query: input.query });
+        const parsed = request(plannerSearchRequest, {
+          query: input.query,
+          ...(input.relative_path === undefined ? {} : { relative_path: input.relative_path }),
+        });
         const result = await port.search(parsed);
         return presentList(
           "search",

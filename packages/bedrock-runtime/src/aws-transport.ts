@@ -103,6 +103,11 @@ function buildToolConfig(request: RuntimeRequest): BedrockToolConfig | undefined
 function textContent(content: readonly RuntimeContent[], messageIndex: number): Message["content"] {
   return content.map((item, contentIndex) => {
     if (item.type === "text") return { text: item.text };
+    // Structured-output responses are normalized to provider-neutral JSON blocks. The single
+    // validation-repair turn feeds that assistant history back to Bedrock, where JSON has no
+    // native message content member; serialize it deterministically as assistant text. This is
+    // history only — the next response is still forced through the server-owned output tool.
+    if (item.type === "json") return { text: JSON.stringify(item.value) };
     if (item.type === "tool-use") {
       const toolUse: ContentBlock.ToolUseMember = {
         toolUse: {
@@ -143,7 +148,7 @@ function responseContent(
   if (message === undefined) {
     throw new TransportError("Bedrock response did not contain a message");
   }
-  return (message.content ?? []).map((block, index) => {
+  const content = (message.content ?? []).map((block, index) => {
     if (block.text !== undefined) return { type: "text" as const, text: block.text };
     if (
       block.toolUse !== undefined &&
@@ -170,6 +175,17 @@ function responseContent(
     }
     throw new TransportError(`Unsupported Bedrock response content at item ${index}`);
   });
+  const outputBlocks = content.filter((item) => item.type === "json");
+  const workToolBlocks = content.filter((item) => item.type === "tool-use");
+  // Anthropic may emit a short text preamble next to the forced structured-output tool.
+  // The tool input is the only schema-bound authority. Once there is exactly one output
+  // block and no work-tool request, discard the non-authoritative prose so the contract
+  // parser sees one JSON object. Multiple output blocks or a mixed work/output batch stay
+  // intact and therefore fail closed in the tool loop / structured parser.
+  if (outputToolName !== undefined && outputBlocks.length === 1 && workToolBlocks.length === 0) {
+    return outputBlocks;
+  }
+  return content;
 }
 
 /**

@@ -152,7 +152,13 @@ describeIntegration(
 
     function handlersWith(
       transport: FakeTransport,
-      overrides: { readonly maxSteps?: number; readonly heartbeatIntervalMs?: number } = {},
+      overrides: {
+        readonly maxSteps?: number;
+        readonly heartbeatIntervalMs?: number;
+        readonly engineeringInvocation?: {
+          run<T>(lease: JobLease, work: () => Promise<T>): Promise<T>;
+        };
+      } = {},
     ) {
       return createWorkerHandlers({
         persistence,
@@ -457,6 +463,42 @@ describeIntegration(
       await handlersWith(transport)["agent.implementer"]!(claimed!, noop);
       const completion = await db.query<{ case_id: string }>("SELECT case_id FROM run_completions");
       expect(completion.rows[0]?.case_id).toBe("case-6");
+    });
+
+    it("wraps every implementer handler call in the injected invocation journal boundary", async () => {
+      await seed("case-journal", "unit-journal", "IMPLEMENTER");
+      await claimSeededWriter("unit-journal");
+      await jobs.enqueue(db, {
+        caseId: "case-journal",
+        jobType: "agent.implementer",
+        payload: {
+          caseId: "case-journal",
+          workUnitId: "unit-journal",
+          runId: "run-1",
+        },
+      });
+      const claimed = await jobs.claim(db, { owner: "worker-1" });
+      const transport = new FakeTransport([
+        {
+          model: config.model,
+          content: [{ type: "json", value: completionJson("case-journal", "run-1") }],
+        },
+      ]);
+      const order: string[] = [];
+      const handlers = handlersWith(transport, {
+        engineeringInvocation: {
+          async run(_lease, work) {
+            order.push("journal-start");
+            const result = await work();
+            order.push("journal-complete");
+            return result;
+          },
+        },
+      });
+
+      await handlers["agent.implementer"]!(claimed!, noop);
+      expect(order).toEqual(["journal-start", "journal-complete"]);
+      expect(transport.requests).toHaveLength(1);
     });
 
     it("rejects unclaimed, foreign-run, and other-case writer targets before the model", async () => {

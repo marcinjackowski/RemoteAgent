@@ -687,7 +687,11 @@ describe("runStructuredContract", () => {
           {
             type: "tool-result",
             id: "tool-1",
-            output: { ok: true, value: { found: true } },
+            output: {
+              ok: true,
+              value: { found: true },
+              progress: { tool_iterations_remaining: 1, tool_calls_remaining: 1 },
+            },
           },
         ],
       },

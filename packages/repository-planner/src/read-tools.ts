@@ -16,10 +16,11 @@ import type { VerifiedWorkspacePath } from "@remoteagent/workspace-runner";
 import {
   DISCOVERY_LIMITS,
   DiscoveryPolicyError,
-  readSafeFile,
-  verifyDiscoveryRoot,
+  findSafeFilenames,
   listSafeTree,
-  type ScanBudget,
+  readSafeFile,
+  searchSafeText,
+  verifyDiscoveryRoot,
   type DiscoveryReadSeam,
 } from "./discovery-policy.js";
 
@@ -31,6 +32,25 @@ const CONFIG_ALLOWLIST = new Set([
   "tsconfig.json",
   ".gitlab-ci.yml",
 ]);
+
+const SCOPED_SEARCH_CONTEXT_LINES = 6;
+const SCOPED_SEARCH_MAX_CONTEXT_CHARACTERS = 16_384;
+
+/**
+ * Return an exact, bounded source excerpt around a scoped match.
+ *
+ * A single matching line locates a symbol but is usually insufficient for an
+ * exact replacement patch. The excerpt deliberately has no generated line
+ * labels, so the model can reuse it verbatim as `old_content`. If an unusual
+ * long-line region exceeds the bound, falling back to the matching line keeps
+ * search bounded and honest.
+ */
+function scopedSearchExcerpt(lines: readonly string[], matchIndex: number): string {
+  const start = Math.max(0, matchIndex - SCOPED_SEARCH_CONTEXT_LINES);
+  const end = Math.min(lines.length, matchIndex + SCOPED_SEARCH_CONTEXT_LINES + 1);
+  const excerpt = lines.slice(start, end).join("\n");
+  return excerpt.length <= SCOPED_SEARCH_MAX_CONTEXT_CHARACTERS ? excerpt : lines[matchIndex]!;
+}
 
 function isAllowedWorkflow(path: string): boolean {
   return /^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/u.test(path);
@@ -100,27 +120,47 @@ async function createPort(
     },
     async search(input) {
       const request = plannerSearchRequest.parse(input);
-      const budget: ScanBudget = { scannedBytes: 0, entries: 0 };
-      const entries = await listSafeTree(verifiedRoot, undefined, seam, budget).catch(policyError);
-      const matches = [];
-      for (const entry of entries) {
-        if (entry.kind !== "file") continue;
-        const result = await readSafeFile(verifiedRoot, entry.relativePath, seam, budget).catch(
+      if (request.relative_path !== undefined) {
+        const result = await readSafeFile(verifiedRoot, request.relative_path, seam).catch(
           policyError,
         );
         const lines = result.content.split(/\r?\n/u);
+        const matches = [];
         for (const [index, line] of lines.entries()) {
           if (!line.includes(request.query)) continue;
           matches.push({
             provenance: { relative_path: result.relativePath, digest: result.digest },
             line: index + 1,
-            content: { trust: "UNTRUSTED_DATA" as const, value: line },
+            content: {
+              trust: "UNTRUSTED_DATA" as const,
+              value: scopedSearchExcerpt(lines, index),
+            },
           });
           if (matches.length >= DISCOVERY_LIMITS.maxResults)
             throw new DiscoveryPolicyError("OVERSIZE", "Search result limit exceeded");
         }
+        return plannerSearchResult.parse({ matches });
       }
-      return plannerSearchResult.parse({ matches });
+      const filenameMatches = await findSafeFilenames(verifiedRoot, request.query, seam).catch(
+        policyError,
+      );
+      if (filenameMatches.length > 0) {
+        return plannerSearchResult.parse({
+          matches: filenameMatches.map((match) => ({
+            provenance: { relative_path: match.relativePath, digest: match.digest },
+            line: 1,
+            content: { trust: "UNTRUSTED_DATA" as const, value: "[filename match]" },
+          })),
+        });
+      }
+      const matches = await searchSafeText(verifiedRoot, request.query, seam).catch(policyError);
+      return plannerSearchResult.parse({
+        matches: matches.map((match) => ({
+          provenance: { relative_path: match.relativePath, digest: match.digest },
+          line: match.line,
+          content: { trust: "UNTRUSTED_DATA" as const, value: match.content },
+        })),
+      });
     },
     async symbols(input) {
       const request = plannerSymbolsRequest.parse(input);

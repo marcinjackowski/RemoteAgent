@@ -42,7 +42,7 @@ async function fixture(): Promise<{ root: string; tools: ImplementationReadTools
   await writeFile(join(root, ".env"), "TOKEN=super-secret\n");
   await writeFile(join(root, "README.md"), "read me\n");
   await writeFile(join(root, "package.json"), '{"name":"fixture"}\n');
-  await writeFile(join(root, "src", "app.ts"), "const needle = 42;\n");
+  await writeFile(join(root, "src", "app.ts"), "const needle = 42;\nfunction run() {}\n");
   return { root, tools: await createImplementationReadTools({ root, identity }) };
 }
 
@@ -82,7 +82,7 @@ describe("four bounded read-only tools", () => {
     expect(payload(read)).toMatchObject({
       complete: true,
       relative_path: "src/app.ts",
-      content: "const needle = 42;\n",
+      content: "const needle = 42;\nfunction run() {}\n",
     });
 
     const search = await tools.search({ operation_id: "op-search", query: "needle" });
@@ -91,6 +91,14 @@ describe("four bounded read-only tools", () => {
     const matches = payload(search)["items"] as { relative_path: string; line: number }[];
     expect(matches).toMatchObject([{ relative_path: "src/app.ts", line: 1 }]);
     expect(payload(search)["dropped"]).toBe(0);
+
+    const scoped = await tools.search({
+      operation_id: "op-search-scoped",
+      query: "needle",
+      relative_path: "src/app.ts",
+    });
+    expect(payload(scoped)["items"]).toMatchObject([{ relative_path: "src/app.ts", line: 1 }]);
+    expect(JSON.stringify(payload(scoped)["items"])).toContain("function run() {}");
 
     const tree = await tools.tree({ operation_id: "op-tree" });
     expect(tree.outcome).toBe(ToolOutcome.SUCCEEDED);
@@ -111,6 +119,17 @@ describe("four bounded read-only tools", () => {
     expect(tools.manifest.can_write_workspace).toBe(false);
     expect(tools.manifest.can_execute_commands).toBe(false);
     expect(Object.isFrozen(tools)).toBe(true);
+  });
+
+  it("turns a missing guessed path into bounded search-first recovery guidance", async () => {
+    const { tools } = await fixture();
+
+    const result = await tools.read({ operation_id: "op-missing", relative_path: "src/Guess.ts" });
+
+    expectRefused(result, "DISCOVERY_FAILED");
+    expect(payload(result)).toMatchObject({
+      next_action: "Use search with a filename fragment before another read.",
+    });
   });
 
   it("maps config onto READ_FILE, since its payload is one file's bytes", async () => {
@@ -268,12 +287,10 @@ describe("bounds are enforced and truncation is never silent", () => {
 
   it("drops whole items and reports the count when a listing overflows", async () => {
     const root = await makeRoot();
-    // 100 files, each a ~1 KB match: comfortably inside the upstream 128-result
-    // and scan budgets, but well past the 64 KiB output bound.
+    // One file with 100 ~1 KB matching lines: comfortably inside the upstream
+    // 128-result and scan budgets, but well past the 64 KiB output bound.
     const line = "q".repeat(1_000);
-    for (let index = 0; index < 100; index += 1) {
-      await writeFile(join(root, `f${String(index)}.txt`), `${line}\n`);
-    }
+    await writeFile(join(root, "many.txt"), `${Array(100).fill(line).join("\n")}\n`);
     const tools = await createImplementationReadTools({ root, identity });
     const result = await tools.search({ operation_id: "op-many", query: "qqq" });
     expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
@@ -295,7 +312,10 @@ describe("bounds are enforced and truncation is never silent", () => {
       await writeFile(join(root, `huge-${String(index)}.txt`), Buffer.alloc(1_000_000, 65));
     }
     const tools = await createImplementationReadTools({ root, identity });
-    expectRefused(await tools.search({ operation_id: "op-budget", query: "A" }), "OVERSIZE");
+    expectRefused(
+      await tools.search({ operation_id: "op-budget", query: "not-present" }),
+      "OVERSIZE",
+    );
     expectRefused(await tools.tree({ operation_id: "op-budget-tree" }), "OVERSIZE");
   });
 

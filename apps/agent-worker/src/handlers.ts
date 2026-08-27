@@ -21,6 +21,7 @@ import { projectCompletionReply } from "./completion-reply.js";
 import { projectDeadLetterNotice } from "./dead-letter-notice.js";
 import { projectThinkingIndicator } from "./thinking-indicator.js";
 import type { WorkerPersistence } from "./persistence.js";
+import type { EngineeringInvocationJournalRunner } from "./engineering-debug-journal.js";
 
 /**
  * The `job_type` handlers (RA-028-WU-03..WU-05).
@@ -49,6 +50,8 @@ export interface HandlerDependencies {
   readonly jobs: JobStore;
   /** Exact leased stage adapter; only the writer handler may construct it. */
   readonly engineering?: (lease: JobLease) => EngineeringRuntimePort;
+  /** One content-free JSONL diagnostic file around each actual Engineering handler call. */
+  readonly engineeringInvocation?: EngineeringInvocationJournalRunner;
   /** Bounded per pump pass; a runaway role cannot hold a job lease indefinitely. */
   readonly maxSteps?: number;
   /** Test seam; production renews every ten seconds, well inside the thirty-second lease. */
@@ -345,7 +348,11 @@ export function createImplementerHandler(deps: HandlerDependencies) {
     if (lease.jobType !== WRITER_JOB_TYPE) {
       throw new Error(`implementer handler received job_type ${lease.jobType}`);
     }
-    await resume(lease, heartbeat);
+    if (deps.engineeringInvocation === undefined) {
+      await resume(lease, heartbeat);
+      return;
+    }
+    await deps.engineeringInvocation.run(lease, () => resume(lease, heartbeat));
   };
 }
 

@@ -369,6 +369,34 @@ describeIntegration(
       await expect(lstat(join(workspaceRoot, caseId))).rejects.toThrow();
     });
 
+    it("rejects a completed implementation report with no actual file change as no-progress", async () => {
+      const authority: Authority = {
+        owner: "writer-current",
+        token: 111,
+        enabled: true,
+        inImplementation: false,
+      };
+
+      await expect(
+        executeVerticalSlice({
+          db,
+          workspaceConfig: config(),
+          repositoryId: "repo",
+          baseSha,
+          caseId,
+          runId: "run-empty",
+          checkpointRevision: 0,
+          writer: writer(authority),
+          slice: { ...slice, run_id: "run-empty" },
+          attempt: 1,
+          implement: async () => ({ changed_files: [] }),
+        }),
+      ).rejects.toThrow("NO_PROGRESS: slice implementation produced no actual file change");
+      expect(await readFile(join(source, "src", "base.ts"), "utf8")).toBe(
+        "export const base = true;\n",
+      );
+    });
+
     it("rejects a SliceContract outside the exact runtime binding before materialization", async () => {
       const authority: Authority = {
         owner: "writer-current",

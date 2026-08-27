@@ -10,6 +10,7 @@ export const DISCOVERY_LIMITS = Object.freeze({
   maxFileBytes: 1_048_576,
   maxTotalScanBytes: 16_777_216,
   maxEntries: 512,
+  maxFilenameEntries: 8_192,
   maxDepth: 32,
   maxResults: 128,
 });
@@ -43,6 +44,12 @@ export type SafeTreeEntry = Readonly<{
   relativePath: RelativeRepositoryPath;
   kind: "file" | "directory" | "symlink";
   digest: string;
+}>;
+export type SafeSearchMatch = Readonly<{
+  relativePath: RelativeRepositoryPath;
+  digest: string;
+  line: number;
+  content: string;
 }>;
 export type ScanBudget = { scannedBytes: number; entries: number };
 
@@ -246,19 +253,21 @@ export async function listSafeTree(
       const relativePath = relative(root, target).split(sep).join("/");
       if (child.isDirectory() && SKIPPED_DIRECTORIES.has(child.name)) continue;
       if (isForbiddenPath(relativePath)) continue;
+      const parsedPath = relativeRepositoryPath.safeParse(relativePath);
+      if (!parsedPath.success) continue;
       const stat = await lstat(target).catch(() =>
         fail("DISCOVERY_FAILED", "Tree changed during scan"),
       );
       addEntry(budget);
       if (stat.isSymbolicLink()) {
         entries.push({
-          relativePath: relativeRepositoryPath.parse(relativePath),
+          relativePath: parsedPath.data,
           kind: "symlink",
           digest: hash(await readlink(target)),
         });
       } else if (stat.isDirectory()) {
         entries.push({
-          relativePath: relativeRepositoryPath.parse(relativePath),
+          relativePath: parsedPath.data,
           kind: "directory",
           digest: hash(relativePath),
         });
@@ -277,4 +286,138 @@ export async function listSafeTree(
   const startDirectory = await verifyDirectory(root, start);
   await visit(startDirectory.target, start ? start.split("/").length : 0, start ?? "");
   return entries;
+}
+
+/**
+ * Find canonical paths by filename without reading every file in a large repository.
+ *
+ * This is deliberately a separate, filename-only budget. A repository may contain filenames
+ * (for example SwiftGen's `Strings+Generated.swift`) that the narrower model-facing path contract
+ * cannot represent. Such entries and their subtrees are not exposed or followed, but they also do
+ * not make an unrelated canonical lookup fail. Symlinks are named but never traversed, and a
+ * matching regular file is re-verified and read once so its provenance digest remains content-based.
+ */
+export async function findSafeFilenames(
+  root: VerifiedWorkspacePath,
+  query: string,
+  beforeRead?: DiscoveryReadSeam,
+): Promise<readonly SafeTreeEntry[]> {
+  const normalizedQuery = query.toLocaleLowerCase("en-US");
+  const matches: SafeTreeEntry[] = [];
+  let entries = 0;
+
+  async function visit(relativeDirectory: string, depth: number): Promise<void> {
+    if (depth > DISCOVERY_LIMITS.maxDepth) fail("OVERSIZE", "Tree depth exceeds limit");
+    const first = await verifyDirectory(root, relativeDirectory || undefined);
+    await beforeRead?.(relativeDirectory);
+    const verified = await verifyDirectory(root, relativeDirectory || undefined);
+    const children = (await readdir(verified.target, { withFileTypes: true })).sort((a, b) =>
+      Buffer.from(a.name).compare(Buffer.from(b.name)),
+    );
+    await verifyDirectory(root, relativeDirectory || undefined);
+    for (const child of children) {
+      if (child.isDirectory() && SKIPPED_DIRECTORIES.has(child.name)) continue;
+      const target = join(first.target, child.name);
+      const candidate = relative(root, target).split(sep).join("/");
+      if (isForbiddenPath(candidate)) continue;
+      const parsed = relativeRepositoryPath.safeParse(candidate);
+      // An unrepresentable path can never be returned to or requested by the model. Skipping an
+      // unrepresentable directory also prevents accidentally exposing representable descendants
+      // through a path the model-facing boundary itself could not validate.
+      if (!parsed.success) continue;
+      entries += 1;
+      if (entries > DISCOVERY_LIMITS.maxFilenameEntries)
+        fail("OVERSIZE", "Filename lookup entry limit exceeded");
+      const stat = await lstat(target).catch(() =>
+        fail("DISCOVERY_FAILED", "Tree changed during filename lookup"),
+      );
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        await visit(parsed.data, depth + 1);
+        continue;
+      }
+      if (!stat.isFile() || !parsed.data.toLocaleLowerCase("en-US").includes(normalizedQuery))
+        continue;
+      const read = await readSafeFile(root, parsed.data, beforeRead).catch((error) => {
+        if (error instanceof DiscoveryPolicyError && error.code === "BINARY_FILE") return undefined;
+        throw error;
+      });
+      if (read === undefined) continue;
+      matches.push({ relativePath: read.relativePath, kind: "file", digest: read.digest });
+      if (matches.length >= DISCOVERY_LIMITS.maxResults)
+        fail("OVERSIZE", "Filename result limit exceeded");
+    }
+  }
+
+  await visit("", 0);
+  return entries === 0 ? Object.freeze([]) : Object.freeze(matches);
+}
+
+/**
+ * Return matches from the first safely readable file containing the query.
+ *
+ * Search is a bounded locator, not an exhaustive repository export. Stopping after the first
+ * matching file avoids repeatedly carrying the same broad result set into a model conversation,
+ * while deterministic byte/entry/depth limits still fail closed when no match is found in budget.
+ */
+export async function searchSafeText(
+  root: VerifiedWorkspacePath,
+  query: string,
+  beforeRead?: DiscoveryReadSeam,
+): Promise<readonly SafeSearchMatch[]> {
+  const budget: ScanBudget = { scannedBytes: 0, entries: 0 };
+  let visitedEntries = 0;
+
+  async function visit(relativeDirectory: string, depth: number): Promise<SafeSearchMatch[]> {
+    if (depth > DISCOVERY_LIMITS.maxDepth) fail("OVERSIZE", "Tree depth exceeds limit");
+    const first = await verifyDirectory(root, relativeDirectory || undefined);
+    await beforeRead?.(relativeDirectory);
+    const verified = await verifyDirectory(root, relativeDirectory || undefined);
+    const children = (await readdir(verified.target, { withFileTypes: true })).sort((a, b) =>
+      Buffer.from(a.name).compare(Buffer.from(b.name)),
+    );
+    await verifyDirectory(root, relativeDirectory || undefined);
+    for (const child of children) {
+      if (child.isDirectory() && SKIPPED_DIRECTORIES.has(child.name)) continue;
+      const target = join(first.target, child.name);
+      const candidate = relative(root, target).split(sep).join("/");
+      if (isForbiddenPath(candidate)) continue;
+      const parsed = relativeRepositoryPath.safeParse(candidate);
+      if (!parsed.success) continue;
+      visitedEntries += 1;
+      if (visitedEntries > DISCOVERY_LIMITS.maxFilenameEntries)
+        fail("OVERSIZE", "Text search entry limit exceeded");
+      const stat = await lstat(target).catch(() =>
+        fail("DISCOVERY_FAILED", "Tree changed during text search"),
+      );
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        const nested = await visit(parsed.data, depth + 1);
+        if (nested.length > 0) return nested;
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      const read = await readSafeFile(root, parsed.data, beforeRead, budget).catch((error) => {
+        if (error instanceof DiscoveryPolicyError && error.code === "BINARY_FILE") return undefined;
+        throw error;
+      });
+      if (read === undefined) continue;
+      const matches: SafeSearchMatch[] = [];
+      for (const [index, line] of read.content.split(/\r?\n/u).entries()) {
+        if (!line.includes(query)) continue;
+        matches.push({
+          relativePath: read.relativePath,
+          digest: read.digest,
+          line: index + 1,
+          content: line,
+        });
+        if (matches.length >= DISCOVERY_LIMITS.maxResults)
+          fail("OVERSIZE", "Search result limit exceeded");
+      }
+      if (matches.length > 0) return matches;
+    }
+    return [];
+  }
+
+  return Object.freeze(await visit("", 0));
 }

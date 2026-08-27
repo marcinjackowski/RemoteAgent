@@ -68,6 +68,11 @@ export const TOOLSET_PATH_PROTECTED = "PATH_PROTECTED";
 /** The requested mutation is outside the server-owned SliceContract roots. */
 export const TOOLSET_PATH_OUTSIDE_ALLOWED = "PATH_OUTSIDE_ALLOWED";
 
+/** Discovery is bounded per implementation attempt; the model must act on gathered evidence. */
+export const BOUNDED_DISCOVERY_BUDGET_EXHAUSTED = "DISCOVERY_BUDGET_EXHAUSTED";
+
+const MAX_DISCOVERY_CALLS_PER_ATTEMPT = 10;
+
 /**
  * Path segments that are protected wherever they appear in the tree.
  *
@@ -185,7 +190,7 @@ export type ImplementationToolset = Readonly<{
     input: Readonly<{ operation_id: string; relative_path: string }>,
   ): Promise<ImplementationToolResult>;
   search(
-    input: Readonly<{ operation_id: string; query: string }>,
+    input: Readonly<{ operation_id: string; query: string; relative_path?: string }>,
   ): Promise<ImplementationToolResult>;
   tree(
     input: Readonly<{ operation_id: string; relative_path?: string }>,
@@ -202,11 +207,20 @@ export type ImplementationToolset = Readonly<{
     }>,
   ): Promise<ImplementationToolResult>;
   patch(
-    input: Readonly<{
-      operation_id: string;
-      files: readonly Readonly<{ relative_path: string; content: string }>[];
-      expected_before_digest?: string | null;
-    }>,
+    input:
+      | Readonly<{
+          operation_id: string;
+          files: readonly Readonly<{ relative_path: string; content: string }>[];
+          expected_before_digest?: string | null;
+        }>
+      | Readonly<{
+          operation_id: string;
+          replacement_files: readonly Readonly<{
+            relative_path: string;
+            replacements: readonly Readonly<{ old_content: string; new_content: string }>[];
+          }>[];
+          expected_before_digest?: string | null;
+        }>,
   ): Promise<ImplementationToolResult>;
   mkdir(
     input: Readonly<{ operation_id: string; relative_path: string; recursive?: boolean }>,
@@ -408,7 +422,11 @@ export async function createImplementationToolset(
     // what `read` refuses by path. Verified by probe, not assumed.
     search: async (input) =>
       filterResultPaths(
-        await reads.search({ operation_id: input.operation_id, query: input.query }),
+        await reads.search({
+          operation_id: input.operation_id,
+          query: input.query,
+          ...(input.relative_path === undefined ? {} : { relative_path: input.relative_path }),
+        }),
       ),
 
     write: async (input) =>
@@ -420,18 +438,27 @@ export async function createImplementationToolset(
         expected_before_digest: input.expected_before_digest ?? null,
       }),
 
-    patch: async (input) =>
-      guardPath(
-        "patch",
-        ToolKind.APPLY_PATCH,
-        input.operation_id,
-        input.files.map((file) => file.relative_path),
-      ) ??
-      writes.patch({
-        operation_id: input.operation_id,
-        files: input.files,
-        expected_before_digest: input.expected_before_digest ?? null,
-      }),
+    patch: async (input) => {
+      const paths = ("files" in input ? input.files : input.replacement_files).map(
+        (file) => file.relative_path,
+      );
+      return (
+        guardPath("patch", ToolKind.APPLY_PATCH, input.operation_id, paths) ??
+        writes.patch(
+          "files" in input
+            ? {
+                operation_id: input.operation_id,
+                files: input.files,
+                expected_before_digest: input.expected_before_digest ?? null,
+              }
+            : {
+                operation_id: input.operation_id,
+                replacement_files: input.replacement_files,
+                expected_before_digest: input.expected_before_digest ?? null,
+              },
+        )
+      );
+    },
 
     mkdir: async (input) =>
       guardPath("mkdir", ToolKind.WRITE_FILE, input.operation_id, [input.relative_path]) ??
@@ -459,7 +486,9 @@ export async function createImplementationToolset(
 /** Model-visible implementation surface for one accepted vertical slice. */
 export type BoundedImplementationToolset = Readonly<{
   read(input: Readonly<{ relative_path: string }>): Promise<ImplementationToolResult>;
-  search(input: Readonly<{ query: string }>): Promise<ImplementationToolResult>;
+  search(
+    input: Readonly<{ query: string; relative_path?: string }>,
+  ): Promise<ImplementationToolResult>;
   tree(input: Readonly<{ relative_path?: string }>): Promise<ImplementationToolResult>;
   config(input: Readonly<{ relative_path: string }>): Promise<ImplementationToolResult>;
   write(
@@ -470,10 +499,18 @@ export type BoundedImplementationToolset = Readonly<{
     }>,
   ): Promise<ImplementationToolResult>;
   patch(
-    input: Readonly<{
-      files: readonly Readonly<{ relative_path: string; content: string }>[];
-      expected_before_digest?: string | null;
-    }>,
+    input:
+      | Readonly<{
+          files: readonly Readonly<{ relative_path: string; content: string }>[];
+          expected_before_digest?: string | null;
+        }>
+      | Readonly<{
+          replacement_files: readonly Readonly<{
+            relative_path: string;
+            replacements: readonly Readonly<{ old_content: string; new_content: string }>[];
+          }>[];
+          expected_before_digest?: string | null;
+        }>,
   ): Promise<ImplementationToolResult>;
   mkdir(
     input: Readonly<{ relative_path: string; recursive?: boolean }>,
@@ -496,19 +533,37 @@ export type BoundedImplementationToolsetOptions = Omit<
   }>;
 
 const boundedRead = z.strictObject({ relative_path: workspaceRelativePath });
-const boundedSearch = z.strictObject({ query: z.string().max(4096) });
+const boundedSearch = z.strictObject({
+  query: z.string().max(4096),
+  relative_path: workspaceRelativePath.optional(),
+});
 const boundedTree = z.strictObject({ relative_path: workspaceRelativePath.optional() });
 const boundedWrite = z.strictObject({
   relative_path: workspaceRelativePath,
   content: z.string(),
   expected_before_digest: z.string().nullable().optional(),
 });
-const boundedPatch = z.strictObject({
-  files: z
-    .array(z.strictObject({ relative_path: workspaceRelativePath, content: z.string() }))
-    .min(1),
-  expected_before_digest: z.string().nullable().optional(),
-});
+const boundedPatch = z.union([
+  z.strictObject({
+    files: z
+      .array(z.strictObject({ relative_path: workspaceRelativePath, content: z.string() }))
+      .min(1),
+    expected_before_digest: z.string().nullable().optional(),
+  }),
+  z.strictObject({
+    replacement_files: z
+      .array(
+        z.strictObject({
+          relative_path: workspaceRelativePath,
+          replacements: z
+            .array(z.strictObject({ old_content: z.string().min(1), new_content: z.string() }))
+            .min(1),
+        }),
+      )
+      .min(1),
+    expected_before_digest: z.string().nullable().optional(),
+  }),
+]);
 const boundedMkdir = z.strictObject({
   relative_path: workspaceRelativePath,
   recursive: z.boolean().optional(),
@@ -547,6 +602,7 @@ export async function createBoundedImplementationToolset(
   });
   let sequence = 0;
   let ambiguous = false;
+  let discoveryCalls = 0;
 
   const nextId = (tool: BoundedImplementationToolName): string => {
     if (ambiguous) throw new Error("AMBIGUOUS implementation operation requires reconciliation");
@@ -601,21 +657,73 @@ export async function createBoundedImplementationToolset(
       },
     });
   };
+  const refuseDiscoveryBudget = (
+    tool: BoundedImplementationToolName,
+    kind: ToolKind,
+    operationId: string,
+  ): ImplementationToolResult | null => {
+    if (discoveryCalls < MAX_DISCOVERY_CALLS_PER_ATTEMPT) {
+      discoveryCalls += 1;
+      return null;
+    }
+    const value = canonicalJsonStringify({
+      tool,
+      refused: true,
+      failure_code: BOUNDED_DISCOVERY_BUDGET_EXHAUSTED,
+      next_action: "Use write or patch with the evidence already gathered.",
+    });
+    return implementationToolResult.parse({
+      schema_version: 1,
+      operation_id: operationId,
+      identity: options.identity,
+      kind,
+      outcome: ToolOutcome.FAILED,
+      before_digest: null,
+      after_digest: null,
+      changed_files: [],
+      failure_code: BOUNDED_DISCOVERY_BUDGET_EXHAUSTED,
+      output: {
+        trust: TrustLevel.UNTRUSTED_DATA,
+        value,
+        truncated: false,
+        original_byte_length: encoder.encode(value).length,
+      },
+    });
+  };
 
   return Object.freeze({
     read: async (raw) => {
       const input = boundedRead.parse(raw);
       const operationId = nextId("read");
+      const denied = protectedResult("read", ToolKind.READ_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (denied !== null) return observe(denied);
+      const exhausted = refuseDiscoveryBudget("read", ToolKind.READ_FILE, operationId);
+      if (exhausted !== null) return observe(exhausted);
       return observe(
-        protectedResult("read", ToolKind.READ_FILE, operationId, [input.relative_path]) ??
-          (await reads.read({ operation_id: operationId, relative_path: input.relative_path })),
+        await reads.read({ operation_id: operationId, relative_path: input.relative_path }),
       );
     },
     search: async (raw) => {
       const input = boundedSearch.parse(raw);
+      const operationId = nextId("search");
+      const denied = protectedResult(
+        "search",
+        ToolKind.SEARCH_TEXT,
+        operationId,
+        input.relative_path === undefined ? [] : [input.relative_path],
+      );
+      if (denied !== null) return observe(denied);
+      const exhausted = refuseDiscoveryBudget("search", ToolKind.SEARCH_TEXT, operationId);
+      if (exhausted !== null) return observe(exhausted);
       return observe(
         filterResultPaths(
-          await reads.search({ operation_id: nextId("search"), query: input.query }),
+          await reads.search({
+            operation_id: operationId,
+            query: input.query,
+            ...(input.relative_path === undefined ? {} : { relative_path: input.relative_path }),
+          }),
         ),
       );
     },
@@ -629,6 +737,8 @@ export async function createBoundedImplementationToolset(
         input.relative_path === undefined ? [] : [input.relative_path],
       );
       if (denied !== null) return observe(denied);
+      const exhausted = refuseDiscoveryBudget("tree", ToolKind.LIST_FILES, operation_id);
+      if (exhausted !== null) return observe(exhausted);
       return observe(
         filterResultPaths(
           await reads.tree(
@@ -642,9 +752,14 @@ export async function createBoundedImplementationToolset(
     config: async (raw) => {
       const input = boundedRead.parse(raw);
       const operationId = nextId("config");
+      const denied = protectedResult("config", ToolKind.READ_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (denied !== null) return observe(denied);
+      const exhausted = refuseDiscoveryBudget("config", ToolKind.READ_FILE, operationId);
+      if (exhausted !== null) return observe(exhausted);
       return observe(
-        protectedResult("config", ToolKind.READ_FILE, operationId, [input.relative_path]) ??
-          (await reads.config({ operation_id: operationId, relative_path: input.relative_path })),
+        await reads.config({ operation_id: operationId, relative_path: input.relative_path }),
       );
     },
     write: async (raw) => {
@@ -677,25 +792,31 @@ export async function createBoundedImplementationToolset(
     patch: async (raw) => {
       const input = boundedPatch.parse(raw);
       const operationId = nextId("patch");
-      if (input.files.some((file) => !isAllowed(file.relative_path))) {
+      const paths = ("files" in input ? input.files : input.replacement_files).map(
+        (file) => file.relative_path,
+      );
+      if (paths.some((path) => !isAllowed(path))) {
         return observe(refuseOutside("patch", ToolKind.APPLY_PATCH, operationId));
       }
-      const denied = protectedResult(
-        "patch",
-        ToolKind.APPLY_PATCH,
-        operationId,
-        input.files.map((file) => file.relative_path),
-      );
+      const denied = protectedResult("patch", ToolKind.APPLY_PATCH, operationId, paths);
       if (denied !== null) return observe(denied);
       return observe(
         await writes.patch(
-          input.expected_before_digest === undefined
-            ? { operation_id: operationId, files: input.files }
-            : {
-                operation_id: operationId,
-                files: input.files,
-                expected_before_digest: input.expected_before_digest,
-              },
+          "files" in input
+            ? input.expected_before_digest === undefined
+              ? { operation_id: operationId, files: input.files }
+              : {
+                  operation_id: operationId,
+                  files: input.files,
+                  expected_before_digest: input.expected_before_digest,
+                }
+            : input.expected_before_digest === undefined
+              ? { operation_id: operationId, replacement_files: input.replacement_files }
+              : {
+                  operation_id: operationId,
+                  replacement_files: input.replacement_files,
+                  expected_before_digest: input.expected_before_digest,
+                },
         ),
       );
     },

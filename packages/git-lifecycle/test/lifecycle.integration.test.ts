@@ -768,6 +768,18 @@ describe("git lifecycle", () => {
   });
 
   describe("bounded output and export surface", () => {
+    it("observes an empty declared surface as an empty diff", async () => {
+      const report = await lifecycle([]).diff();
+
+      expect(report).toEqual({
+        patch: "",
+        truncated: false,
+        filesChanged: 0,
+        insertions: 0,
+        deletions: 0,
+      });
+    });
+
     it("reports a diff with stat counts", async () => {
       const git = lifecycle(["src/app.ts"]);
       await git.ensureBranch("work", baseSha);

@@ -15,7 +15,7 @@ export const relativeRepositoryPath = z
   .trim()
   .min(1)
   .max(1024)
-  .regex(/^[A-Za-z0-9._/-]+$/)
+  .regex(/^[A-Za-z0-9._+/-]+$/)
   .superRefine((value, ctx) => {
     const segments = value.split("/");
     if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {

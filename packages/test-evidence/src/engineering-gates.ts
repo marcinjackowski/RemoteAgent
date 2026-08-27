@@ -112,6 +112,15 @@ const absoluteExecutable = z
   .max(4096)
   .refine((value) => path.isAbsolute(value), "executable must be an absolute path");
 
+const implementationContextEntry = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("READ"), relative_path: relativeRepositoryPath }),
+  z.strictObject({
+    kind: z.literal("SEARCH"),
+    relative_path: relativeRepositoryPath,
+    query: z.string().min(1).max(512),
+  }),
+]);
+
 const verificationGateDefinitionSchema = versionedContract({
   gate_id: idString,
   gate_class: verificationGateClass,
@@ -125,6 +134,8 @@ const verificationGateDefinitionSchema = versionedContract({
   environment_profile: z.enum(["HERMETIC", "BUILD_TOOLCHAIN"]),
   network_profile: z.enum(["DENY", "LOOPBACK", "PLATFORM_MANAGED"]),
   mutable_outputs: z.array(relativeRepositoryPath).max(128),
+  implementation_guidance: z.string().min(1).max(4096).optional(),
+  implementation_context: z.array(implementationContextEntry).min(1).max(24).optional(),
 }).superRefine((definition, ctx) => {
   if (definition.test_first && (!definition.required || !definition.baseline)) {
     ctx.addIssue({
@@ -139,6 +150,20 @@ const verificationGateDefinitionSchema = versionedContract({
       path: ["mutable_outputs"],
       message: "mutable output paths must be unique",
     });
+  }
+  if (definition.implementation_context !== undefined) {
+    const identities = definition.implementation_context.map((entry) =>
+      entry.kind === "READ"
+        ? `READ:${entry.relative_path}`
+        : `SEARCH:${entry.relative_path}:${entry.query}`,
+    );
+    if (new Set(identities).size !== identities.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["implementation_context"],
+        message: "implementation context entries must be unique",
+      });
+    }
   }
 });
 
@@ -653,6 +678,13 @@ export interface VerificationGatePlatformAdapter {
   run(input: VerificationGatePlatformRunInput): Promise<TestRun>;
 }
 
+export type VerificationGateBoundaryError = Readonly<{
+  gate_id: string;
+  target: z.infer<typeof verificationGateTarget>;
+  phase: "GATE_RUN" | "RECEIPT_VALIDATION" | "DISPOSABLE_WORKSPACE" | "DISPOSABLE_EVIDENCE";
+  error: unknown;
+}>;
+
 export type VerificationGateDatabase = Queryable & TxDb;
 
 export type VerificationGateExecutionInput = Readonly<{
@@ -679,6 +711,7 @@ export type VerificationGateExecutionInput = Readonly<{
   /** Receipt-only mode: absence of a durable operation is AMBIGUOUS, never permission to execute. */
   recovery_only?: boolean;
   platform_adapter?: VerificationGatePlatformAdapter;
+  boundary_error_observer?: (input: VerificationGateBoundaryError) => void;
   now?: () => number;
 }>;
 
@@ -716,7 +749,7 @@ function verificationGateOperationStore(store: ArtifactStore, operationId: strin
   };
 }
 
-function testPhaseFor(definition: VerificationGateDefinition): TestPhase {
+export function verificationGateTestPhase(definition: VerificationGateDefinition): TestPhase {
   switch (definition.gate_class) {
     case VerificationGateClass.LINT:
       return TestPhase.LINT;
@@ -732,7 +765,7 @@ function testPhaseFor(definition: VerificationGateDefinition): TestPhase {
   }
 }
 
-function verificationGateManifestDigest(definition: VerificationGateDefinition): string {
+export function verificationGateManifestDigest(definition: VerificationGateDefinition): string {
   return canonicalDigest({ definition });
 }
 
@@ -746,7 +779,7 @@ export function VerificationGateValidateTestRun(
     run.scope.case_id !== expected.case_id ||
     run.scope.workspace_id !== expected.workspace_id ||
     run.command_name !== definition.gate_id ||
-    run.phase !== testPhaseFor(definition) ||
+    run.phase !== verificationGateTestPhase(definition) ||
     run.manifest_digest !== verificationGateManifestDigest(definition) ||
     run.tree_digest_before !== expected.tree_digest
   ) {
@@ -798,7 +831,7 @@ async function runPortableGate(
     entries: [
       {
         name: input.definition.gate_id,
-        phase: testPhaseFor(input.definition),
+        phase: verificationGateTestPhase(input.definition),
         executable: input.definition.executable,
         argv: input.definition.argv,
         relative_cwd: input.definition.relative_cwd,
@@ -1035,9 +1068,26 @@ export async function executeVerificationGate(
   const startedAt = now();
   let run: TestRun | null = null;
   let boundaryFailed = false;
+  let boundaryErrorObserved = false;
   let commitError: unknown;
   const portable =
     definition.environment_profile === "HERMETIC" && definition.network_profile === "DENY";
+  const observeBoundaryError = (
+    phase: VerificationGateBoundaryError["phase"],
+    error: unknown,
+  ): void => {
+    boundaryErrorObserved = true;
+    try {
+      input.boundary_error_observer?.({
+        gate_id: definition.gate_id,
+        target: input.target,
+        phase,
+        error,
+      });
+    } catch {
+      // Diagnostics can never widen or change the gate result.
+    }
+  };
 
   if (portable || input.platform_adapter !== undefined) {
     try {
@@ -1053,29 +1103,41 @@ export async function executeVerificationGate(
             commitError = error;
             throw error;
           }
-          const candidate = input.platform_adapter
-            ? await input.platform_adapter.run({
-                definition,
-                disposable_root: disposableRoot,
-                scope: { case_id: input.case_id, workspace_id: input.workspace_id },
-                store: operationStore,
-                ...(input.signal === undefined ? {} : { signal: input.signal }),
-              })
-            : await runPortableGate(
-                {
+          let candidate: TestRun;
+          try {
+            candidate = portable
+              ? await runPortableGate(
+                  {
+                    definition,
+                    disposable_root: disposableRoot,
+                    scope: { case_id: input.case_id, workspace_id: input.workspace_id },
+                    store: operationStore,
+                    ...(input.signal === undefined ? {} : { signal: input.signal }),
+                  },
+                  "DENY",
+                )
+              : await input.platform_adapter!.run({
                   definition,
                   disposable_root: disposableRoot,
                   scope: { case_id: input.case_id, workspace_id: input.workspace_id },
                   store: operationStore,
                   ...(input.signal === undefined ? {} : { signal: input.signal }),
-                },
-                "DENY",
-              );
-          const parsed = VerificationGateValidateTestRun(candidate, definition, {
-            case_id: input.case_id,
-            workspace_id: input.workspace_id,
-            tree_digest: treeDigest,
-          });
+                });
+          } catch (error) {
+            observeBoundaryError("GATE_RUN", error);
+            throw error;
+          }
+          let parsed: TestRun;
+          try {
+            parsed = VerificationGateValidateTestRun(candidate, definition, {
+              case_id: input.case_id,
+              workspace_id: input.workspace_id,
+              tree_digest: treeDigest,
+            });
+          } catch (error) {
+            observeBoundaryError("RECEIPT_VALIDATION", error);
+            throw error;
+          }
           run = parsed;
           return run;
         },
@@ -1087,9 +1149,14 @@ export async function executeVerificationGate(
         disposable.evidence.disposableTreeDigestBefore !== treeDigest
       ) {
         boundaryFailed = true;
+        observeBoundaryError(
+          "DISPOSABLE_EVIDENCE",
+          new VerificationGateContractError("disposable workspace evidence mismatch"),
+        );
       }
-    } catch {
+    } catch (error) {
       if (commitError !== undefined) throw commitError;
+      if (!boundaryErrorObserved) observeBoundaryError("DISPOSABLE_WORKSPACE", error);
       boundaryFailed = true;
     }
   }
@@ -1189,6 +1256,7 @@ export type VerificationGateBatchExecutionInput = Readonly<{
   signal?: AbortSignal;
   control_plane?: EngineeringControlPlaneRepository;
   platform_adapter?: VerificationGatePlatformAdapter;
+  boundary_error_observer?: VerificationGateExecutionInput["boundary_error_observer"];
   recovery_observe_completion?: VerificationGateExecutionInput["recovery_observe_completion"];
   recovery_only?: boolean;
   now?: () => number;
@@ -1323,6 +1391,9 @@ export async function executeVerificationGateBatch(
         ...(input.platform_adapter === undefined
           ? {}
           : { platform_adapter: input.platform_adapter }),
+        ...(input.boundary_error_observer === undefined
+          ? {}
+          : { boundary_error_observer: input.boundary_error_observer }),
         ...(input.recovery_observe_completion === undefined
           ? {}
           : { recovery_observe_completion: input.recovery_observe_completion }),

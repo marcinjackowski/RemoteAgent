@@ -363,6 +363,29 @@ describe("engineering context compiler", () => {
     );
   });
 
+  it.each([EngineeringStage.SLICE_PLANNING, EngineeringStage.SLICE_IMPLEMENTATION])(
+    "keeps the direct case request available as untrusted data during %s",
+    (stage) => {
+      const result = compileEngineeringContext({
+        stage,
+        authority,
+        budgetBytes: 10_000,
+        sources: [
+          ...required(),
+          source("CASE_MESSAGE", "direct-engineering-request", {
+            layer: "RAW_EVIDENCE",
+            origin: "external",
+            trust: TrustLevel.UNTRUSTED_DATA,
+          }),
+        ],
+      });
+      expect(result.context.fragments.at(-1)?.fragment).toMatchObject({
+        trust: TrustLevel.UNTRUSTED_DATA,
+        provenance: { reference: "direct-engineering-request" },
+      });
+    },
+  );
+
   it("defines one frozen, exhaustive source policy separate from routing data", () => {
     expect(Object.keys(engineeringContextSourcePolicy).sort()).toEqual(
       Object.keys(engineeringStageRegistry).sort(),
