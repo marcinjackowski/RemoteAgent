@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSubscriptionModelInvocationDescriptor,
   loadSubscriptionModelDeploymentConfig,
+  normalizedSubscriptionModelEvent,
   normalizeSubscriptionModelDeploymentConfig,
 } from "../src/index.js";
 
@@ -27,6 +28,31 @@ async function profile(overrides: Record<string, unknown> = {}) {
 }
 
 describe("subscription model deployment config", () => {
+  it("keeps provider runtime refusal outcomes content-free and closed", () => {
+    for (const outcome of ["AUTH_FAILED", "QUOTA_OR_PROVIDER_FAILED", "PROVIDER_FAILED"] as const) {
+      expect(
+        normalizedSubscriptionModelEvent.parse({
+          event: "MODEL_TURN_FINISHED",
+          sequence: 1,
+          provider: "claude_code",
+          session_id: "session-1",
+          outcome,
+          usage: null,
+        }),
+      ).toMatchObject({ outcome });
+    }
+    expect(() =>
+      normalizedSubscriptionModelEvent.parse({
+        event: "MODEL_TURN_FINISHED",
+        sequence: 1,
+        provider: "claude_code",
+        session_id: "session-1",
+        outcome: "RATE_LIMIT_WITH_PROSE",
+        usage: null,
+      }),
+    ).toThrow();
+  });
+
   it("normalizes only sorted official subscription CLI profiles and binds their digest", async () => {
     const loaded = normalizeSubscriptionModelDeploymentConfig({
       schema_version: 1,

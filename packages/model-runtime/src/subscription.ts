@@ -284,7 +284,9 @@ export const normalizedSubscriptionModelEvent = z.discriminatedUnion("event", [
       session_id: opaqueSessionId.nullable(),
       outcome: z.enum([
         "SUCCEEDED",
+        "AUTH_FAILED",
         "QUOTA_OR_PROVIDER_FAILED",
+        "PROVIDER_FAILED",
         "MALFORMED_OUTPUT",
         "TOOL_BOUNDARY_VIOLATION",
       ]),

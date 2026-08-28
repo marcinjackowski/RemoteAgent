@@ -53,6 +53,11 @@ import {
   type CodexCliTransport,
   type CodexCliTransportOptions,
 } from "@remoteagent/model-provider-codex-cli";
+import {
+  createClaudeCodeTransport,
+  type ClaudeCodeTransport,
+  type ClaudeCodeTransportOptions,
+} from "@remoteagent/model-provider-claude-code";
 import { JiraRestClient } from "@remoteagent/connector-jira";
 import { ChannelRegistry } from "@remoteagent/discord";
 
@@ -133,6 +138,16 @@ export function createCodexSubscriptionModelTransport(
   options: CodexCliTransportOptions,
 ): CodexCliTransport {
   return createCodexCliTransport(options);
+}
+
+/**
+ * Construct the Claude subscription transport without assigning it to an
+ * Engineering role. RA-052 owns immutable per-role provider/profile routing.
+ */
+export function createClaudeSubscriptionModelTransport(
+  options: ClaudeCodeTransportOptions,
+): ClaudeCodeTransport {
+  return createClaudeCodeTransport(options);
 }
 
 /**

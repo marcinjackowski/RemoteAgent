@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 
 import { EngineeringStage } from "@remoteagent/contracts";
 import { CodexCliTransport } from "@remoteagent/model-provider-codex-cli";
+import { ClaudeCodeTransport } from "@remoteagent/model-provider-claude-code";
 import {
   createRuntimeConfig,
   createSubscriptionModelInvocationDescriptor,
@@ -13,6 +14,7 @@ import {
 
 import {
   bindProductionModelRuntimes,
+  createClaudeSubscriptionModelTransport,
   createCodexSubscriptionModelTransport,
 } from "../src/worker.js";
 
@@ -52,6 +54,29 @@ const authenticated: SubscriptionAuthPreflight = {
     profile_name: "codex-local",
     client_version: "0.147.0",
     model: "gpt-5.6-codex",
+  }),
+};
+
+const claudeProfile = subscriptionModelProfileV1.parse({
+  ...codexProfile,
+  profile_name: "claude-local",
+  provider: "claude_code",
+  executable: "/opt/remoteagent/bin/claude",
+  model: "claude-opus-4-8",
+});
+const claudeInvocation = createSubscriptionModelInvocationDescriptor({
+  role: "IMPLEMENTER",
+  profile: claudeProfile,
+  clientVersion: "2.1.248",
+  deploymentConfigDigest: `sha256:${"3".repeat(64)}`,
+});
+const claudeAuthenticated: SubscriptionAuthPreflight = {
+  verify: async () => ({
+    status: "SUBSCRIPTION_AUTHENTICATED",
+    provider: "claude_code",
+    profile_name: "claude-local",
+    client_version: "2.1.248",
+    model: "claude-opus-4-8",
   }),
 };
 
@@ -109,6 +134,40 @@ it("accepts only an explicit preflight-capable subscription Engineering slot", a
   await expect(unauthorized.assertInvocationReady({ invocation })).rejects.toThrow(
     /preflight refused with API_CREDENTIALS_PRESENT/u,
   );
+});
+
+it("exposes Claude as the same explicit subscription slot without selecting a role", async () => {
+  const engineering = createClaudeSubscriptionModelTransport({
+    profile: claudeProfile,
+    preflight: claudeAuthenticated,
+  });
+  expect(engineering).toBeInstanceOf(ClaudeCodeTransport);
+  const bound = bindProductionModelRuntimes({
+    conversation: { transport: conversation, config },
+    subscriptionEngineering: {
+      authority: "OFFICIAL_SUBSCRIPTION_CLI",
+      transport: engineering,
+      assertReadyForInvocation: (input) => engineering.assertInvocationReady(input),
+      config: createRuntimeConfig({
+        model: { provider: "claude_code", model_id: claudeProfile.model },
+        timeoutMs: 1_000,
+        toolLimits: { maxIterations: 0, maxCalls: 0 },
+      }),
+      stageInvocation: () => claudeInvocation,
+      implementationInvocation: claudeInvocation,
+      reviewInvocation: { ...claudeInvocation, role: "REVIEWER" },
+    },
+  });
+  expect(bound.engineering?.transport).toBe(engineering);
+  expect(bound.engineering?.transport).not.toBe(conversation);
+  await expect(
+    bound.engineering?.assertReadyForInvocation({ invocation: claudeInvocation }),
+  ).resolves.toBeUndefined();
+  await expect(
+    bound.engineering?.assertReadyForInvocation({
+      invocation: { ...claudeInvocation, provider: "codex_cli" },
+    }),
+  ).rejects.toThrow(/identity does not match preflight/u);
 });
 
 it("refuses an official production binding that omits a model-stage descriptor", () => {

@@ -38,6 +38,7 @@ const SAFE_ENV = new Set([
 ]);
 const MAX_ARG_COUNT = 64;
 const MAX_ARG_BYTES = 64 * 1024;
+const MAX_CONTROL_OUTPUT_BYTES = 64 * 1024;
 
 export class SubscriptionProcessConfigurationError extends Error {
   readonly code = "SUBSCRIPTION_PROCESS_CONFIGURATION_INVALID";
@@ -116,6 +117,124 @@ function decoded(buffer: Buffer): string {
   } catch {
     throw new SubscriptionProcessConfigurationError("provider output is not valid UTF-8");
   }
+}
+
+export type SubscriptionControlCommandResult = Readonly<{
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}>;
+
+/**
+ * Run a bounded provider control surface such as `--version` or auth status.
+ * It deliberately shares executable, environment, argv and process-tree
+ * boundaries with model execution, but accepts no stdin and records no output.
+ */
+export async function runSubscriptionControlCommand(input: {
+  profile: SubscriptionModelProfileV1;
+  argv: readonly string[];
+  environment?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  deadline: number;
+  maxOutputBytes?: number;
+}): Promise<SubscriptionControlCommandResult> {
+  if (input.signal?.aborted || Date.now() >= input.deadline) {
+    throw new SubscriptionProcessConfigurationError("subscription control command cancelled");
+  }
+  await assertCanonicalExecutable(input.profile.executable);
+  const argv = validateArgv(input.argv);
+  const environment = subscriptionProcessEnvironment(input.environment ?? process.env);
+  const maxOutputBytes = input.maxOutputBytes ?? 4096;
+  if (
+    !Number.isSafeInteger(maxOutputBytes) ||
+    maxOutputBytes < 1 ||
+    maxOutputBytes > MAX_CONTROL_OUTPUT_BYTES
+  ) {
+    throw new SubscriptionProcessConfigurationError("control output limit is invalid");
+  }
+  if (input.signal?.aborted || Date.now() >= input.deadline) {
+    throw new SubscriptionProcessConfigurationError("subscription control command cancelled");
+  }
+
+  return new Promise<SubscriptionControlCommandResult>((resolve, reject) => {
+    const child = spawn(input.profile.executable, argv, {
+      env: environment,
+      shell: false,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let settled = false;
+    let terminalError: Error | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      input.signal?.removeEventListener("abort", onAbort);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const stop = (error: Error) => {
+      if (settled || terminalError !== undefined) return;
+      terminalError = error;
+      killProcessTree(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        killProcessTree(child, "SIGKILL");
+      }, input.profile.kill_grace_ms);
+      killTimer.unref();
+    };
+    const onAbort = () => stop(new Error("subscription control command cancelled"));
+    const timeout = setTimeout(
+      () => stop(new Error("subscription control command timed out")),
+      Math.max(1, input.deadline - Date.now()),
+    );
+    timeout.unref();
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const remaining = maxOutputBytes - stdout.byteLength;
+      if (remaining > 0) stdout = Buffer.concat([stdout, chunk.subarray(0, remaining)]);
+      if (chunk.byteLength > remaining) {
+        stop(new Error("subscription control output exceeded limit"));
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const remaining = maxOutputBytes - stderr.byteLength;
+      if (remaining > 0) stderr = Buffer.concat([stderr, chunk.subarray(0, remaining)]);
+      if (chunk.byteLength > remaining) {
+        stop(new Error("subscription control output exceeded limit"));
+      }
+    });
+    child.once("error", (error) => fail(error));
+    child.once("close", (exitCode) => {
+      if (settled) return;
+      if (terminalError !== undefined) {
+        fail(terminalError);
+        return;
+      }
+      settled = true;
+      cleanup();
+      try {
+        resolve(Object.freeze({ stdout: decoded(stdout), stderr: decoded(stderr), exitCode }));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+export function oneSubscriptionControlLine(value: string): string | null {
+  const line = value.endsWith("\r\n")
+    ? value.slice(0, -2)
+    : value.endsWith("\n")
+      ? value.slice(0, -1)
+      : value;
+  return line.includes("\n") || line.includes("\r") || line.trim() !== line ? null : line;
 }
 
 export type SubscriptionProcessResult = Readonly<{
