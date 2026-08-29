@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { canonicalDigest } from "@remoteagent/contracts";
 import type { Database, JobLease } from "@remoteagent/database";
-import type { RuntimeTransport } from "@remoteagent/bedrock-runtime";
+import type { RuntimeTransport } from "@remoteagent/model-runtime";
 import {
   createSubscriptionModelInvocationDescriptor,
   subscriptionModelProfileV1,
@@ -176,7 +176,7 @@ it("records slice checklist, round and token budgets with code-owned decision co
           messages: [{ role: "user", content: [{ type: "text", text: "private objective" }] }],
         },
         {
-          model: { provider: "bedrock", model_id: "model" },
+          model: { provider: "qualification_fake", model_id: "model" },
           timeoutMs: 1_000,
           toolLimits: { maxIterations: 6, maxCalls: 32 },
           toolLoopPolicy: {
@@ -279,7 +279,7 @@ it("resets round and call progress for each slice attempt while retaining global
     },
   });
   const config = {
-    model: { provider: "bedrock", model_id: "model" },
+    model: { provider: "qualification_fake", model_id: "model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 6, maxCalls: 32 },
     toolLoopPolicy: {
@@ -381,7 +381,7 @@ it("routes concurrent model and tool events to separate async-local invocation f
   };
   const transport = createEngineeringDebugTransport(delegate);
   const config = {
-    model: { provider: "bedrock", model_id: "model" },
+    model: { provider: "qualification_fake", model_id: "model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 1, maxCalls: 1 },
     retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
@@ -578,7 +578,7 @@ it("records provider usage and stops an invocation above the hard token limit", 
       transport.converse(
         { messages: [{ role: "user", content: [{ type: "text", text: "private" }] }] },
         {
-          model: { provider: "bedrock", model_id: "model" },
+          model: { provider: "qualification_fake", model_id: "model" },
           timeoutMs: 1_000,
           toolLimits: { maxIterations: 1, maxCalls: 1 },
           retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
@@ -612,7 +612,7 @@ it("refuses the next provider call before the remaining hard-limit reserve can b
     },
   });
   const config = {
-    model: { provider: "bedrock", model_id: "model" },
+    model: { provider: "qualification_fake", model_id: "model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 1, maxCalls: 1 },
     retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
@@ -655,7 +655,7 @@ it("refuses an exhausted model-backed stage before transport dispatch", async ()
     },
   });
   const config = {
-    model: { provider: "bedrock", model_id: "model" },
+    model: { provider: "qualification_fake", model_id: "model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 1, maxCalls: 1 },
     retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
@@ -742,7 +742,7 @@ it("does not discard a provider response when its journal is already unavailable
       transport.converse(
         { messages: [{ role: "user", content: [{ type: "text", text: "private" }] }] },
         {
-          model: { provider: "bedrock", model_id: "model" },
+          model: { provider: "qualification_fake", model_id: "model" },
           timeoutMs: 1_000,
           toolLimits: { maxIterations: 1, maxCalls: 1 },
           retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },

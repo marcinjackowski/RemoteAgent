@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import type { RuntimeConfig, RuntimeRequest, RuntimeTransport } from "@remoteagent/bedrock-runtime";
+import type { RuntimeConfig, RuntimeRequest, RuntimeTransport } from "@remoteagent/model-runtime";
 import type {
   SubscriptionAuthPreflight,
   SubscriptionModelProfileV1,

@@ -4,8 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
 import { EngineeringStage, canonicalDigest } from "@remoteagent/contracts";
-import { FakeTransport, ToolLimitError, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
-import { ToolInputError } from "@remoteagent/bedrock-runtime";
+import {
+  FakeTransport,
+  ToolInputError,
+  ToolLimitError,
+  createRuntimeConfig,
+} from "@remoteagent/model-runtime";
 import {
   createSubscriptionModelInvocationDescriptor,
   subscriptionModelProfileV1,

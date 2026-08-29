@@ -1,8 +1,4 @@
-import type {
-  RuntimeRequest,
-  RuntimeResponse,
-  RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+import type { RuntimeRequest, RuntimeResponse, RuntimeTransport } from "@remoteagent/model-runtime";
 import { EngineeringStage, canonicalDigest } from "@remoteagent/contracts";
 import { EngineeringControlPlaneRepository, productionRuntime } from "@remoteagent/database";
 import { MetricRegistry } from "@remoteagent/observability";

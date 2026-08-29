@@ -11,7 +11,7 @@ import {
   describeIntegration,
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
-import { createBedrockPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
+import { createStructuredPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
 import { createConfiguredEngineeringStageExecutor } from "../src/engineering-execution.js";
 import { createProductionEngineeringRecoveryCoordinator } from "../src/engineering-recovery.js";
 import {
@@ -81,7 +81,7 @@ function recoveryCoordinator(
     modelConfig: fixture.modelConfig,
     executionConfig: fixture.config,
   });
-  const reviewer = createBedrockPreCommitReviewSessionFactory({
+  const reviewer = createStructuredPreCommitReviewSessionFactory({
     transport,
     config: fixture.modelConfig,
   });
@@ -143,7 +143,7 @@ describeIntegration(
         modelConfig: fixture.modelConfig,
         executionConfig: fixture.config,
       });
-      const reviewer = createBedrockPreCommitReviewSessionFactory({
+      const reviewer = createStructuredPreCommitReviewSessionFactory({
         transport,
         config: fixture.modelConfig,
       });
@@ -257,7 +257,7 @@ describeIntegration(
         modelConfig: fixture.modelConfig,
         executionConfig: fixture.config,
       });
-      const reviewer = createBedrockPreCommitReviewSessionFactory({
+      const reviewer = createStructuredPreCommitReviewSessionFactory({
         transport,
         config: fixture.modelConfig,
       });

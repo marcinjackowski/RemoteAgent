@@ -16,7 +16,7 @@ import {
   type RuntimeRequest,
   type RuntimeResponse,
   type RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import {
   CaseRepository,
   ConnectionRepository,
@@ -41,7 +41,7 @@ import {
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
 import type { CompiledRoleContext } from "../src/context.js";
-import { createBedrockPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
+import { createStructuredPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
 import {
   createConfiguredEngineeringStageExecutor,
   createProductionEngineeringRuntimePort,
@@ -54,7 +54,7 @@ import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
 const run = promisify(execFile);
 const available = await ensurePostgres();
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
-const model = { provider: "bedrock", model_id: "scripted-model" } as const;
+const model = { provider: "qualification_fake", model_id: "scripted-model" } as const;
 
 class EngineeringScriptTransport implements RuntimeTransport {
   readonly requests: RuntimeRequest[] = [];
@@ -354,7 +354,7 @@ describeIntegration(
         modelConfig,
         executionConfig: config,
       });
-      const reviewer = createBedrockPreCommitReviewSessionFactory({
+      const reviewer = createStructuredPreCommitReviewSessionFactory({
         transport,
         config: modelConfig,
       });

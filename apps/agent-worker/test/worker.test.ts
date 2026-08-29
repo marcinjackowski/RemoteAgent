@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 
 import { EngineeringStage } from "@remoteagent/contracts";
 import { CodexCliTransport } from "@remoteagent/model-provider-codex-cli";
@@ -17,6 +18,7 @@ import {
   createClaudeSubscriptionModelTransport,
   createCodexSubscriptionModelTransport,
 } from "../src/worker.js";
+import { legacyConversationRuntimeConfigFromEnv } from "../src/legacy-conversation-model.js";
 
 const config = createRuntimeConfig({
   model: { provider: "legacy-conversation", model_id: "legacy-model" },
@@ -26,6 +28,33 @@ const config = createRuntimeConfig({
 const conversation: RuntimeTransport = {
   converse: async () => ({ model: config.model, content: [] }),
 };
+
+it("keeps the historical Bedrock defaults inside the named legacy conversation owner", () => {
+  const legacy = legacyConversationRuntimeConfigFromEnv("legacy-only", {
+    RA_MODEL_PROVIDER: "codex_cli",
+    RA_MODEL_ID: "must-not-override-resolved-id",
+  });
+  expect(legacy.model).toEqual({ provider: "bedrock", model_id: "legacy-only" });
+});
+
+it("keeps Bedrock and OpenCode imports outside the production Engineering boundary", async () => {
+  const files = [
+    "worker.ts",
+    "roles.ts",
+    "engineering-execution.ts",
+    "engineering-workflow.ts",
+    "engineering-model-routing.ts",
+    "engineering-live-qualification.ts",
+    "engineering-qualification.ts",
+  ];
+  const sources = await Promise.all(
+    files.map((file) => readFile(new URL(`../src/${file}`, import.meta.url), "utf8")),
+  );
+  for (const [index, source] of sources.entries()) {
+    expect(source.toLowerCase(), files[index]).not.toContain("bedrock");
+    expect(source.toLowerCase(), files[index]).not.toContain("opencode");
+  }
+});
 
 const codexProfile = subscriptionModelProfileV1.parse({
   schema_version: 1,

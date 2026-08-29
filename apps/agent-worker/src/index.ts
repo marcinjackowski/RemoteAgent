@@ -11,4 +11,7 @@ export * from "./vertical-slice-executor.js";
 export * from "./engineering-execution.js";
 export * from "./engineering-debug-journal.js";
 export * from "./engineering-model-routing.js";
+export * from "./engineering-qualification.js";
+export * from "./engineering-live-qualification.js";
+export * from "./legacy-conversation-model.js";
 export * from "./xcode-gate-adapter.js";

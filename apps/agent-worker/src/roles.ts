@@ -1,6 +1,5 @@
 import type { AgentRole } from "@remoteagent/contracts";
 import {
-  createRuntimeConfig,
   runStructuredCompletion,
   type RuntimeConfig,
   type RuntimeMessage,
@@ -15,7 +14,7 @@ import type { RoleContextReader } from "./context.js";
  *
  * THE TRANSPORT IS A PARAMETER, NOT A CONSTRUCTION. It is the single reason this module
  * exists separately from the handlers: if the first handler constructed an
- * `AwsBedrockTransport` inline, every later handler would inherit that, and no test could
+ * a provider transport inline, every later handler would inherit that, and no test could
  * exercise a role without either reaching AWS or monkey-patching a module. Passing it in
  * means the production path and the test path run the SAME code with a different driver —
  * which is what makes a test about a role's behaviour evidence about production.
@@ -59,7 +58,7 @@ export function createRole(options: RoleBindingOptions): {
   return {
     invoke: async (input) => {
       // The worker's model call has NO system-prompt channel: `RuntimeMessage` is user/assistant/
-      // tool only and the transport sends no Bedrock `system` block, so the RoleRegistry prompt
+      // tool only and the transport sends no provider `system` block, so the RoleRegistry prompt
       // (agent-orchestrator) never reaches this path. The conversational directive therefore has to
       // ride in the first user turn. Without it the model fills the AgentCompletion `summary` with a
       // third-person report ("Owner asked… I provided…") instead of a direct chat reply — observed
@@ -111,23 +110,4 @@ export function createRoles(
   const bound: Record<string, ReturnType<typeof createRole>> = {};
   for (const role of roles) bound[role] = createRole(options);
   return bound;
-}
-
-/**
- * Model settings for the worker. Read from the environment because the model id is a
- * deployment decision, not a code one — but a PRESENT-BUT-INVALID value throws rather
- * than falling back, matching `workerConfigFromEnv`: a silent fallback to a different
- * model would produce work nobody asked for and be invisible in the logs.
- */
-export function roleConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
-  const timeoutMs = env.RA_MODEL_TIMEOUT_MS;
-  return createRuntimeConfig({
-    model: {
-      provider: env.RA_MODEL_PROVIDER ?? "bedrock",
-      // Operator-selected `us.` inference profile; bare model ids are not used by this route.
-      model_id: env.RA_MODEL_ID ?? "us.anthropic.claude-opus-4-8",
-    },
-    timeoutMs: timeoutMs === undefined ? 120_000 : Number.parseInt(timeoutMs, 10),
-    toolLimits: { maxIterations: 16, maxCalls: 64 },
-  });
 }

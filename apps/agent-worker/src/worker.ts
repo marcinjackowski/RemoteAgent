@@ -27,7 +27,6 @@ import {
   Scheduler,
   createJobDispatch,
   productionRuntime,
-  resolveModelId,
   type ClaimableDispatch,
   type JobHandler,
   type JobTypeHandlers,
@@ -40,7 +39,6 @@ import {
   StructuredLogger,
   type ProcessDefinition,
 } from "@remoteagent/observability";
-import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
 import {
   subscriptionModelInvocationDescriptorV1,
   type RuntimeConfig,
@@ -65,7 +63,7 @@ import { createRenewalHandler, createWorkerHandlers } from "./handlers.js";
 import { basicAuthTransport, jiraReconcileConfigFromEnv } from "./jira-auth.js";
 import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.js";
 import { WorkerPersistence } from "./persistence.js";
-import { createRoles, roleConfigFromEnv } from "./roles.js";
+import { createRoles } from "./roles.js";
 import { createEngineeringRoleContextReader } from "./context.js";
 import {
   createEngineeringRoleModelComposition,
@@ -78,6 +76,10 @@ import {
   createEngineeringInvocationJournalRunner,
 } from "./engineering-debug-journal.js";
 import { engineeringModelRoutingFromEnv } from "./engineering-model-routing.js";
+import {
+  createLegacyConversationModelBinding,
+  legacyConversationKnownSecretsFromEnv,
+} from "./legacy-conversation-model.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -322,8 +324,8 @@ export function bootstrapWorker(input: {
  * transport and a persistence adapter, and composing those was a separate task. Both now
  * exist, so the real handlers are built here.
  *
- * The transport is `AwsBedrockTransport` on this path and `FakeTransport` in tests, both
- * injected into the SAME `createRoles`/`createWorkerHandlers` code. That is what makes a
+ * The explicitly legacy conversation transport and the test transport are both injected into
+ * the SAME `createRoles`/`createWorkerHandlers` code. That is what makes a
  * handler test evidence about this process rather than about a parallel implementation.
  */
 /**
@@ -383,8 +385,7 @@ export async function jiraReconcileHandlers(input: {
 
 export async function main(): Promise<void> {
   const config = workerConfigFromEnv();
-  const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
-  const knownSecrets = bearerToken === undefined || bearerToken === "" ? [] : [bearerToken];
+  const knownSecrets = [...legacyConversationKnownSecretsFromEnv()];
   const logger = new StructuredLogger({
     knownSecrets,
     sink: { log: (record) => console.log(JSON.stringify(record)) },
@@ -398,23 +399,17 @@ export async function main(): Promise<void> {
     logger,
     config: jiraReconcileConfigFromEnv(),
   });
-  // Model id is server-owned config resolved at startup (RA-032): DB `agent_config` wins, then env
-  // (BEDROCK_MODEL_ID/RA_MODEL_ID), then the built-in default — not a hardcoded env var.
-  const modelId = await resolveModelId(db);
-  const awsRegion = process.env.AWS_REGION?.trim();
   const persistence = new WorkerPersistence(db, runtime);
   const jobs = new JobStore(runtime);
-  const rawTransport = new AwsBedrockTransport({
-    ...(bearerToken !== undefined && bearerToken !== "" ? { bearerToken } : {}),
-    ...(awsRegion !== undefined && awsRegion !== "" ? { region: awsRegion } : {}),
-  });
-  // Async-local routing means the shared process transport writes usage/tool shape only while an
-  // actual Engineering handler owns an invocation journal. Ordinary reply/Jira roles stay silent.
-  const modelConfig = roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId });
+  const legacyConversation = await createLegacyConversationModelBinding({ db });
   const modelBindings = bindProductionModelRuntimes({
-    conversation: Object.freeze({ transport: rawTransport, config: modelConfig }),
+    conversation: Object.freeze({
+      transport: legacyConversation.transport,
+      config: legacyConversation.config,
+    }),
   });
   const transport = modelBindings.conversation.transport;
+  const modelConfig = modelBindings.conversation.config;
   const readContext = createEngineeringRoleContextReader({
     db,
     metrics,
@@ -442,7 +437,8 @@ export async function main(): Promise<void> {
     {
       persistence,
       roles: createRoles(WORKER_ROLES, {
-        // Bedrock API key (bearer) auth when set — no IAM keys; else the SDK's default chain.
+        // The ordinary conversation binding has its own explicit legacy owner. Engineering never
+        // receives this transport or its environment-derived configuration.
         transport,
         config: modelConfig,
         readContext,
@@ -473,7 +469,7 @@ export async function main(): Promise<void> {
         }
         if (engineeringModels === null) {
           throw new Error(
-            "engineering subscription provider is unavailable; Bedrock fallback is disabled",
+            "engineering subscription provider is unavailable; legacy fallback is disabled",
           );
         }
         return createProductionEngineeringRuntimePort({

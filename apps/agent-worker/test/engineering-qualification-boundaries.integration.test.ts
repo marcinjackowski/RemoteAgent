@@ -6,7 +6,7 @@ import type {
   RuntimeRequest,
   RuntimeResponse,
   RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import { canonicalDigest } from "@remoteagent/contracts";
 import {
   EngineeringControlPlaneRepository,

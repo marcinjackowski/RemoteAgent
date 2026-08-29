@@ -16,7 +16,7 @@ import {
   type RuntimeRequest,
   type RuntimeResponse,
   type RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import {
   CaseRepository,
   ConnectionRepository,
@@ -42,7 +42,7 @@ import { makeCheckpoint } from "../../../packages/database/test/fixtures.js";
 import { createTestDatabase } from "../../../packages/database/test/harness.js";
 import { createEngineeringRoleContextReader, type RoleContextReader } from "../src/context.js";
 import {
-  createBedrockPreCommitReviewSessionFactory,
+  createStructuredPreCommitReviewSessionFactory,
   type EngineeringWorkflowPolicyOptions,
 } from "../src/engineering-workflow.js";
 import {
@@ -60,7 +60,10 @@ import { WorkerPersistence } from "../src/persistence.js";
 
 const run = promisify(execFile);
 export const qualificationRuntime = productionRuntime();
-export const qualificationModel = { provider: "bedrock", model_id: "qualification-model" } as const;
+export const qualificationModel = {
+  provider: "qualification_fake",
+  model_id: "qualification-model",
+} as const;
 const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
 
 /** Scripted provider boundary shared by qualification and cross-app production E2E tests. */
@@ -708,7 +711,7 @@ export async function createEngineeringQualificationFixture(
         });
       const reviewer =
         roleModels?.reviewSessionFactory ??
-        createBedrockPreCommitReviewSessionFactory({
+        createStructuredPreCommitReviewSessionFactory({
           transport: input.transport,
           config: modelConfig,
         });

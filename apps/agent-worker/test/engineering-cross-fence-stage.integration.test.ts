@@ -14,7 +14,7 @@ import type {
   RuntimeRequest,
   RuntimeResponse,
   RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import {
   createSubscriptionModelInvocationDescriptor,
   subscriptionModelProfileV1,
@@ -26,7 +26,7 @@ import {
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
 import {
-  createBedrockEngineeringStageExecutor,
+  createStructuredEngineeringStageExecutor,
   createPostgresEngineeringRuntimePort,
   localCommitIntentDescriptor,
   type EngineeringGateStageExecutor,
@@ -132,7 +132,7 @@ describeIntegration(
         expect(input.invocation).toEqual(modelInvocation);
         preflightCalls += 1;
       };
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createStructuredEngineeringStageExecutor({
         transport,
         config: fixture.modelConfig,
         modelInvocation: () => modelInvocation,
@@ -254,7 +254,7 @@ describeIntegration(
       });
       const control = new EngineeringControlPlaneRepository(productionRuntime(), fixture.jobs);
       const transport = new NoCallTransport();
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createStructuredEngineeringStageExecutor({
         transport,
         config: fixture.modelConfig,
       });
@@ -432,7 +432,7 @@ describeIntegration(
         approvalId,
       });
       const control = new EngineeringControlPlaneRepository(productionRuntime(), fixture.jobs);
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createStructuredEngineeringStageExecutor({
         transport: new NoCallTransport(),
         config: fixture.modelConfig,
       });
@@ -506,7 +506,7 @@ describeIntegration(
         approvalId,
       });
       const control = new EngineeringControlPlaneRepository(productionRuntime(), fixture.jobs);
-      const stageExecutor = createBedrockEngineeringStageExecutor({
+      const stageExecutor = createStructuredEngineeringStageExecutor({
         transport: new NoCallTransport(),
         config: fixture.modelConfig,
       });

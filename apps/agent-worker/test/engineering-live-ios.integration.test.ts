@@ -1,6 +1,5 @@
 import { realpath } from "node:fs/promises";
 
-import { AwsBedrockTransport } from "@remoteagent/bedrock-runtime";
 import {
   CaseMessageRepository,
   CaseRepository,
@@ -11,7 +10,6 @@ import {
   OwnerRepository,
   WorkspaceRepository,
   productionRuntime,
-  resolveModelId,
   type Database,
 } from "@remoteagent/database";
 import { MetricRegistry, StructuredLogger } from "@remoteagent/observability";
@@ -25,17 +23,17 @@ import {
   runWithEngineeringDebugJournal,
 } from "../src/engineering-debug-journal.js";
 import {
-  addEngineeringModelUsage,
-  classifyEngineeringModelUsage,
-  createConfiguredEngineeringStageExecutor,
-  emptyEngineeringModelUsage,
+  createEngineeringRoleModelComposition,
   loadEngineeringExecutionConfig,
   createProductionEngineeringRuntimePort,
 } from "../src/engineering-execution.js";
-import { createBedrockPreCommitReviewSessionFactory } from "../src/engineering-workflow.js";
+import {
+  assertEngineeringLiveQualificationAuthority,
+  engineeringLiveQualificationSelectionFromEnv,
+} from "../src/engineering-live-qualification.js";
+import { engineeringModelRoutingFromEnv } from "../src/engineering-model-routing.js";
 import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
-import { roleConfigFromEnv } from "../src/roles.js";
 import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
 import {
   createXcodeVerificationGatePlatformAdapter,
@@ -60,8 +58,8 @@ live(
     const configPath = required("RA_ENGINEERING_CONFIG_PATH");
     const xcodebuildPath = await realpath(required("RA_XCODEBUILD_PATH"));
     const developerDir = await realpath(required("DEVELOPER_DIR"));
-    const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
-    const awsRegion = process.env.AWS_REGION?.trim();
+    const liveSelection = engineeringLiveQualificationSelectionFromEnv();
+    if (liveSelection === null) throw new Error("live Engineering selection is unavailable");
     const created = await createTestDatabase();
     const db = created.db as unknown as Database;
     const runtime = productionRuntime();
@@ -80,13 +78,22 @@ live(
 
     try {
       const config = await loadEngineeringExecutionConfig(configPath);
+      const modelRouting = await engineeringModelRoutingFromEnv();
+      if (modelRouting === null) {
+        throw new Error("RA_ENGINEERING_MODEL_CONFIG_PATH is required for live iOS smoke");
+      }
+      const liveAuthority = assertEngineeringLiveQualificationAuthority({
+        selection: liveSelection,
+        routing: modelRouting,
+        executionConfig: config,
+      });
       const destination = xcodeDestinationFromGateCatalog(
         config.catalog.definitions,
         xcodebuildPath,
       );
       debugJournal = await EngineeringDebugJournal.create({
         artifactRoot: config.artifactRoot,
-        invocationId: suffix,
+        invocationId: liveAuthority.invocation_id,
       });
       process.stdout.write(
         `RA045_DEBUG_LOG=${JSON.stringify({ file_name: debugJournal.fileName })}\n`,
@@ -170,56 +177,30 @@ live(
       if (lease === null || lease.jobId !== granted.jobId) {
         throw new Error("direct engineering job was not the exact claimed lease");
       }
-      const modelId = await resolveModelId(db);
       await debugJournal.append({
         event: "RUN_STARTED",
         case_id: ids.caseId,
         run_id: granted.runId,
-        model: modelId,
+        model: "role-routed-subscription",
         base_sha: sourceHead,
         config_digest: config.configDigest,
       });
-      const rawTransport = new AwsBedrockTransport({
-        ...(bearerToken === undefined || bearerToken === "" ? {} : { bearerToken }),
-        ...(awsRegion === undefined || awsRegion === "" ? {} : { region: awsRegion }),
+      const roleModels = createEngineeringRoleModelComposition({
+        routing: modelRouting,
+        executionConfig: config,
+        decorateTransport: (binding) =>
+          createEngineeringDebugTransport(binding.transport, {
+            role: binding.role,
+            invocation: binding.invocation,
+          }),
       });
-      let modelUsage = emptyEngineeringModelUsage;
-      const usageTransport = {
-        converse: async (...input: Parameters<typeof rawTransport.converse>) => {
-          const response = await rawTransport.converse(...input);
-          modelUsage = addEngineeringModelUsage(modelUsage, response.usage);
-          const comparison = classifyEngineeringModelUsage(modelUsage.totalTokens);
-          // Provider-reported counts only. No prompts, response bodies, request IDs or credentials
-          // enter this progress line, and emitting after every completed response preserves the
-          // total even when a later stage fails before it can return an artifact.
-          process.stdout.write(
-            `RA045_MODEL_USAGE=${JSON.stringify({ ...modelUsage, comparison })}\n`,
-          );
-          return response;
-        },
-      };
-      const transport = createEngineeringDebugTransport(usageTransport);
-      const baseModelConfig = roleConfigFromEnv({ ...process.env, RA_MODEL_ID: modelId });
-      const modelConfig = {
-        ...baseModelConfig,
-        toolLimits: { maxIterations: 12, maxCalls: 48 },
-      };
-      const knownSecrets = bearerToken === undefined || bearerToken === "" ? [] : [bearerToken];
+      const knownSecrets: string[] = [];
       const metrics = new MetricRegistry(knownSecrets);
       const readContext = createEngineeringRoleContextReader({
         db,
         metrics,
         knownSecrets,
         beforeRead: (caseId) => persistence.ensureBaselineCheckpoint(caseId).then(() => undefined),
-      });
-      const stageExecutor = createConfiguredEngineeringStageExecutor({
-        transport,
-        modelConfig,
-        executionConfig: config,
-      });
-      const reviewer = createBedrockPreCommitReviewSessionFactory({
-        transport,
-        config: modelConfig,
       });
       const platformAdapter = await createXcodeVerificationGatePlatformAdapter({
         xcodebuildPath,
@@ -233,11 +214,14 @@ live(
           jobs,
           lease,
           config,
-          transport,
-          modelConfig,
+          transport: roleModels.implementation.transport,
+          modelConfig: roleModels.implementation.config,
           readContext,
-          stageExecutor,
-          reviewSessionFactory: reviewer.createSession,
+          stageExecutor: roleModels.stageExecutor,
+          reviewSessionFactory: roleModels.reviewSessionFactory.createSession,
+          implementationModelInvocation: roleModels.implementation.invocation,
+          reviewModelInvocation: roleModels.reviewer.invocation,
+          modelPreflight: roleModels.modelPreflight,
           platformAdapter,
           workflowDeadlineMs: 2 * 60 * 60_000,
           metrics,
@@ -432,6 +416,10 @@ live(
       );
       expect(gateRows.rowCount).toBeGreaterThan(0);
       const result = {
+        invocation_id: liveAuthority.invocation_id,
+        implementer_invocation_digest: liveAuthority.implementer_invocation_digest,
+        reviewer_invocation_digest: liveAuthority.reviewer_invocation_digest,
+        external_writes: liveAuthority.external_writes,
         case_id: ids.caseId,
         run_id: granted.runId,
         proposal_id: proposed.proposal.proposal_id,

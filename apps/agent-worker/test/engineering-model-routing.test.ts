@@ -13,6 +13,7 @@ import type {
   SubscriptionAuthPreflightResult,
   SubscriptionModelProviderKind,
 } from "@remoteagent/model-runtime";
+import { loadSubscriptionModelDeploymentConfig } from "@remoteagent/model-runtime";
 
 const roots: string[] = [];
 
@@ -204,5 +205,68 @@ describe("production Engineering model routing", () => {
     await expect(
       engineeringModelRoutingFromEnv({ RA_ENGINEERING_MODEL_CONFIG_PATH: "relative.json" }),
     ).rejects.toThrow(/absolute/u);
+  });
+
+  it("ignores every legacy Bedrock environment variable when resolving Engineering routes", async () => {
+    const path = await deploymentFile({
+      DESIGNER: "codex-local",
+      IMPLEMENTER: "claude-local",
+      REVIEWER: "codex-local",
+      VERIFIER: "claude-local",
+    });
+    const routing = await engineeringModelRoutingFromEnv(
+      {
+        RA_ENGINEERING_MODEL_CONFIG_PATH: path,
+        BEDROCK_MODEL_ID: "stale-bedrock-model",
+        RA_MODEL_ID: "stale-generic-model",
+        RA_MODEL_PROVIDER: "bedrock",
+        AWS_BEARER_TOKEN_BEDROCK: "must-not-be-read",
+        AWS_REGION: "must-not-be-read",
+      },
+      {
+        codexPreflight: authenticatedPreflight([]),
+        claudePreflight: authenticatedPreflight([]),
+      },
+    );
+    expect(routing?.forRole("IMPLEMENTER").invocation).toMatchObject({
+      provider: "claude_code",
+      profile_name: "claude-local",
+      model: "claude-opus-4-8",
+    });
+    expect(JSON.stringify(routing?.roles)).not.toContain("stale-bedrock-model");
+    expect(JSON.stringify(routing?.roles)).not.toContain("must-not-be-read");
+  });
+
+  it("rejects an OpenCode profile at the Engineering deployment schema", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ra-engineering-opencode-")));
+    roots.push(root);
+    const path = join(root, "models.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schema_version: 2,
+        profiles: [
+          {
+            schema_version: 1,
+            profile_name: "opencode-local",
+            provider: "opencode",
+            executable: process.execPath,
+            model: "foreign-model",
+            timeout_ms: 10_000,
+            kill_grace_ms: 100,
+            max_stdin_bytes: 65_536,
+            max_stdout_bytes: 65_536,
+            max_stderr_bytes: 4096,
+          },
+        ],
+        routes: {
+          DESIGNER: "opencode-local",
+          IMPLEMENTER: "opencode-local",
+          REVIEWER: "opencode-local",
+          VERIFIER: "opencode-local",
+        },
+      }),
+    );
+    await expect(loadSubscriptionModelDeploymentConfig(path)).rejects.toThrow(/provider/u);
   });
 });

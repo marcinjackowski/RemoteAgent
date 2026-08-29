@@ -16,7 +16,7 @@ import {
   type EngineeringArtifact,
   type WorkUnit,
 } from "@remoteagent/contracts";
-import { FakeTransport, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
+import { FakeTransport, createRuntimeConfig } from "@remoteagent/model-runtime";
 import { subscriptionModelInvocationDescriptorV1 } from "@remoteagent/model-runtime";
 import {
   CaseRepository,
@@ -842,7 +842,7 @@ describeIntegration(
         },
       });
       const config = {
-        model: { provider: "bedrock", model_id: "model" },
+        model: { provider: "qualification_fake", model_id: "model" },
         timeoutMs: 1_000,
         toolLimits: { maxIterations: 1, maxCalls: 1 },
         retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
@@ -3303,7 +3303,7 @@ describeIntegration(
 
 it("binds a structured stage to its server-owned provider-neutral schema", async () => {
   const config = createRuntimeConfig({
-    model: { provider: "bedrock", model_id: "test-model" },
+    model: { provider: "qualification_fake", model_id: "test-model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 2, maxCalls: 2 },
   });
@@ -3456,7 +3456,7 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
     ],
   });
   const config = createRuntimeConfig({
-    model: { provider: "bedrock", model_id: "test-model" },
+    model: { provider: "qualification_fake", model_id: "test-model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 2, maxCalls: 2 },
   });
@@ -3495,7 +3495,7 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
 
 it("creates a fresh tools-disabled provider-neutral pre-commit session", async () => {
   const config = createRuntimeConfig({
-    model: { provider: "bedrock", model_id: "test-model" },
+    model: { provider: "qualification_fake", model_id: "test-model" },
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 2, maxCalls: 2 },
   });

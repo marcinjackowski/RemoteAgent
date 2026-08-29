@@ -390,10 +390,6 @@ export function createStructuredPreCommitReviewSessionFactory(input: {
   });
 }
 
-/** Historical compatibility alias; production Engineering no longer composes this with Bedrock. */
-export const createBedrockPreCommitReviewSessionFactory =
-  createStructuredPreCommitReviewSessionFactory;
-
 function isStructuredStage(stage: EngineeringStageValue): stage is StructuredStage {
   return Object.prototype.hasOwnProperty.call(definitions, stage);
 }
@@ -726,9 +722,6 @@ export function createStructuredEngineeringStageExecutor(input: {
     },
   };
 }
-
-/** Historical compatibility alias for tests and the isolated adapter package. */
-export const createBedrockEngineeringStageExecutor = createStructuredEngineeringStageExecutor;
 
 export interface EngineeringWorkflowPolicyOptions {
   readonly riskFacts: EngineeringProcessRiskFacts;

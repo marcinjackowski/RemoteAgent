@@ -8,7 +8,7 @@ import {
   type RuntimeRequest,
   type RuntimeResponse,
   type RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import {
   ExternalActionRepository,
   ReceiptRepository,

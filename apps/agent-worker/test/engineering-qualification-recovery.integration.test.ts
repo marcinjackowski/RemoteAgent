@@ -8,7 +8,7 @@ import type {
   RuntimeRequest,
   RuntimeResponse,
   RuntimeTransport,
-} from "@remoteagent/bedrock-runtime";
+} from "@remoteagent/model-runtime";
 import {
   CaseRepository,
   EngineeringControlPlaneRepository,
