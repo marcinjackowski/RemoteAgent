@@ -32,6 +32,7 @@ import {
   type RuntimeTransport,
   type RuntimeUsage,
   type SubscriptionModelInvocationDescriptorV1,
+  type SubscriptionModelRole,
 } from "@remoteagent/model-runtime";
 import {
   WorkspaceRepository,
@@ -66,6 +67,7 @@ import * as z from "zod";
 import type { RoleContextReader } from "./context.js";
 import {
   createStructuredEngineeringStageExecutor,
+  createStructuredPreCommitReviewSessionFactory,
   createPostgresEngineeringRuntimePort,
   engineeringApprovalCandidateFromLease,
   type EngineeringLocalCommitStageExecutor,
@@ -99,6 +101,10 @@ import {
   recordEngineeringDebugReceiptFinalization,
   runWithEngineeringDebugSlice,
 } from "./engineering-debug-journal.js";
+import type {
+  EngineeringModelRoleBinding,
+  ProductionEngineeringModelRouting,
+} from "./engineering-model-routing.js";
 
 export type EngineeringModelUsageTotals = Readonly<{
   responses: number;
@@ -454,6 +460,149 @@ export function createConfiguredEngineeringStageExecutor(input: {
           .filter((definition) => definition.required)
           .map((definition) => [definition.gate_id, definition.gate_schedule]),
       ),
+    },
+  });
+}
+
+/** Code-owned stage-to-role mapping. No prompt, artifact or caller can override it. */
+export function engineeringModelRoleForStage(
+  stage: EngineeringStageValue,
+): SubscriptionModelRole | null {
+  switch (stage) {
+    case EngineeringStage.OUTCOME_DEFINITION:
+    case EngineeringStage.SYSTEM_DESIGN:
+    case EngineeringStage.PROGRAM_DESIGN:
+    case EngineeringStage.SLICE_PLANNING:
+    case EngineeringStage.MEMORY_PROJECTION:
+      return "DESIGNER";
+    case EngineeringStage.SLICE_IMPLEMENTATION:
+      return "IMPLEMENTER";
+    case EngineeringStage.DESIGN_APPROVAL:
+    case EngineeringStage.SLICE_REVIEW:
+      return "REVIEWER";
+    case EngineeringStage.FINAL_VERIFICATION:
+      return "VERIFIER";
+    case EngineeringStage.DISCOVERY:
+    case EngineeringStage.GATE_EXECUTION:
+    case EngineeringStage.LOCAL_COMMIT:
+      return null;
+  }
+}
+
+export type EngineeringRoleModelComposition = Readonly<{
+  stageExecutor: EngineeringStageExecutor;
+  implementation: Omit<EngineeringModelRoleBinding, "transport"> & {
+    readonly transport: RuntimeTransport;
+  };
+  reviewer: Omit<EngineeringModelRoleBinding, "transport"> & {
+    readonly transport: RuntimeTransport;
+  };
+  reviewSessionFactory: ReturnType<typeof createStructuredPreCommitReviewSessionFactory>;
+  modelPreflight(input: {
+    binding: import("@remoteagent/agent-orchestrator").EngineeringStageBinding;
+    invocation: SubscriptionModelInvocationDescriptorV1;
+  }): Promise<void>;
+}>;
+
+/** Build all model-backed Engineering boundaries from the immutable role registry. */
+export function createEngineeringRoleModelComposition(input: {
+  routing: ProductionEngineeringModelRouting;
+  executionConfig: EngineeringExecutionConfig;
+  decorateTransport?: (binding: EngineeringModelRoleBinding) => RuntimeTransport;
+}): EngineeringRoleModelComposition {
+  const modelBinding = (
+    role: SubscriptionModelRole,
+  ): Omit<EngineeringModelRoleBinding, "transport"> & { readonly transport: RuntimeTransport } => {
+    const exact = input.routing.forRole(role);
+    return Object.freeze({
+      ...exact,
+      transport: input.decorateTransport?.(exact) ?? exact.transport,
+    });
+  };
+  const designer = modelBinding("DESIGNER");
+  const implementation = modelBinding("IMPLEMENTER");
+  const reviewer = modelBinding("REVIEWER");
+  const verifier = modelBinding("VERIFIER");
+  const executors = Object.freeze({
+    DESIGNER: createConfiguredEngineeringStageExecutor({
+      transport: designer.transport,
+      modelConfig: designer.config,
+      executionConfig: input.executionConfig,
+      modelInvocation: () => designer.invocation,
+    }),
+    IMPLEMENTER: createConfiguredEngineeringStageExecutor({
+      transport: implementation.transport,
+      modelConfig: implementation.config,
+      executionConfig: input.executionConfig,
+      modelInvocation: () => implementation.invocation,
+    }),
+    REVIEWER: createConfiguredEngineeringStageExecutor({
+      transport: reviewer.transport,
+      modelConfig: reviewer.config,
+      executionConfig: input.executionConfig,
+      modelInvocation: () => reviewer.invocation,
+    }),
+    VERIFIER: createConfiguredEngineeringStageExecutor({
+      transport: verifier.transport,
+      modelConfig: verifier.config,
+      executionConfig: input.executionConfig,
+      modelInvocation: () => verifier.invocation,
+    }),
+  });
+  const aggregateConfigDigest = canonicalDigest({
+    deployment_config_digest: input.routing.deploymentConfigDigest,
+    execution_config_digest: input.executionConfig.configDigest,
+    stage_roles: Object.fromEntries(
+      Object.values(EngineeringStage).map((stage) => [stage, engineeringModelRoleForStage(stage)]),
+    ),
+  });
+  const roleExecutor = (stage: EngineeringStageValue): EngineeringStageExecutor => {
+    const role = engineeringModelRoleForStage(stage);
+    if (role === null) return executors.DESIGNER;
+    return executors[role];
+  };
+  const stageExecutor: EngineeringStageExecutor = Object.freeze({
+    configDigest: aggregateConfigDigest,
+    configDigestForStage: (stage: EngineeringStageValue) =>
+      engineeringModelRoleForStage(stage) === null
+        ? aggregateConfigDigest
+        : roleExecutor(stage).configDigest,
+    ...(executors.DESIGNER.slicePlanningConstraints === undefined
+      ? {}
+      : { slicePlanningConstraints: executors.DESIGNER.slicePlanningConstraints }),
+    schemaDigest: (stage: EngineeringStageValue) => roleExecutor(stage).schemaDigest(stage),
+    modelInvocation: (stage: EngineeringStageValue) => {
+      const role = engineeringModelRoleForStage(stage);
+      return role === null ? null : input.routing.forRole(role).invocation;
+    },
+    execute: (request: Parameters<EngineeringStageExecutor["execute"]>[0]) => {
+      const role = engineeringModelRoleForStage(request.binding.stage);
+      if (role === null) {
+        return Promise.resolve({
+          kind: "UNAVAILABLE" as const,
+          detail: "system-owned Engineering stage has no model route",
+          modelCalls: 0 as const,
+        });
+      }
+      return executors[role].execute(request);
+    },
+  });
+  const reviewSessionFactory = createStructuredPreCommitReviewSessionFactory({
+    transport: reviewer.transport,
+    config: reviewer.config,
+    modelInvocation: reviewer.invocation,
+  });
+  return Object.freeze({
+    stageExecutor,
+    implementation,
+    reviewer,
+    reviewSessionFactory,
+    modelPreflight: async ({ binding, invocation }) => {
+      const role = engineeringModelRoleForStage(binding.stage);
+      if (role === null || invocation.role !== role) {
+        throw new Error("Engineering stage has no matching subscription role route");
+      }
+      await input.routing.forRole(role).assertReadyForInvocation({ invocation });
     },
   });
 }
@@ -1411,73 +1560,80 @@ export function createEngineeringExecution(input: {
       : { modelInvocation: input.reviewModelInvocation }),
     execute: async ({ binding, orderedArtifacts }) => {
       const slice = sliceContract(orderedArtifacts, binding, input.config.writePathAllowlist);
-      const receipt = implementationReceipt(orderedArtifacts, binding);
-      const evidence = evidenceBundle(orderedArtifacts, binding.attempt);
-      const observed = await observeSliceImplementationReceipt({
-        db: input.db,
-        writer,
-        workspaceConfig: input.config.workspaceConfig,
-        receipt,
-        slice,
-        writePathAllowlist: input.config.writePathAllowlist,
-        baselineStore: baselines,
-      });
-      const previousRawPatchDigest = previousCorrectionRawPatchDigest(
-        orderedArtifacts,
-        binding,
-        slice,
+      return runWithEngineeringDebugSlice(
+        EngineeringStage.SLICE_REVIEW,
+        slice.slice_id,
+        binding.attempt,
+        async () => {
+          const receipt = implementationReceipt(orderedArtifacts, binding);
+          const evidence = evidenceBundle(orderedArtifacts, binding.attempt);
+          const observed = await observeSliceImplementationReceipt({
+            db: input.db,
+            writer,
+            workspaceConfig: input.config.workspaceConfig,
+            receipt,
+            slice,
+            writePathAllowlist: input.config.writePathAllowlist,
+            baselineStore: baselines,
+          });
+          const previousRawPatchDigest = previousCorrectionRawPatchDigest(
+            orderedArtifacts,
+            binding,
+            slice,
+          );
+          try {
+            const result = await executeVerticalSliceReview({
+              db: input.db,
+              lease: input.lease,
+              workspaceConfig: input.config.workspaceConfig,
+              repositoryId: input.config.repositoryId,
+              caseId: binding.caseId,
+              runId: binding.runId,
+              workUnitId: binding.workUnitId,
+              checkpointRevision: binding.checkpointRevision,
+              writer,
+              slice,
+              writePathAllowlist: input.config.writePathAllowlist,
+              attempt: binding.attempt,
+              baseline: observed.baseline,
+              actual: observed.actual,
+              evidenceBundle: evidence.bundle,
+              evidenceBundleDigest: evidence.digest,
+              ...(previousRawPatchDigest === undefined
+                ? {}
+                : { previousBlockingRawPatchDigest: previousRawPatchDigest }),
+              taskBrief: input.taskBrief,
+              createReviewerSession: input.createReviewerSession,
+              baselineStore: baselines,
+            });
+            return {
+              kind: "ARTIFACT" as const,
+              artifact: result.decision,
+              modelCalls: result.review.modelCalls,
+            };
+          } catch (error) {
+            if (
+              !(error instanceof ReviewContractError) ||
+              error.message !== PRE_COMMIT_REVIEW_NO_CHANGE
+            ) {
+              throw error;
+            }
+            return {
+              kind: "ARTIFACT" as const,
+              artifact: engineeringArtifact.parse({
+                schema_version: 1,
+                artifact_kind: "TerminalReason",
+                case_id: binding.caseId,
+                run_id: binding.runId,
+                revision: binding.checkpointRevision,
+                reason: "EXHAUSTED",
+                detail: "NO_PROGRESS: corrected attempt produced no change from the rejected patch",
+              }),
+              modelCalls: 0,
+            };
+          }
+        },
       );
-      try {
-        const result = await executeVerticalSliceReview({
-          db: input.db,
-          lease: input.lease,
-          workspaceConfig: input.config.workspaceConfig,
-          repositoryId: input.config.repositoryId,
-          caseId: binding.caseId,
-          runId: binding.runId,
-          workUnitId: binding.workUnitId,
-          checkpointRevision: binding.checkpointRevision,
-          writer,
-          slice,
-          writePathAllowlist: input.config.writePathAllowlist,
-          attempt: binding.attempt,
-          baseline: observed.baseline,
-          actual: observed.actual,
-          evidenceBundle: evidence.bundle,
-          evidenceBundleDigest: evidence.digest,
-          ...(previousRawPatchDigest === undefined
-            ? {}
-            : { previousBlockingRawPatchDigest: previousRawPatchDigest }),
-          taskBrief: input.taskBrief,
-          createReviewerSession: input.createReviewerSession,
-          baselineStore: baselines,
-        });
-        return {
-          kind: "ARTIFACT",
-          artifact: result.decision,
-          modelCalls: result.review.modelCalls,
-        };
-      } catch (error) {
-        if (
-          !(error instanceof ReviewContractError) ||
-          error.message !== PRE_COMMIT_REVIEW_NO_CHANGE
-        ) {
-          throw error;
-        }
-        return {
-          kind: "ARTIFACT",
-          artifact: engineeringArtifact.parse({
-            schema_version: 1,
-            artifact_kind: "TerminalReason",
-            case_id: binding.caseId,
-            run_id: binding.runId,
-            revision: binding.checkpointRevision,
-            reason: "EXHAUSTED",
-            detail: "NO_PROGRESS: corrected attempt produced no change from the rejected patch",
-          }),
-          modelCalls: 0,
-        };
-      }
     },
   };
 

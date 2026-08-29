@@ -6,6 +6,10 @@ import { afterEach, expect, it } from "vitest";
 import { canonicalDigest } from "@remoteagent/contracts";
 import type { Database, JobLease } from "@remoteagent/database";
 import type { RuntimeTransport } from "@remoteagent/bedrock-runtime";
+import {
+  createSubscriptionModelInvocationDescriptor,
+  subscriptionModelProfileV1,
+} from "@remoteagent/model-runtime";
 import { StructuredLogger } from "@remoteagent/observability";
 
 import {
@@ -129,22 +133,42 @@ it("records slice checklist, round and token budgets with code-owned decision co
     artifactRoot: root,
     invocationId: "progress-slice-one",
   });
-  const transport = createEngineeringDebugTransport({
-    async converse(_request, config) {
-      return {
-        model: config.model,
-        usage: { inputTokens: 90, outputTokens: 30, totalTokens: 120 },
-        content: [
-          {
-            type: "tool-use",
-            id: "private-tool-id",
-            name: "write",
-            input: { relative_path: "src/feature.test.ts", content: "private test bytes" },
-          },
-        ],
-      };
-    },
+  const invocation = createSubscriptionModelInvocationDescriptor({
+    role: "IMPLEMENTER",
+    profile: subscriptionModelProfileV1.parse({
+      schema_version: 1,
+      profile_name: "codex-implementer",
+      provider: "codex_cli",
+      executable: process.execPath,
+      model: "gpt-5.6-codex",
+      timeout_ms: 10_000,
+      kill_grace_ms: 100,
+      max_stdin_bytes: 65_536,
+      max_stdout_bytes: 65_536,
+      max_stderr_bytes: 4096,
+    }),
+    clientVersion: "0.147.0",
+    deploymentConfigDigest: `sha256:${"d".repeat(64)}`,
   });
+  const transport = createEngineeringDebugTransport(
+    {
+      async converse(_request, config) {
+        return {
+          model: config.model,
+          usage: { inputTokens: 90, outputTokens: 30, totalTokens: 120 },
+          content: [
+            {
+              type: "tool-use",
+              id: "private-tool-id",
+              name: "write",
+              input: { relative_path: "src/feature.test.ts", content: "private test bytes" },
+            },
+          ],
+        };
+      },
+    },
+    { role: "IMPLEMENTER", invocation },
+  );
   await runWithEngineeringDebugJournal(journal, () =>
     runWithEngineeringDebugSlice("SLICE_IMPLEMENTATION", "slice-one", 2, () =>
       transport.converse(
@@ -204,10 +228,29 @@ it("records slice checklist, round and token budgets with code-owned decision co
       final_call_reserved: ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
     },
   });
+  expect(records.find((record) => record.event === "MODEL_USAGE")).toMatchObject({
+    stage: "SLICE_IMPLEMENTATION",
+    role: "IMPLEMENTER",
+    slice_id: "slice-one",
+    attempt: 2,
+    invocation_digest: canonicalDigest(invocation),
+    provider: "codex_cli",
+    profile_name: "codex-implementer",
+    model: "gpt-5.6-codex",
+    client_version: "0.147.0",
+    response_input_tokens: 90,
+    response_output_tokens: 30,
+    response_total_tokens: 120,
+    provider_reported: true,
+  });
   expect(JSON.stringify(snapshot)).toContain('"item":"TEST_FIRST","status":"COMPLETE"');
   expect(text).not.toContain("private objective");
   expect(text).not.toContain("private test bytes");
   expect(text).not.toContain("private-tool-id");
+  expect(text).not.toContain(process.execPath);
+  expect(() =>
+    createEngineeringDebugTransport(transport, { role: "REVIEWER", invocation }),
+  ).toThrow(/role does not match/u);
 });
 
 it("resets round and call progress for each slice attempt while retaining global token usage", async () => {

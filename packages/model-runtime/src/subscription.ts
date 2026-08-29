@@ -48,10 +48,21 @@ export const subscriptionModelProfileV1 = z
   .strict();
 export type SubscriptionModelProfileV1 = z.infer<typeof subscriptionModelProfileV1>;
 
-export const subscriptionModelDeploymentConfigV1 = z
+export const subscriptionModelRoutesV1 = z
   .object({
-    schema_version: z.literal(1),
+    DESIGNER: boundedName,
+    IMPLEMENTER: boundedName,
+    REVIEWER: boundedName,
+    VERIFIER: boundedName,
+  })
+  .strict();
+export type SubscriptionModelRoutesV1 = z.infer<typeof subscriptionModelRoutesV1>;
+
+export const subscriptionModelDeploymentConfigV2 = z
+  .object({
+    schema_version: z.literal(2),
     profiles: z.array(subscriptionModelProfileV1).min(1).max(32),
+    routes: subscriptionModelRoutesV1,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -62,15 +73,31 @@ export const subscriptionModelDeploymentConfigV1 = z
     if (names.some((name, index) => index > 0 && names[index - 1]! >= name)) {
       ctx.addIssue({ code: "custom", path: ["profiles"], message: "profiles must be sorted" });
     }
+    const knownProfiles = new Set(names);
+    for (const role of subscriptionModelRole.options) {
+      if (!knownProfiles.has(value.routes[role])) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["routes", role],
+          message: "role route must reference an existing profile",
+        });
+      }
+    }
   });
-export type SubscriptionModelDeploymentConfigV1 = z.infer<
-  typeof subscriptionModelDeploymentConfigV1
+export type SubscriptionModelDeploymentConfigV2 = z.infer<
+  typeof subscriptionModelDeploymentConfigV2
 >;
 
 export type LoadedSubscriptionModelDeployment = Readonly<{
-  config: SubscriptionModelDeploymentConfigV1;
+  config: SubscriptionModelDeploymentConfigV2;
   configDigest: string;
   profiles: ReadonlyMap<string, SubscriptionModelProfileV1>;
+}>;
+
+export type ResolvedSubscriptionModelRoute = Readonly<{
+  role: SubscriptionModelRole;
+  profile: SubscriptionModelProfileV1;
+  deploymentConfigDigest: string;
 }>;
 
 class ImmutableProfileMap implements ReadonlyMap<string, SubscriptionModelProfileV1> {
@@ -129,10 +156,15 @@ function freezeProfile(profile: SubscriptionModelProfileV1): SubscriptionModelPr
 export function normalizeSubscriptionModelDeploymentConfig(
   input: unknown,
 ): LoadedSubscriptionModelDeployment {
-  const parsed = subscriptionModelDeploymentConfigV1.parse(input);
+  const parsed = subscriptionModelDeploymentConfigV2.parse(input);
   const profiles = parsed.profiles.map(freezeProfile);
   Object.freeze(profiles);
-  const config: SubscriptionModelDeploymentConfigV1 = { schema_version: 1, profiles };
+  const routes = Object.freeze({ ...parsed.routes });
+  const config: SubscriptionModelDeploymentConfigV2 = {
+    schema_version: 2,
+    profiles,
+    routes,
+  };
   Object.freeze(config);
   return Object.freeze({
     config,
@@ -140,6 +172,21 @@ export function normalizeSubscriptionModelDeploymentConfig(
     profiles: new ImmutableProfileMap(
       profiles.map((profile) => [profile.profile_name, profile] as const),
     ),
+  });
+}
+
+export function resolveSubscriptionModelRoute(
+  deployment: LoadedSubscriptionModelDeployment,
+  role: SubscriptionModelRole,
+): ResolvedSubscriptionModelRoute {
+  const parsedRole = subscriptionModelRole.parse(role);
+  const profileName = deployment.config.routes[parsedRole];
+  const profile = deployment.profiles.get(profileName);
+  if (!profile) throw new Error("subscription model route references an unavailable profile");
+  return Object.freeze({
+    role: parsedRole,
+    profile,
+    deploymentConfigDigest: deployment.configDigest,
   });
 }
 
@@ -218,6 +265,37 @@ export function createSubscriptionModelInvocationDescriptor(input: {
     deployment_config_digest: input.deploymentConfigDigest,
     profile_config_digest: canonicalDigest(input.profile),
   });
+}
+
+export function createRoutedSubscriptionModelInvocationDescriptor(input: {
+  deployment: LoadedSubscriptionModelDeployment;
+  role: SubscriptionModelRole;
+  clientVersion: string;
+}): SubscriptionModelInvocationDescriptorV1 {
+  const route = resolveSubscriptionModelRoute(input.deployment, input.role);
+  return createSubscriptionModelInvocationDescriptor({
+    role: route.role,
+    profile: route.profile,
+    clientVersion: input.clientVersion,
+    deploymentConfigDigest: route.deploymentConfigDigest,
+  });
+}
+
+export function assertSubscriptionModelInvocationRoute(input: {
+  deployment: LoadedSubscriptionModelDeployment;
+  role: SubscriptionModelRole;
+  invocation: unknown;
+}): SubscriptionModelInvocationDescriptorV1 {
+  const invocation = subscriptionModelInvocationDescriptorV1.parse(input.invocation);
+  const expected = createRoutedSubscriptionModelInvocationDescriptor({
+    deployment: input.deployment,
+    role: input.role,
+    clientVersion: invocation.client_version,
+  });
+  if (canonicalDigest(invocation) !== canonicalDigest(expected)) {
+    throw new Error("subscription model invocation does not match configured role route");
+  }
+  return invocation;
 }
 
 export const subscriptionModelUsage = z

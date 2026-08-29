@@ -258,6 +258,7 @@ export type EngineeringStageExecution =
 
 export interface EngineeringStageExecutor {
   readonly configDigest: string;
+  readonly configDigestForStage?: (stage: EngineeringStageValue) => string;
   readonly slicePlanningConstraints?: EngineeringSlicePlanningConstraints;
   readonly schemaDigest: (stage: EngineeringStageValue) => string;
   /** Present only for an authenticated official subscription-provider invocation. */
@@ -1878,7 +1879,8 @@ class PostgresEngineeringRuntimePort implements EngineeringRuntimePort {
                 : binding.stage === EngineeringStage.GATE_EXECUTION
                   ? (this.#options.gateExecutor?.configDigest ??
                     this.#options.executor.configDigest)
-                  : this.#options.executor.configDigest,
+                  : (this.#options.executor.configDigestForStage?.(binding.stage) ??
+                    this.#options.executor.configDigest),
         schemaDigest:
           binding.stage === EngineeringStage.SLICE_IMPLEMENTATION
             ? (this.#options.implementationExecutor?.schemaDigest ?? SYSTEM_SCHEMA_DIGEST)

@@ -67,9 +67,8 @@ import { createJiraReconcileRun, ensureJiraConnection } from "./jira-reconcile.j
 import { WorkerPersistence } from "./persistence.js";
 import { createRoles, roleConfigFromEnv } from "./roles.js";
 import { createEngineeringRoleContextReader } from "./context.js";
-import { createStructuredPreCommitReviewSessionFactory } from "./engineering-workflow.js";
 import {
-  createConfiguredEngineeringStageExecutor,
+  createEngineeringRoleModelComposition,
   createProductionEngineeringRuntimePort,
   engineeringExecutionConfigFromEnv,
 } from "./engineering-execution.js";
@@ -78,6 +77,7 @@ import {
   createEngineeringDebugTransport,
   createEngineeringInvocationJournalRunner,
 } from "./engineering-debug-journal.js";
+import { engineeringModelRoutingFromEnv } from "./engineering-model-routing.js";
 
 /**
  * Roles this worker can execute. IMPLEMENTER is included because `agent.implementer` jobs
@@ -424,27 +424,19 @@ export async function main(): Promise<void> {
     },
   });
   const engineeringExecutionConfig = await engineeringExecutionConfigFromEnv();
-  const engineeringModel = modelBindings.engineering;
-  const engineeringTransport =
-    engineeringModel === null ? null : createEngineeringDebugTransport(engineeringModel.transport);
-  const engineeringExecutor =
-    engineeringExecutionConfig === null ||
-    engineeringModel === null ||
-    engineeringTransport === null
-      ? undefined
-      : createConfiguredEngineeringStageExecutor({
-          transport: engineeringTransport,
-          modelConfig: engineeringModel.config,
-          executionConfig: engineeringExecutionConfig,
-          modelInvocation: engineeringModel.stageInvocation,
-        });
-  const preCommitReview =
-    engineeringModel === null || engineeringTransport === null
+  const engineeringModelRouting =
+    engineeringExecutionConfig === null ? null : await engineeringModelRoutingFromEnv();
+  const engineeringModels =
+    engineeringExecutionConfig === null || engineeringModelRouting === null
       ? null
-      : createStructuredPreCommitReviewSessionFactory({
-          transport: engineeringTransport,
-          config: engineeringModel.config,
-          modelInvocation: engineeringModel.reviewInvocation,
+      : createEngineeringRoleModelComposition({
+          routing: engineeringModelRouting,
+          executionConfig: engineeringExecutionConfig,
+          decorateTransport: (binding) =>
+            createEngineeringDebugTransport(binding.transport, {
+              role: binding.role,
+              invocation: binding.invocation,
+            }),
         });
   const handlers = createWorkerHandlers(
     {
@@ -465,7 +457,10 @@ export async function main(): Promise<void> {
             engineeringInvocation: createEngineeringInvocationJournalRunner({
               artifactRoot: engineeringExecutionConfig.artifactRoot,
               db,
-              model: engineeringModel?.config.model.model_id ?? "subscription-provider-unavailable",
+              model:
+                engineeringModelRouting === null
+                  ? "subscription-provider-unavailable"
+                  : "role-routed-subscription",
               configDigest: engineeringExecutionConfig.configDigest,
               logger,
             }),
@@ -476,31 +471,24 @@ export async function main(): Promise<void> {
             "engineering execution is not configured: RA_ENGINEERING_CONFIG_PATH is required",
           );
         }
-        if (engineeringExecutor === undefined) {
+        if (engineeringModels === null) {
           throw new Error(
             "engineering subscription provider is unavailable; Bedrock fallback is disabled",
           );
-        }
-        if (
-          engineeringModel === null ||
-          engineeringTransport === null ||
-          preCommitReview === null
-        ) {
-          throw new Error("engineering subscription provider binding is unavailable");
         }
         return createProductionEngineeringRuntimePort({
           db,
           lease,
           jobs,
           config: engineeringExecutionConfig,
-          transport: engineeringTransport,
-          modelConfig: engineeringModel.config,
+          transport: engineeringModels.implementation.transport,
+          modelConfig: engineeringModels.implementation.config,
           readContext,
-          stageExecutor: engineeringExecutor,
-          reviewSessionFactory: preCommitReview.createSession,
-          implementationModelInvocation: engineeringModel.implementationInvocation,
-          reviewModelInvocation: engineeringModel.reviewInvocation,
-          modelPreflight: engineeringModel.assertReadyForInvocation,
+          stageExecutor: engineeringModels.stageExecutor,
+          reviewSessionFactory: engineeringModels.reviewSessionFactory.createSession,
+          implementationModelInvocation: engineeringModels.implementation.invocation,
+          reviewModelInvocation: engineeringModels.reviewer.invocation,
+          modelPreflight: engineeringModels.modelPreflight,
           metrics,
           policy: {
             // Conservative deployment default. No model output can downgrade this class, and the
@@ -525,22 +513,19 @@ export async function main(): Promise<void> {
     extra,
   );
   const continuation =
-    engineeringExecutionConfig === null ||
-    engineeringExecutor === undefined ||
-    engineeringModel === null ||
-    engineeringTransport === null ||
-    preCommitReview === null
+    engineeringExecutionConfig === null || engineeringModels === null
       ? undefined
       : createProductionEngineeringRecoveryCoordinator({
           db,
           jobs,
           owner: config.owner,
           config: engineeringExecutionConfig,
-          transport: engineeringTransport,
-          modelConfig: engineeringModel.config,
+          transport: engineeringModels.implementation.transport,
+          modelConfig: engineeringModels.implementation.config,
           readContext,
-          stageExecutor: engineeringExecutor,
-          createReviewerSession: preCommitReview.createSession,
+          stageExecutor: engineeringModels.stageExecutor,
+          createReviewerSession: engineeringModels.reviewSessionFactory.createSession,
+          modelPreflight: engineeringModels.modelPreflight,
         });
   const workerRuntime = bootstrapWorker({
     config,

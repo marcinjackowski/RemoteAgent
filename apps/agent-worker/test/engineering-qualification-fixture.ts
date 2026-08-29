@@ -47,9 +47,14 @@ import {
 } from "../src/engineering-workflow.js";
 import {
   createConfiguredEngineeringStageExecutor,
+  createEngineeringRoleModelComposition,
   createProductionEngineeringRuntimePort,
   type EngineeringExecutionConfig,
 } from "../src/engineering-execution.js";
+import type {
+  EngineeringModelRoleBinding,
+  ProductionEngineeringModelRouting,
+} from "../src/engineering-model-routing.js";
 import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
 
@@ -65,10 +70,14 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
   readonly #runId: string;
   readonly #sliceIds: readonly string[];
   readonly #implementationPaths: readonly string[];
+  readonly #reviewOutcomes: readonly ("CHANGES_REQUIRED" | "PASS")[];
   readonly #processClass: "SMALL" | "MEDIUM" | "LARGE_OR_HIGH_RISK";
+  readonly #fileContents = new Map<string, string>();
   #planning = 0;
   #implementation = 0;
   #awaitingImplementationReport = false;
+  #pendingImplementationContent = "";
+  #review = 0;
   #memory = 0;
 
   public constructor(input: {
@@ -76,12 +85,14 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
     runId: string;
     sliceIds: readonly string[];
     implementationPaths: readonly string[];
+    reviewOutcomes?: readonly ("CHANGES_REQUIRED" | "PASS")[];
     processClass: "SMALL" | "MEDIUM" | "LARGE_OR_HIGH_RISK";
   }) {
     this.#caseId = input.caseId;
     this.#runId = input.runId;
     this.#sliceIds = input.sliceIds;
     this.#implementationPaths = input.implementationPaths;
+    this.#reviewOutcomes = input.reviewOutcomes ?? [];
     this.#processClass = input.processClass;
   }
 
@@ -135,7 +146,7 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
         schema_version: 2,
         artifact_kind: "ProgramDesign",
         call_flow: [...this.#sliceIds],
-        file_tree_delta: [...this.#implementationPaths],
+        file_tree_delta: [...new Set(this.#implementationPaths)],
         key_types_and_signatures: ["bounded qualification files"],
         uncertainty_review: ["review every slice"],
         expected_tests: ["qualification"],
@@ -194,30 +205,68 @@ export class EngineeringQualificationTransport implements RuntimeTransport {
       if (path === undefined) throw new Error("unexpected extra implementation call");
       if (!this.#awaitingImplementationReport) {
         this.#awaitingImplementationReport = true;
+        const previous = this.#fileContents.get(path);
+        const content =
+          previous === undefined
+            ? path === "src/qualified.ts"
+              ? "export const qualification = 'qualified-green';\n"
+              : `export const slice${String(index + 1)} = true;\n`
+            : `export const slice${String(index + 1)} = 'corrected';\n`;
+        this.#pendingImplementationContent = content;
         return {
           model: qualificationModel,
           content: [
-            {
-              type: "tool-use",
-              id: `write-${String(index)}`,
-              name: "write",
-              input: {
-                relative_path: path,
-                content:
-                  path === "src/qualified.ts"
-                    ? "export const qualification = 'qualified-green';\n"
-                    : `export const slice${String(index + 1)} = true;\n`,
-              },
-            },
+            previous === undefined
+              ? {
+                  type: "tool-use",
+                  id: `write-${String(index)}`,
+                  name: "write",
+                  input: { relative_path: path, content },
+                }
+              : {
+                  type: "tool-use",
+                  id: `patch-${String(index)}`,
+                  name: "patch",
+                  input: {
+                    replacement_files: [
+                      {
+                        relative_path: path,
+                        replacements: [{ old_content: previous, new_content: content }],
+                      },
+                    ],
+                  },
+                },
           ],
         };
       }
       this.#awaitingImplementationReport = false;
+      this.#fileContents.set(path, this.#pendingImplementationContent);
       this.#implementation += 1;
       return json({ schema_version: 1, changed_files: [path] });
     }
     if (name === "PreCommitReviewOutput_v1") {
-      return json({ schema_version: 1, findings: [], lines_examined: 20 });
+      const outcome = this.#reviewOutcomes[this.#review] ?? "PASS";
+      this.#review += 1;
+      return json(
+        outcome === "PASS"
+          ? { schema_version: 1, findings: [], lines_examined: 20 }
+          : {
+              schema_version: 1,
+              findings: [
+                {
+                  severity: "MEDIUM",
+                  summary: "The bounded implementation needs one correction.",
+                  location: {
+                    relative_path: this.#implementationPaths[this.#implementation - 1],
+                    line: 1,
+                  },
+                  evidence: this.#pendingImplementationContent.trim(),
+                  required_fix: "Replace it with the accepted corrected value.",
+                },
+              ],
+              lines_examined: 20,
+            },
+      );
     }
     if (name === "EngineeringMemoryUpdate_v1") {
       this.#memory += 1;
@@ -301,6 +350,8 @@ export interface EngineeringQualificationFixture {
     lease: JobLease,
     input: {
       readonly transport: RuntimeTransport;
+      readonly modelRouting?: ProductionEngineeringModelRouting;
+      readonly decorateTransport?: (binding: EngineeringModelRoleBinding) => RuntimeTransport;
       readonly policy: EngineeringWorkflowPolicyOptions;
       readonly workflowDeadlineMs?: number;
       readonly controlPlane?: EngineeringControlPlaneRepository;
@@ -638,26 +689,49 @@ export async function createEngineeringQualificationFixture(
     },
     makeProduction: (lease, input) => {
       const executionConfig = input.executionConfig ?? config;
-      const stageExecutor = createConfiguredEngineeringStageExecutor({
-        transport: input.transport,
-        modelConfig,
-        executionConfig,
-      });
-      const reviewer = createBedrockPreCommitReviewSessionFactory({
-        transport: input.transport,
-        config: modelConfig,
-      });
+      const roleModels =
+        input.modelRouting === undefined
+          ? null
+          : createEngineeringRoleModelComposition({
+              routing: input.modelRouting,
+              executionConfig,
+              ...(input.decorateTransport === undefined
+                ? {}
+                : { decorateTransport: input.decorateTransport }),
+            });
+      const stageExecutor =
+        roleModels?.stageExecutor ??
+        createConfiguredEngineeringStageExecutor({
+          transport: input.transport,
+          modelConfig,
+          executionConfig,
+        });
+      const reviewer =
+        roleModels?.reviewSessionFactory ??
+        createBedrockPreCommitReviewSessionFactory({
+          transport: input.transport,
+          config: modelConfig,
+        });
+      const implementationTransport = roleModels?.implementation.transport ?? input.transport;
+      const implementationConfig = roleModels?.implementation.config ?? modelConfig;
       const makePort = () =>
         createProductionEngineeringRuntimePort({
           db,
           jobs,
           lease,
           config: executionConfig,
-          transport: input.transport,
-          modelConfig,
+          transport: implementationTransport,
+          modelConfig: implementationConfig,
           readContext,
           stageExecutor,
           reviewSessionFactory: reviewer.createSession,
+          ...(roleModels === null
+            ? {}
+            : {
+                implementationModelInvocation: roleModels.implementation.invocation,
+                reviewModelInvocation: roleModels.reviewer.invocation,
+                modelPreflight: roleModels.modelPreflight,
+              }),
           policy: input.policy,
           ...(input.metrics === undefined ? {} : { metrics: input.metrics }),
           ...(input.controlPlane === undefined ? {} : { controlPlane: input.controlPlane }),

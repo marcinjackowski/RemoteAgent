@@ -7,6 +7,11 @@ import { EngineeringStage, canonicalDigest } from "@remoteagent/contracts";
 import { FakeTransport, ToolLimitError, createRuntimeConfig } from "@remoteagent/bedrock-runtime";
 import { ToolInputError } from "@remoteagent/bedrock-runtime";
 import {
+  createSubscriptionModelInvocationDescriptor,
+  subscriptionModelProfileV1,
+  type SubscriptionModelRole,
+} from "@remoteagent/model-runtime";
+import {
   LocalArtifactStore,
   VerificationGateOutcome,
   VerificationGateReceipt,
@@ -21,7 +26,9 @@ import {
   buildEngineeringGateFailureArtifact,
   classifyEngineeringModelUsage,
   createConfiguredEngineeringStageExecutor,
+  createEngineeringRoleModelComposition,
   emptyEngineeringModelUsage,
+  engineeringModelRoleForStage,
   engineeringImplementationContext,
   engineeringCorrectionImplementationContext,
   engineeringImplementationDiscoveryCallLimit,
@@ -41,6 +48,108 @@ const cleanup: string[] = [];
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+it("routes every Engineering stage through its immutable subscription role", async () => {
+  const preflightRoles: SubscriptionModelRole[] = [];
+  const roleBinding = (role: SubscriptionModelRole) => {
+    const provider = role === "IMPLEMENTER" || role === "VERIFIER" ? "claude_code" : "codex_cli";
+    const model = `${role.toLowerCase()}-model`;
+    const profile = subscriptionModelProfileV1.parse({
+      schema_version: 1,
+      profile_name: `${role.toLowerCase()}-profile`,
+      provider,
+      executable: process.execPath,
+      model,
+      timeout_ms: 10_000,
+      kill_grace_ms: 100,
+      max_stdin_bytes: 65_536,
+      max_stdout_bytes: 65_536,
+      max_stderr_bytes: 4096,
+    });
+    const invocation = createSubscriptionModelInvocationDescriptor({
+      role,
+      profile,
+      clientVersion: provider === "codex_cli" ? "0.147.0" : "2.1.250",
+      deploymentConfigDigest: `sha256:${"a".repeat(64)}`,
+    });
+    const config = createRuntimeConfig({
+      model: { provider, model_id: model },
+      timeoutMs: 10_000,
+      toolLimits: { maxIterations: 16, maxCalls: 64 },
+    });
+    return Object.freeze({
+      role,
+      transport: Object.assign(new FakeTransport([]), {
+        assertInvocationReady: async () => undefined,
+      }),
+      config,
+      invocation,
+      assertReadyForInvocation: async () => {
+        preflightRoles.push(role);
+      },
+    });
+  };
+  const roles = Object.freeze({
+    DESIGNER: roleBinding("DESIGNER"),
+    IMPLEMENTER: roleBinding("IMPLEMENTER"),
+    REVIEWER: roleBinding("REVIEWER"),
+    VERIFIER: roleBinding("VERIFIER"),
+  });
+  const routing = Object.freeze({
+    authority: "OFFICIAL_SUBSCRIPTION_CLI" as const,
+    deployment: {} as never,
+    deploymentConfigDigest: `sha256:${"a".repeat(64)}`,
+    roles,
+    forRole: (role: SubscriptionModelRole) => roles[role],
+  });
+  const composition = createEngineeringRoleModelComposition({
+    routing,
+    executionConfig: {
+      configDigest: `sha256:${"b".repeat(64)}`,
+      writePathAllowlist: ["src"],
+      testPathAllowlist: ["src"],
+      catalog: {
+        definitions: [{ required: true, gate_id: "unit", gate_schedule: "EACH_SLICE" }],
+      },
+    } as never,
+  });
+  const expected = new Map<EngineeringStage, SubscriptionModelRole | null>([
+    [EngineeringStage.DISCOVERY, null],
+    [EngineeringStage.OUTCOME_DEFINITION, "DESIGNER"],
+    [EngineeringStage.SYSTEM_DESIGN, "DESIGNER"],
+    [EngineeringStage.PROGRAM_DESIGN, "DESIGNER"],
+    [EngineeringStage.DESIGN_APPROVAL, "REVIEWER"],
+    [EngineeringStage.SLICE_PLANNING, "DESIGNER"],
+    [EngineeringStage.SLICE_IMPLEMENTATION, "IMPLEMENTER"],
+    [EngineeringStage.GATE_EXECUTION, null],
+    [EngineeringStage.SLICE_REVIEW, "REVIEWER"],
+    [EngineeringStage.MEMORY_PROJECTION, "DESIGNER"],
+    [EngineeringStage.FINAL_VERIFICATION, "VERIFIER"],
+    [EngineeringStage.LOCAL_COMMIT, null],
+  ]);
+  for (const [stage, role] of expected) {
+    expect(engineeringModelRoleForStage(stage)).toBe(role);
+    expect(composition.stageExecutor.modelInvocation?.(stage)?.role ?? null).toBe(role);
+  }
+  expect(
+    composition.stageExecutor.configDigestForStage?.(EngineeringStage.OUTCOME_DEFINITION),
+  ).toBe(composition.stageExecutor.configDigestForStage?.(EngineeringStage.PROGRAM_DESIGN));
+  expect(
+    composition.stageExecutor.configDigestForStage?.(EngineeringStage.FINAL_VERIFICATION),
+  ).not.toBe(composition.stageExecutor.configDigestForStage?.(EngineeringStage.PROGRAM_DESIGN));
+
+  await composition.modelPreflight({
+    binding: { stage: EngineeringStage.DESIGN_APPROVAL } as never,
+    invocation: roles.REVIEWER.invocation,
+  });
+  expect(preflightRoles).toEqual(["REVIEWER"]);
+  await expect(
+    composition.modelPreflight({
+      binding: { stage: EngineeringStage.DESIGN_APPROVAL } as never,
+      invocation: roles.DESIGNER.invocation,
+    }),
+  ).rejects.toThrow(/matching subscription role/u);
 });
 
 it("maps real bounded-tool schema failures without echoing rejected values", () => {

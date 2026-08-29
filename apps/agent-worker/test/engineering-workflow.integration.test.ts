@@ -1094,6 +1094,7 @@ describeIntegration(
         readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
         executor: {
           configDigest: sha("5"),
+          configDigestForStage: () => sha("7"),
           schemaDigest: () => sha("6"),
           modelInvocation: () => modelInvocation,
           execute: async ({ binding }) => {
@@ -1144,13 +1145,17 @@ describeIntegration(
       await crashed.open(runtimeIdentity());
       await crashed.prepareContext(binding);
       expect(preflightCalls).toBe(1);
-      const intent = await db.query<{ descriptor: Record<string, unknown> }>(
-        `SELECT i.descriptor
+      const intent = await db.query<{
+        descriptor: Record<string, unknown>;
+        config_digest: string;
+      }>(
+        `SELECT i.descriptor,o.config_digest
            FROM engineering_operations o
            JOIN job_intents i ON i.intent_id=o.intent_id
           WHERE o.run_id='run-1' AND o.stage='SLICE_PLANNING' AND o.stage_attempt=1`,
       );
       expect(intent.rows[0]!.descriptor.model_invocation).toEqual(modelInvocation);
+      expect(intent.rows[0]!.config_digest).toBe(sha("7"));
       const intentOnly = createPostgresEngineeringRuntimePort(options);
       await intentOnly.open(runtimeIdentity());
       expect(await intentOnly.recoverStage(binding)).toEqual({ status: "NOT_STARTED" });

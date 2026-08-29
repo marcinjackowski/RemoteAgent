@@ -13,7 +13,11 @@ import {
   type EngineeringWriteDeploymentPolicyV1,
 } from "@remoteagent/contracts";
 import type { EngineeringStageBinding } from "@remoteagent/agent-orchestrator";
-import type { RuntimeConfig, RuntimeTransport } from "@remoteagent/model-runtime";
+import type {
+  RuntimeConfig,
+  RuntimeTransport,
+  SubscriptionModelInvocationDescriptorV1,
+} from "@remoteagent/model-runtime";
 import {
   EngineeringControlPlaneRepository,
   EngineeringRecoveryRepository,
@@ -87,6 +91,13 @@ export interface EngineeringStageRecoveryOptions {
   readonly writeDeploymentPolicy: EngineeringWriteDeploymentPolicyV1;
   readonly stageConfigDigest: (stage: EngineeringStageValue) => string;
   readonly stageSchemaDigest: (stage: EngineeringStageValue) => string;
+  readonly stageModelInvocation?: (
+    stage: EngineeringStageValue,
+  ) => SubscriptionModelInvocationDescriptorV1 | undefined;
+  readonly modelPreflight?: (input: {
+    binding: EngineeringStageBinding;
+    invocation: SubscriptionModelInvocationDescriptorV1;
+  }) => Promise<void>;
   readonly gateExecutor?: EngineeringGateStageExecutor;
   readonly localCommitExecutor?: EngineeringLocalCommitStageExecutor;
   readonly controlPlane?: EngineeringControlPlaneRepository;
@@ -104,6 +115,10 @@ export interface ProductionEngineeringRecoveryCoordinatorOptions {
   readonly readContext: RoleContextReader;
   readonly stageExecutor: EngineeringStageExecutor;
   readonly createReviewerSession: PreCommitReviewSessionFactory;
+  readonly modelPreflight?: (input: {
+    binding: EngineeringStageBinding;
+    invocation: SubscriptionModelInvocationDescriptorV1;
+  }) => Promise<void>;
   readonly workflowDeadlineMs?: number;
   readonly recoveryLeaseMs?: number;
   readonly recoveries?: EngineeringRecoveryRepository;
@@ -376,14 +391,23 @@ export async function classifyEngineeringRecovery(
       : exactBinding.stage === EngineeringStage.LOCAL_COMMIT
         ? input.localCommitExecutor?.schemaDigest
         : input.stageSchemaDigest(exactBinding.stage);
+  const expectedModelInvocation = input.stageModelInvocation?.(exactBinding.stage);
+  const actualModelInvocation = descriptor.model_invocation;
   if (
     expectedConfig === undefined ||
     expectedSchema === undefined ||
     row.source_config_digest !== expectedConfig ||
     row.source_schema_digest !== expectedSchema ||
-    row.source_deadline_at?.getTime() !== row.workflow_deadline_at.getTime()
+    row.source_deadline_at?.getTime() !== row.workflow_deadline_at.getTime() ||
+    (input.stageModelInvocation !== undefined &&
+      ((actualModelInvocation === undefined) !== (expectedModelInvocation === undefined) ||
+        (actualModelInvocation !== undefined &&
+          expectedModelInvocation !== undefined &&
+          canonicalDigest(actualModelInvocation) !== canonicalDigest(expectedModelInvocation))))
   ) {
-    throw new Error("engineering recovery config, schema, or deadline changed");
+    throw new Error(
+      "engineering recovery config, schema, or deadline changed; model invocation may also differ",
+    );
   }
   const opPlan = operationPlan(input.lease, descriptor);
   const durableEvidence = canonicalDigest({
@@ -453,6 +477,12 @@ export async function classifyEngineeringRecovery(
       const bound = await recoveries.bindPlan(input.db, input.lease, terminalPlan);
       await recoveries.terminateRecovery(input.db, input.lease, bound.planDigest);
       return { status: "TERMINAL", ...bound, terminal: classification };
+    }
+    if (retryModel && input.stageModelInvocation !== undefined) {
+      if (expectedModelInvocation === undefined || input.modelPreflight === undefined) {
+        throw new Error("engineering model recovery lacks an exact authenticated route");
+      }
+      await input.modelPreflight({ binding: exactBinding, invocation: expectedModelInvocation });
     }
     const retryPlan = plan({
       lease: input.lease,
@@ -618,8 +648,16 @@ export function createProductionEngineeringRecoveryCoordinator(
       lease: recoveryLease,
       readContext: input.readContext,
       writeDeploymentPolicy: input.config.writeDeploymentPolicy,
-      stageConfigDigest: () => input.stageExecutor.configDigest,
+      stageConfigDigest: (stage) =>
+        input.stageExecutor.configDigestForStage?.(stage) ?? input.stageExecutor.configDigest,
       stageSchemaDigest: (stage) => input.stageExecutor.schemaDigest(stage),
+      ...(input.stageExecutor.modelInvocation === undefined
+        ? {}
+        : {
+            stageModelInvocation: (stage: EngineeringStageValue) =>
+              input.stageExecutor.modelInvocation?.(stage) ?? undefined,
+          }),
+      ...(input.modelPreflight === undefined ? {} : { modelPreflight: input.modelPreflight }),
       gateExecutor: execution.gateExecutor,
       localCommitExecutor: execution.localCommitExecutor,
       controlPlane: control,

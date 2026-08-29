@@ -15,6 +15,10 @@ import type {
   RuntimeResponse,
   RuntimeTransport,
 } from "@remoteagent/bedrock-runtime";
+import {
+  createSubscriptionModelInvocationDescriptor,
+  subscriptionModelProfileV1,
+} from "@remoteagent/model-runtime";
 import { afterEach, expect, it } from "vitest";
 
 import {
@@ -106,9 +110,32 @@ describeIntegration(
       });
       const control = new EngineeringControlPlaneRepository(productionRuntime(), fixture.jobs);
       const transport = new NoCallTransport();
+      const modelInvocation = createSubscriptionModelInvocationDescriptor({
+        role: "DESIGNER",
+        profile: subscriptionModelProfileV1.parse({
+          schema_version: 1,
+          profile_name: "cross-fence-codex",
+          provider: "codex_cli",
+          executable: process.execPath,
+          model: "gpt-5.6-codex",
+          timeout_ms: 10_000,
+          kill_grace_ms: 100,
+          max_stdin_bytes: 65_536,
+          max_stdout_bytes: 65_536,
+          max_stderr_bytes: 4096,
+        }),
+        clientVersion: "0.147.0",
+        deploymentConfigDigest: `sha256:${"c".repeat(64)}`,
+      });
+      let preflightCalls = 0;
+      const modelPreflight = async (input: { invocation: typeof modelInvocation }) => {
+        expect(input.invocation).toEqual(modelInvocation);
+        preflightCalls += 1;
+      };
       const stageExecutor = createBedrockEngineeringStageExecutor({
         transport,
         config: fixture.modelConfig,
+        modelInvocation: () => modelInvocation,
       });
       const port = createPostgresEngineeringRuntimePort({
         db: fixture.db,
@@ -119,6 +146,7 @@ describeIntegration(
         writeDeploymentPolicy: fixture.config.writeDeploymentPolicy,
         policy: { riskFacts: smallRiskFacts, proposedProcessClass: "SMALL" },
         controlPlane: control,
+        modelPreflight,
       });
       await port.open(identity(fixture));
       const stage = {
@@ -168,6 +196,20 @@ describeIntegration(
         leaseMs: 30_000,
       });
       if (recoveryLease === null) throw new Error("model recovery was not claimed");
+      await expect(
+        classifyEngineeringRecovery({
+          db: fixture.db,
+          lease: recoveryLease,
+          readContext: fixture.readContext,
+          writeDeploymentPolicy: fixture.config.writeDeploymentPolicy,
+          stageConfigDigest: () => stageExecutor.configDigest,
+          stageSchemaDigest: (value) => stageExecutor.schemaDigest(value),
+          stageModelInvocation: () => ({ ...modelInvocation, role: "REVIEWER" }),
+          modelPreflight,
+          controlPlane: control,
+          recoveries,
+        }),
+      ).rejects.toThrow(/model invocation/u);
       const result = await classifyEngineeringRecovery({
         db: fixture.db,
         lease: recoveryLease,
@@ -175,6 +217,8 @@ describeIntegration(
         writeDeploymentPolicy: fixture.config.writeDeploymentPolicy,
         stageConfigDigest: () => stageExecutor.configDigest,
         stageSchemaDigest: (value) => stageExecutor.schemaDigest(value),
+        stageModelInvocation: () => modelInvocation,
+        modelPreflight,
         controlPlane: control,
         recoveries,
       });
@@ -190,6 +234,7 @@ describeIntegration(
         }),
       );
       expect(transport.calls).toBe(0);
+      expect(preflightCalls).toBe(2);
       expect(
         await fixture.db.query<{ count: string }>(
           "SELECT count(*)::text AS count FROM engineering_artifact_revisions WHERE run_id=$1",

@@ -17,6 +17,12 @@ import type {
   RuntimeTransport,
   RuntimeUsage,
 } from "@remoteagent/model-runtime";
+import {
+  subscriptionModelInvocationDescriptorV1,
+  subscriptionModelRole,
+  type SubscriptionModelInvocationDescriptorV1,
+  type SubscriptionModelRole,
+} from "@remoteagent/model-runtime";
 import * as z from "zod";
 
 const id = z.string().min(1).max(512);
@@ -46,6 +52,18 @@ const relativePath = z
 const usage = z.strictObject({
   event: z.literal("MODEL_USAGE"),
   stage: boundedName.nullable(),
+  role: subscriptionModelRole.nullable().optional(),
+  slice_id: id.nullable().optional(),
+  attempt: z.number().int().positive().nullable().optional(),
+  invocation_digest: sha256Digest.nullable().optional(),
+  provider: boundedName.nullable().optional(),
+  profile_name: boundedName.nullable().optional(),
+  model: boundedName.nullable().optional(),
+  client_version: boundedName.nullable().optional(),
+  response_input_tokens: z.number().int().nonnegative().nullable().optional(),
+  response_output_tokens: z.number().int().nonnegative().nullable().optional(),
+  response_total_tokens: z.number().int().nonnegative().nullable().optional(),
+  provider_reported: z.boolean().optional(),
   responses: z.number().int().nonnegative(),
   input_tokens: z.number().int().nonnegative(),
   output_tokens: z.number().int().nonnegative(),
@@ -671,8 +689,26 @@ export async function recordEngineeringDebugReceiptFinalization(): Promise<void>
   await appendDecision(context, "IMPLEMENTATION_RECEIPT_FINALIZED");
 }
 
+export type EngineeringDebugModelAttribution = Readonly<{
+  role: SubscriptionModelRole;
+  invocation: SubscriptionModelInvocationDescriptorV1;
+}>;
+
 /** Instrument the shared transport without leaking one concurrent run into another journal. */
-export function createEngineeringDebugTransport(delegate: RuntimeTransport): RuntimeTransport {
+export function createEngineeringDebugTransport(
+  delegate: RuntimeTransport,
+  rawAttribution?: EngineeringDebugModelAttribution,
+): RuntimeTransport {
+  const attribution =
+    rawAttribution === undefined
+      ? null
+      : Object.freeze({
+          role: subscriptionModelRole.parse(rawAttribution.role),
+          invocation: subscriptionModelInvocationDescriptorV1.parse(rawAttribution.invocation),
+        });
+  if (attribution !== null && attribution.invocation.role !== attribution.role) {
+    throw new Error("Engineering debug attribution role does not match invocation");
+  }
   return {
     async converse(request, config) {
       const context = journalContext.getStore();
@@ -693,10 +729,30 @@ export function createEngineeringDebugTransport(delegate: RuntimeTransport): Run
       context.state.usage = addUsage(context.state.usage, response.usage);
       const usage = context.state.usage;
       const comparison = usageComparison(usage.totalTokens);
+      const responseInputTokens = tokenCount(response.usage?.inputTokens);
+      const responseOutputTokens = tokenCount(response.usage?.outputTokens);
+      const responseReportedTotal = tokenCount(response.usage?.totalTokens);
+      const responseTotalTokens =
+        responseReportedTotal ??
+        (responseInputTokens !== undefined && responseOutputTokens !== undefined
+          ? responseInputTokens + responseOutputTokens
+          : undefined);
       try {
         await context.journal.append({
           event: "MODEL_USAGE",
           stage: context.stage,
+          role: attribution?.role ?? null,
+          slice_id: context.sliceId,
+          attempt: context.attempt,
+          invocation_digest: attribution === null ? null : canonicalDigest(attribution.invocation),
+          provider: attribution?.invocation.provider ?? null,
+          profile_name: attribution?.invocation.profile_name ?? null,
+          model: attribution?.invocation.model ?? null,
+          client_version: attribution?.invocation.client_version ?? null,
+          response_input_tokens: responseInputTokens ?? null,
+          response_output_tokens: responseOutputTokens ?? null,
+          response_total_tokens: responseTotalTokens ?? null,
+          provider_reported: response.usage !== undefined,
           responses: usage.responses,
           input_tokens: usage.inputTokens,
           output_tokens: usage.outputTokens,
