@@ -58,6 +58,8 @@ import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
 import {
   createEngineeringDebugTransport,
+  ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+  ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
   EngineeringDebugJournal,
   runWithEngineeringDebugJournal,
 } from "../src/engineering-debug-journal.js";
@@ -836,7 +838,13 @@ describeIntegration(
         async converse(_request, config) {
           return {
             model: config.model,
-            usage: { inputTokens: 565_999, outputTokens: 1, totalTokens: 566_000 },
+            usage: {
+              inputTokens:
+                ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+              outputTokens: 1,
+              totalTokens:
+                ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE + 1,
+            },
             content: [],
           };
         },

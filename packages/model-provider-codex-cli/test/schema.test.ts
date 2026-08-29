@@ -50,6 +50,29 @@ describe("Codex structured response contract", () => {
     });
     expect(contract.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(JSON.stringify(contract.schema)).toContain('"const":"files.read"');
+    const schema = contract.schema as {
+      properties: {
+        schema_version: unknown;
+        schema_digest: unknown;
+        kind: unknown;
+        tool_call: {
+          anyOf: { properties: { name: unknown } }[];
+        };
+      };
+    };
+    expect(schema.properties.schema_version).toEqual({ type: "integer", const: 1 });
+    expect(schema.properties.schema_digest).toEqual({
+      type: "string",
+      const: contract.schemaDigest,
+    });
+    expect(schema.properties.kind).toEqual({
+      type: "string",
+      enum: ["json", "tool_use"],
+    });
+    expect(schema.properties.tool_call.anyOf[0]!.properties.name).toEqual({
+      type: "string",
+      const: "files.read",
+    });
     expect(payload).toMatchObject({
       authority: "UNTRUSTED_CONTEXT",
       protocol: {

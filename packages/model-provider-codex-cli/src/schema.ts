@@ -94,7 +94,7 @@ function toolCallSchema(tools: readonly RuntimeToolDefinition[]): RuntimeJsonVal
           type: "object",
           properties: objectSchema({
             id: objectSchema({ type: "string", pattern: "^[A-Za-z0-9._:-]{1,256}$" }),
-            name: objectSchema({ const: tool.name }),
+            name: objectSchema({ type: "string", const: tool.name }),
             input: tool.inputSchema,
           }),
           required: arraySchema(["id", "name", "input"]),
@@ -120,9 +120,10 @@ export function createCodexResponseContract(request: RuntimeRequest): CodexRespo
   const schema = objectSchema({
     type: "object",
     properties: objectSchema({
-      schema_version: objectSchema({ const: 1 }),
-      schema_digest: objectSchema({ const: schemaDigest }),
+      schema_version: objectSchema({ type: "integer", const: 1 }),
+      schema_digest: objectSchema({ type: "string", const: schemaDigest }),
       kind: objectSchema({
+        type: "string",
         enum: arraySchema(tools.length === 0 ? [finalKind] : [finalKind, "tool_use"]),
       }),
       final: finalSchema,

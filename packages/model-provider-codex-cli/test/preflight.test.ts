@@ -24,7 +24,8 @@ async function fakeCodex(input: {
   version?: string;
   auth?: string;
   authExitCode?: number;
-  stderr?: string;
+  versionStderr?: string;
+  authStderr?: string;
 }) {
   const root = await mkdtemp(join(tmpdir(), "ra-codex-preflight-"));
   temporary.push(root);
@@ -35,13 +36,15 @@ const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({ argv: process.argv.slice(2), env: Object.keys(process.env).sort() }) + "\\n");
 if (process.argv[2] === "--version") {
   process.stdout.write(${JSON.stringify(input.version ?? `codex-cli ${CODEX_CLI_SUPPORTED_VERSION}\n`)});
-  process.stderr.write(${JSON.stringify(input.stderr ?? "")});
+  process.stderr.write(${JSON.stringify(input.versionStderr ?? "")});
   process.exit(0);
 }
 
 if (process.argv[2] === "login" && process.argv[3] === "status") {
-  process.stdout.write(${JSON.stringify(input.auth ?? "Logged in using ChatGPT\n")});
-  process.stderr.write(${JSON.stringify(input.stderr ?? "")});
+  process.stdout.write(${JSON.stringify(
+    input.auth ?? (input.authStderr === undefined ? "Logged in using ChatGPT\n" : ""),
+  )});
+  process.stderr.write(${JSON.stringify(input.authStderr ?? "")});
   process.exit(${input.authExitCode ?? 0});
 }
 process.exit(64);
@@ -172,6 +175,50 @@ describe("Codex subscription preflight", () => {
       expect(result).toEqual({ status, reason_code: reasonCode });
     },
   );
+
+  it("accepts the exact ChatGPT subscription status from stderr", async () => {
+    const fake = await fakeCodex({ authStderr: "Logged in using ChatGPT\n" });
+    const result = await createCodexSubscriptionAuthPreflight({ environment }).verify({
+      profile: await profile(fake.executable),
+    });
+
+    expect(result).toEqual({
+      status: "SUBSCRIPTION_AUTHENTICATED",
+      provider: "codex_cli",
+      profile_name: "codex-subscription",
+      client_version: CODEX_CLI_SUPPORTED_VERSION,
+      model: "gpt-5.6-codex",
+    });
+  });
+
+  it.each([
+    ["Logged in using an API key\n", 0, "API_CREDENTIALS_PRESENT", "API_KEY_LOGIN_ACTIVE"],
+    ["Not logged in\n", 1, "AUTH_REQUIRED", "CHATGPT_LOGIN_REQUIRED"],
+  ] as const)(
+    "classifies the strict auth status from stderr: %s",
+    async (authStderr, authExitCode, status, reasonCode) => {
+      const fake = await fakeCodex({ authStderr, authExitCode });
+      const result = await createCodexSubscriptionAuthPreflight({ environment }).verify({
+        profile: await profile(fake.executable),
+      });
+      expect(result).toEqual({ status, reason_code: reasonCode });
+    },
+  );
+
+  it("rejects auth status when stdout and stderr both carry control data", async () => {
+    const fake = await fakeCodex({
+      auth: "Logged in using ChatGPT\n",
+      authStderr: "Logged in using ChatGPT\n",
+    });
+    const result = await createCodexSubscriptionAuthPreflight({ environment }).verify({
+      profile: await profile(fake.executable),
+    });
+
+    expect(result).toEqual({
+      status: "PREFLIGHT_FAILED",
+      reason_code: "AUTH_STATUS_CHANNEL_MISMATCH",
+    });
+  });
 
   it("rejects API credential environment before spawning either control command", async () => {
     const fake = await fakeCodex({});

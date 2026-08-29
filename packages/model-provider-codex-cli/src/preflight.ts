@@ -75,8 +75,13 @@ export function createCodexSubscriptionAuthPreflight(
         maxOutputBytes: CONTROL_OUTPUT_LIMIT,
         ...(signal === undefined ? {} : { signal }),
       });
-      const authLine = oneSubscriptionControlLine(auth.stdout);
-      if (auth.stderr !== "") return refusal("PREFLIGHT_FAILED", "AUTH_STATUS_STDERR");
+      const authOnStdout = auth.stdout !== "";
+      const authOnStderr = auth.stderr !== "";
+      if (authOnStdout === authOnStderr) {
+        return refusal("PREFLIGHT_FAILED", "AUTH_STATUS_CHANNEL_MISMATCH");
+      }
+      const authLine = oneSubscriptionControlLine(authOnStdout ? auth.stdout : auth.stderr);
+      if (authLine === null) return refusal("PREFLIGHT_FAILED", "AUTH_STATUS_INVALID");
       if (authLine === "Logged in using an API key") {
         return refusal("API_CREDENTIALS_PRESENT", "API_KEY_LOGIN_ACTIVE");
       }

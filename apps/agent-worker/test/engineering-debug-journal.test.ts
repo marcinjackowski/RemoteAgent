@@ -14,8 +14,10 @@ import { StructuredLogger } from "@remoteagent/observability";
 
 import {
   ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+  ENGINEERING_MODEL_DIAGNOSTIC_BUDGET_MULTIPLIER,
   ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
   ENGINEERING_MODEL_TARGET_TOKEN_LIMIT,
+  ENGINEERING_MODEL_WARNING_TOKEN_LIMIT,
   EngineeringDebugJournal,
   createEngineeringDebugTransport,
   assertEngineeringModelCallBudgetBeforeStage,
@@ -33,6 +35,14 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+it("uses the threefold diagnostic token budget selected for extended Codex runs", () => {
+  expect(ENGINEERING_MODEL_DIAGNOSTIC_BUDGET_MULTIPLIER).toBe(3);
+  expect(ENGINEERING_MODEL_TARGET_TOKEN_LIMIT).toBe(750_000);
+  expect(ENGINEERING_MODEL_WARNING_TOKEN_LIMIT).toBe(1_200_000);
+  expect(ENGINEERING_MODEL_HARD_TOKEN_LIMIT).toBe(1_800_000);
+  expect(ENGINEERING_MODEL_CALL_TOKEN_RESERVE).toBe(105_000);
 });
 
 it("writes one ordered content-free JSONL file per Engineering invocation", async () => {
@@ -567,7 +577,11 @@ it("records provider usage and stops an invocation above the hard token limit", 
     async converse(_request, config) {
       return {
         model: config.model,
-        usage: { inputTokens: 600_000, outputTokens: 1, totalTokens: 600_001 },
+        usage: {
+          inputTokens: ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
+          outputTokens: 1,
+          totalTokens: ENGINEERING_MODEL_HARD_TOKEN_LIMIT + 1,
+        },
         content: [],
       };
     },
@@ -585,10 +599,12 @@ it("records provider usage and stops an invocation above the hard token limit", 
         },
       ),
     ),
-  ).rejects.toThrow(/600000-token hard limit/);
+  ).rejects.toThrow(
+    new RegExp(`${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT)}-token hard limit`, "u"),
+  );
   await journal.close();
   const text = await readFile(journal.filePath, "utf8");
-  expect(text).toContain('"total_tokens":600001');
+  expect(text).toContain(`"total_tokens":${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT + 1)}`);
   expect(text).toContain('"comparison":"HARD_LIMIT"');
   expect(text).not.toContain("private");
 });
@@ -606,7 +622,12 @@ it("refuses the next provider call before the remaining hard-limit reserve can b
       calls += 1;
       return {
         model: config.model,
-        usage: { inputTokens: 565_999, outputTokens: 1, totalTokens: 566_000 },
+        usage: {
+          inputTokens: ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+          outputTokens: 1,
+          totalTokens:
+            ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE + 1,
+        },
         content: [],
       };
     },
@@ -649,7 +670,12 @@ it("refuses an exhausted model-backed stage before transport dispatch", async ()
       calls += 1;
       return {
         model: config.model,
-        usage: { inputTokens: 565_999, outputTokens: 1, totalTokens: 566_000 },
+        usage: {
+          inputTokens: ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+          outputTokens: 1,
+          totalTokens:
+            ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_MODEL_CALL_TOKEN_RESERVE + 1,
+        },
         content: [],
       };
     },

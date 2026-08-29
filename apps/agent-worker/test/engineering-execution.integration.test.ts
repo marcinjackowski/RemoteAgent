@@ -45,7 +45,11 @@ import {
   loadEngineeringExecutionConfig,
   receiptBackedImplementationReport,
 } from "../src/engineering-execution.js";
-import { EngineeringModelBudgetError } from "../src/engineering-debug-journal.js";
+import {
+  ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
+  ENGINEERING_MODEL_WARNING_TOKEN_LIMIT,
+  EngineeringModelBudgetError,
+} from "../src/engineering-debug-journal.js";
 import { ENGINEERING_DIFF_POLICY } from "../src/vertical-slice-executor.js";
 
 const cleanup: string[] = [];
@@ -198,9 +202,9 @@ it("aggregates only provider-reported token usage and marks missing or partial r
   expect(() =>
     addEngineeringModelUsage(actual, { inputTokens: -1, outputTokens: 0, totalTokens: 0 }),
   ).toThrow(/invalid input token count/);
-  expect(classifyEngineeringModelUsage(400_000)).toBe("TARGET");
-  expect(classifyEngineeringModelUsage(400_001)).toBe("WARNING");
-  expect(classifyEngineeringModelUsage(600_001)).toBe("HARD_LIMIT");
+  expect(classifyEngineeringModelUsage(ENGINEERING_MODEL_WARNING_TOKEN_LIMIT)).toBe("TARGET");
+  expect(classifyEngineeringModelUsage(ENGINEERING_MODEL_WARNING_TOKEN_LIMIT + 1)).toBe("WARNING");
+  expect(classifyEngineeringModelUsage(ENGINEERING_MODEL_HARD_TOKEN_LIMIT + 1)).toBe("HARD_LIMIT");
 });
 
 it("finalizes an implementation from successful receipts only at the exact token fence", () => {
