@@ -79,7 +79,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 50 | [RA-050](RA-050.md) Codex CLI subscription adapter | DONE | RA-049 | M10 |
 | 51 | [RA-051](RA-051.md) Claude Code subscription adapter | DONE | RA-050 | M10 |
 | 52 | [RA-052](RA-052.md) Configurable Engineering role routing and recovery | DONE | RA-051 | M10 |
-| 53 | [RA-053](RA-053.md) Subscription-provider qualification and Bedrock retirement | READY | RA-052 | M10 |
+| 53 | [RA-053](RA-053.md) Subscription-provider qualification and Bedrock retirement | DONE | RA-052 | M10 |
 
 ## Milestone gates
 
