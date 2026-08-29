@@ -49,6 +49,7 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-021` | LOW | **ZAMKNIĘTY** `2026-08-25` — fix w `roles.ts` | Worker `createRole` (`apps/agent-worker/src/roles.ts`) NIE używa `RoleRegistry`/`ROLE_PROMPTS` (RA-009), a transport nie ma kanału `system` (`RuntimeMessage` = user/assistant/tool). SUPERVISOR system-prompt nigdy nie docierał do modelu → `summary` wychodziło trzecioosobowe („Owner asked… I provided…"). Fix: dyrektywa konwersacyjna wstrzyknięta w pierwszy user-turn `createRole`. |
 | `CTF-022` | LOW | **ZAMKNIĘTY** `2026-08-25` — RA-038-WU-00, realny `SELECT 1`, integracja 8/8 + mutation RED→GREEN | `env.sh` szanuje explicit config, preferuje 5433 i wykrywa local fallback PG15/5432 jako dyskretne `RA_PG*` |
 | `CTF-023` | LOW | **ZAMKNIĘTY** `2026-08-26` — pełna bramka RA-040 | Root typecheck ujawnił dwa testowe source/dist/inference defects pominięte przez bramki pakietowe; oba naprawione i objęte root `tsc` |
+| `CTF-024` | HIGH | **ZAMKNIĘTY** `2026-08-29` — `AUDIT-01` RA-054, owner-enabled live GREEN | exact auth channels, strict schema i realny `gpt-5.6-sol` subscription smoke |
 
 ---
 
@@ -1719,3 +1720,46 @@ na granicy setupu wyłącznie w root teście; produkcyjne typy nie zostały osł
 `tsc` zakończył exit `0`, test env `8/8`, a realny baseline PostgreSQL `1/1`. Powtórzona pełna
 bramka RA-040 zakończyła exit `0`: build `26/26` i typecheck `38/38` przy `0 cached`, testy
 `2583/2583` w `201` plikach, `workflow:validate OK — 45 tasks` oraz `git diff --check` exit `0`.
+
+## `CTF-024` — zaakceptowany Codex adapter nie przechodzi realnego subscription call
+
+- Severity: **HIGH** (aktywna ścieżka Engineering nie może wykonać żadnego
+  Codex model call)
+- Wykryty: `2026-08-29`, pierwszym owner-enabled live smoke po RA-053
+- Dotyczy: `packages/model-provider-codex-cli` (RA-050) i live qualification
+  profilu M10 (RA-053)
+- Status: **ZAMKNIĘTY** `2026-08-29` — `AUDIT-01` RA-054, owner-enabled live GREEN
+
+### Dowód
+
+Canonical `codex-cli 0.147.0` zwraca `Logged in using ChatGPT` z exit `0`, lecz
+na stderr; preflight RA-050 wymagał pustego stderr i czytał wyłącznie stdout,
+więc zwracał `PREFLIGHT_FAILED/AUTH_STATUS_STDERR` przed modelem. Po
+diagnostycznym odizolowaniu tego guarda `gpt-5.6-codex` został odrzucony jako
+nieobsługiwany dla konta ChatGPT. Jawny `gpt-5.6-sol` przeszedł wybór modelu, ale
+provider odrzucił code-owned response schema: własność `schema_version` miała
+`const` bez wymaganego `type`.
+
+### Wpływ
+
+Deterministyczne fake-binary tests RA-050/RA-053 kwalifikowały fencing,
+authority i parser, ale nie zgodność rzeczywistego kanału control output ani
+structured schema z usługą. Production Engineering fail-closuje bez write lub
+fallbacku, co jest bezpieczne, lecz Codex jako provider jest operacyjnie
+nieosiągalny.
+
+### Zamknięcie
+
+RA-054 akceptuje exact auth status z dokładnie jednego kanału, dodaje typy do
+każdego code-owned `const`/`enum`, zachowuje jawny model w profilu i dodaje
+disabled-by-default real subscription smoke. Realny canonical `codex-cli
+0.147.0`, zalogowany przez ChatGPT subscription, wykonał produkcyjny preflight
+i transport z jawnym `gpt-5.6-sol`, pustym invocation root, read-only sandboxem
+i zerowym tool surface. Exact rezultat `CODEX_ENGINEERING_OK` przeszedł `1/1`
+w `4.960s`; provider zaraportował `8749` input, `84` output i `8833` total
+tokens. Wymuszone typechecki zakończyły się `4/4`, cached `0`.
+
+Load-bearing mutations: stdout-only auth, akceptacja obu kanałów, brak typu
+code-owned schema envelope oraz syntetyczny return omijający preflight/proces
+każdorazowo dały exit `1`. Wszystkie zostały przywrócone przed finalnym live
+GREEN. Pełna bramka i audyt RA-054 zapisują końcowy dowód taska.
