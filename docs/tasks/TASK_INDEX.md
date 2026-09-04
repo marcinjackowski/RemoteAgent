@@ -81,6 +81,7 @@ zmianie statusu uruchom `pnpm workflow:validate`.
 | 52 | [RA-052](RA-052.md) Configurable Engineering role routing and recovery | DONE | RA-051 | M10 |
 | 53 | [RA-053](RA-053.md) Subscription-provider qualification and Bedrock retirement | DONE | RA-052 | M10 |
 | 54 | [RA-054](RA-054.md) Codex subscription live compatibility repair | DONE | RA-053 | M10 |
+| 55 | [RA-055](RA-055.md) Live Codex Engineering rerun na MOBL-2023 | IN_PROGRESS | RA-054 | M10 |
 
 ## Milestone gates
 
