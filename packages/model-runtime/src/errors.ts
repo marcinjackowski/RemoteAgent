@@ -50,9 +50,15 @@ export class RuntimeCancelledError extends RuntimeError {
 }
 
 export class ToolLimitError extends RuntimeError {
-  constructor(message: string) {
+  readonly detailCode: string | undefined;
+
+  constructor(message: string, detailCode?: string) {
     super("LIMIT_EXCEEDED", message);
     this.name = "ToolLimitError";
+    this.detailCode =
+      detailCode !== undefined && /^[A-Za-z0-9._:-]{1,128}$/u.test(detailCode)
+        ? detailCode
+        : undefined;
   }
 }
 
@@ -111,8 +117,13 @@ export class StructuredModelIdentityError extends TransportError {
 
 /** The model response could not be parsed as its server-owned structured contract. */
 export class StructuredContractOutputError extends TransportError {
-  constructor() {
+  readonly detailCode?: string;
+
+  constructor(detailCode?: string) {
     super("Structured contract output is invalid", "FATAL");
     this.name = "StructuredContractOutputError";
+    if (detailCode !== undefined && /^[A-Za-z0-9._:-]{1,128}$/u.test(detailCode)) {
+      this.detailCode = detailCode;
+    }
   }
 }

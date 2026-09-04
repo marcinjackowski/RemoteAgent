@@ -25,6 +25,25 @@ const toolContract = createCodexResponseContract({
     },
   ],
 });
+const optionalToolContract = createCodexResponseContract({
+  messages: [],
+  outputSchema: output,
+  tools: [
+    {
+      name: "files.search",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          relative_path: { type: "string" },
+          expected_before_digest: { anyOf: [{ type: "string" }, { type: "null" }] },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+  ],
+});
 const threadId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
 
 function finalText(value: unknown = { ok: true }, schemaDigest = digest): string {
@@ -100,6 +119,36 @@ describe("Codex JSONL transcript", () => {
     expect(JSON.stringify({ parsed, events })).not.toContain("private reasoning");
   });
 
+  it("uses only the last distinct completed agent message without retaining progress prose", () => {
+    const progressSecret = "INTERMEDIATE_MODEL_PROSE_MUST_DISAPPEAR";
+    const stdout = transcript().replace(
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "message-1", type: "agent_message", text: finalText() },
+      }),
+      [
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "message-progress", type: "agent_message", text: progressSecret },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "message-1", type: "agent_message", text: finalText({ ok: "last" }) },
+        }),
+      ].join("\n"),
+    );
+
+    const events: NormalizedSubscriptionModelEvent[] = [];
+    const parsed = parseCodexJsonlTranscript({
+      stdout,
+      contract,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(parsed.content).toEqual([{ type: "json", value: { ok: "last" } }]);
+    expect(JSON.stringify({ parsed, events })).not.toContain(progressSecret);
+  });
+
   it.each(["command_execution", "file_change", "mcp_tool_call", "web_search"])(
     "fails closed when Codex emits built-in %s activity",
     (kind) => {
@@ -141,16 +190,29 @@ describe("Codex JSONL transcript", () => {
   });
 
   it.each([
-    ["malformed JSON", "{"],
-    ["missing session", transcript().split("\n").slice(1).join("\n")],
-    ["wrong response digest", transcript(finalText({ ok: true }, "0".repeat(64)))],
-    ["missing turn completion", transcript().split("\n").slice(0, -1).join("\n")],
+    ["malformed JSON", "{", "EVENT_JSON"],
     [
-      "duplicate final message",
+      "missing session",
+      transcript().split("\n").slice(1).join("\n"),
+      "TURN_STARTED_ORDER_OR_SHAPE",
+    ],
+    [
+      "wrong response digest",
+      transcript(finalText({ ok: true }, "0".repeat(64))),
+      "FINAL_ENVELOPE",
+    ],
+    [
+      "missing turn completion",
+      transcript().split("\n").slice(0, -1).join("\n"),
+      "TRANSCRIPT_INCOMPLETE",
+    ],
+    [
+      "duplicate completed item identity",
       transcript().replace(
         '"type":"turn.completed"',
-        '"type":"item.completed","item":{"id":"message-2","type":"agent_message","text":"{}"}}\n{"type":"turn.completed"',
+        `"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":${JSON.stringify(finalText())}}}\n{"type":"turn.completed"`,
       ),
+      "ITEM_DUPLICATE",
     ],
     [
       "event after terminal",
@@ -158,6 +220,7 @@ describe("Codex JSONL transcript", () => {
         type: "item.completed",
         item: { id: "reason-after-terminal", type: "reasoning", text: "forged" },
       })}`,
+      "EVENT_ENVELOPE",
     ],
     [
       "forged usage",
@@ -165,18 +228,23 @@ describe("Codex JSONL transcript", () => {
         '"reasoning_output_tokens":20',
         '"reasoning_output_tokens":20,"foreign":1',
       ),
+      "TURN_COMPLETED_SHAPE",
     ],
     [
       "overflowed usage",
       transcript().replace('"input_tokens":120', `"input_tokens":${Number.MAX_SAFE_INTEGER}`),
+      "TURN_COMPLETED_SHAPE",
     ],
-    ["forged session", transcript().replace(threadId, `${threadId}\"`)],
-    ["deeply nested final output", deeplyNestedFinal()],
-  ])("rejects %s as malformed rather than accepting partial success", (_name, stdout) => {
-    expect(() => parseCodexJsonlTranscript({ stdout, contract })).toThrowError(
-      expect.objectContaining({ outcome: "MALFORMED_OUTPUT" }),
-    );
-  });
+    ["forged session", transcript().replace(threadId, `${threadId}\"`), "EVENT_JSON"],
+    ["deeply nested final output", deeplyNestedFinal(), "JSON_VALUE_BOUNDS"],
+  ])(
+    "rejects %s as malformed rather than accepting partial success",
+    (_name, stdout, detailCode) => {
+      expect(() => parseCodexJsonlTranscript({ stdout, contract })).toThrowError(
+        expect.objectContaining({ outcome: "MALFORMED_OUTPUT", detailCode }),
+      );
+    },
+  );
 
   it("returns one declared tool request as data for the code-owned tool loop", () => {
     const final = JSON.stringify({
@@ -198,6 +266,37 @@ describe("Codex JSONL transcript", () => {
         id: "call-1",
         name: "files.read",
         input: { relative_path: "src/feature.ts" },
+      },
+    ]);
+  });
+
+  it("removes only Codex null placeholders for originally optional tool fields", () => {
+    const final = JSON.stringify({
+      schema_version: 1,
+      schema_digest: optionalToolContract.schemaDigest,
+      kind: "tool_use",
+      final: null,
+      tool_call: {
+        id: "call-optional",
+        name: "files.search",
+        input: {
+          query: "needle",
+          relative_path: null,
+          expected_before_digest: null,
+        },
+      },
+    });
+    expect(
+      parseCodexJsonlTranscript({
+        stdout: transcript(final),
+        contract: optionalToolContract,
+      }).content,
+    ).toEqual([
+      {
+        type: "tool-use",
+        id: "call-optional",
+        name: "files.search",
+        input: { query: "needle", expected_before_digest: null },
       },
     ]);
   });

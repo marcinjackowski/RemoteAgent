@@ -15,12 +15,14 @@ import {
   TransportError,
   type NormalizedSubscriptionModelEvent,
   type RuntimeConfig,
+  type RuntimeContent,
   type RuntimeRequest,
   type RuntimeResponse,
   type RuntimeTransport,
   type SubscriptionAuthPreflight,
   type SubscriptionModelInvocationDescriptorV1,
   type SubscriptionModelProfileV1,
+  type SubscriptionModelTerminalOutcome,
 } from "@remoteagent/model-runtime";
 
 import { CODEX_CLI_RESPONSE_SCHEMA_FILENAME, createCodexExecArgv } from "./invocation.js";
@@ -30,6 +32,32 @@ import { parseCodexJsonlTranscript } from "./transcript.js";
 
 const MAX_SCHEMA_BYTES = 1024 * 1024;
 
+/**
+ * Every Codex CLI call is a fresh subscription session. A model-local tool id may therefore
+ * repeat after a context epoch even though the calls are distinct. Bind it to the server-observed
+ * session before the provider-neutral exactly-once loop sees it. Duplicate ids inside one
+ * response still normalize to the same value and remain fail-closed.
+ */
+export function namespaceCodexToolUseIds(
+  content: readonly RuntimeContent[],
+  sessionId: string,
+): readonly RuntimeContent[] {
+  return Object.freeze(
+    content.map((item) =>
+      item.type === "tool-use"
+        ? Object.freeze({
+            ...item,
+            id: canonicalDigest({
+              authority: "CODEX_SESSION_TOOL_USE",
+              session_id: sessionId,
+              provider_tool_use_id: item.id,
+            }),
+          })
+        : item,
+    ),
+  );
+}
+
 export type CodexCliTransportOptions = Readonly<{
   profile: SubscriptionModelProfileV1;
   preflight?: SubscriptionAuthPreflight;
@@ -38,10 +66,28 @@ export type CodexCliTransportOptions = Readonly<{
   onEvent?: (event: NormalizedSubscriptionModelEvent) => void;
 }>;
 
-function processFailure(outcome: string): Error {
+export class CodexCliProcessError extends TransportError {
+  readonly providerCode = "CODEX_CLI_PROCESS_FAILED";
+  readonly outcome: SubscriptionModelTerminalOutcome;
+  readonly detailCode: "PROCESS_EXIT_FAILED" | "PROCESS_REFUSED";
+
+  constructor(outcome: SubscriptionModelTerminalOutcome) {
+    // A plain FAILED happens only after the executable started and the subscription preflight
+    // succeeded. The invocation root is empty/read-only and no custom tool can be dispatched
+    // before a valid transcript is parsed, so one fresh runtime retry is side-effect safe.
+    // Every other terminal outcome retains its existing fail-closed behavior.
+    const retryable = outcome === "FAILED";
+    super("Codex CLI process did not return a successful transcript", retryable);
+    this.name = "CodexCliProcessError";
+    this.outcome = outcome;
+    this.detailCode = retryable ? "PROCESS_EXIT_FAILED" : "PROCESS_REFUSED";
+  }
+}
+
+function processFailure(outcome: SubscriptionModelTerminalOutcome): Error {
   if (outcome === "CANCELLED") return new RuntimeCancelledError("Codex CLI invocation cancelled");
   if (outcome === "TIMED_OUT") return new RuntimeTimeoutError("Codex CLI invocation timed out");
-  return new TransportError(`Codex CLI invocation refused with ${outcome}`, "FATAL");
+  return new CodexCliProcessError(outcome);
 }
 
 export class CodexCliTransport implements RuntimeTransport {
@@ -140,7 +186,7 @@ export class CodexCliTransport implements RuntimeTransport {
       });
       return Object.freeze({
         model: Object.freeze({ provider: "codex_cli", model_id: this.#profile.model }),
-        content: parsed.content,
+        content: namespaceCodexToolUseIds(parsed.content, parsed.sessionId),
         usage: parsed.usage,
         requestId: parsed.sessionId,
       });

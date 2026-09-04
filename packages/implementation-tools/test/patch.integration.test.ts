@@ -42,6 +42,7 @@ import {
   resolvePoolConfig,
 } from "@remoteagent/database";
 import type { Transaction } from "@remoteagent/database";
+import { canonicalDigest } from "@remoteagent/contracts";
 import { computeTreeDigest } from "@remoteagent/workspace-runner";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -57,6 +58,7 @@ import {
   ToolKind,
   ToolOutcome,
   WRITE_PARENT_NOT_A_DIRECTORY,
+  WRITE_NO_CHANGE,
   WRITE_PRE_STATE_MISMATCH,
   WRITE_REPLACEMENT_MISMATCH,
   WRITE_TARGET_NOT_A_FILE,
@@ -303,6 +305,9 @@ describeIntegration(
         expect(result.outcome).toBe(ToolOutcome.FAILED);
         if (result.outcome !== ToolOutcome.FAILED) throw new Error("expected FAILED");
         expect(result.failure_code).toBe(WRITE_PRE_STATE_MISMATCH);
+        expect(body(result)).toMatchObject({
+          repair_context: { observed_before_digest: await computeTreeDigest(root) },
+        });
         expect(result.changed_files).toEqual([]);
         // Provably non-mutating: no claim, and every file still holds old bytes.
         expect(await ledger.find(db, "op-preflight", identity)).toBeNull();
@@ -367,8 +372,176 @@ describeIntegration(
         expect(refused.outcome).toBe(ToolOutcome.FAILED);
         if (refused.outcome !== ToolOutcome.FAILED) throw new Error("expected FAILED");
         expect(refused.failure_code).toBe(WRITE_REPLACEMENT_MISMATCH);
+        expect(body(refused)).toMatchObject({
+          repair_context: {
+            relative_path: path,
+            replacement_index: 0,
+            expected_old_content_digest: canonicalDigest("missing exact text"),
+          },
+        });
         expect(await ledger.find(db, "op-replacement-mismatch", identity)).toBeNull();
         expect(await onDisk(path)).toBe(original.replace("old value", "new value"));
+      });
+
+      it("plans every hunk before the first write and returns bounded current context on mismatch", async () => {
+        const path = "src/Multi.swift";
+        const original = "alpha\nbeta\ngamma\n";
+        await writeFile(join(root, path), original);
+        const write = await tools();
+
+        const result = await write.patch({
+          operation_id: "op-multi-hunk-mismatch",
+          replacement_files: [
+            {
+              relative_path: path,
+              replacements: [
+                { old_content: "alpha", new_content: "ALPHA" },
+                { old_content: "missing hunk", new_content: "must not land" },
+              ],
+            },
+          ],
+        });
+
+        expect(result.outcome).toBe(ToolOutcome.FAILED);
+        expect(await onDisk(path)).toBe(original);
+        expect(await ledger.find(db, "op-multi-hunk-mismatch", identity)).toBeNull();
+        const repair = body(result)["repair_context"] as Record<string, unknown>;
+        expect(repair).toMatchObject({
+          relative_path: path,
+          replacement_index: 1,
+          current_excerpt: original,
+          current_excerpt_digest: canonicalDigest(original),
+          expected_old_content_digest: canonicalDigest("missing hunk"),
+          current_excerpt_complete: true,
+        });
+        expect(JSON.stringify(repair)).not.toContain(root);
+        expect(Buffer.byteLength(String(repair["current_excerpt"]))).toBeLessThanOrEqual(8_192);
+      });
+
+      it("returns a complete bounded file for exact replacement recovery when it fits under 8 KiB", async () => {
+        const path = "src/Recoverable.swift";
+        const original = `${"let stable = 1\n".repeat(256)}let target = 2\n`;
+        expect(Buffer.byteLength(original)).toBeGreaterThan(2_048);
+        expect(Buffer.byteLength(original)).toBeLessThan(8_192);
+        await writeFile(join(root, path), original);
+        const write = await tools();
+
+        const result = await write.patch({
+          operation_id: "op-complete-repair-context",
+          replacement_files: [
+            {
+              relative_path: path,
+              replacements: [{ old_content: "missing target", new_content: "replacement" }],
+            },
+          ],
+        });
+
+        expect(result.outcome).toBe(ToolOutcome.FAILED);
+        const repair = body(result)["repair_context"] as Record<string, unknown>;
+        expect(repair).toMatchObject({
+          relative_path: path,
+          current_excerpt: original,
+          current_excerpt_digest: canonicalDigest(original),
+          current_excerpt_complete: true,
+        });
+        expect(await onDisk(path)).toBe(original);
+        expect(await ledger.find(db, "op-complete-repair-context", identity)).toBeNull();
+      });
+
+      it("applies non-overlapping hunks against one snapshot when an earlier result duplicates a later anchor", async () => {
+        const path = "src/Snapshot.swift";
+        const original = "let primary = alpha\nlet secondary = beta\n";
+        await writeFile(join(root, path), original);
+        const write = await tools();
+
+        const result = await write.patch({
+          operation_id: "op-snapshot-hunks",
+          replacement_files: [
+            {
+              relative_path: path,
+              replacements: [
+                { old_content: "let primary = alpha", new_content: "let secondary = beta" },
+                { old_content: "let secondary = beta", new_content: "let secondary = BETA" },
+              ],
+            },
+          ],
+        });
+
+        expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await onDisk(path)).toBe("let secondary = beta\nlet secondary = BETA\n");
+      });
+
+      it("refuses byte-identical replacement and mixed no-op batches before ledger or writes", async () => {
+        const write = await tools();
+        const single = await write.write({
+          operation_id: "op-write-no-change",
+          relative_path: "a.ts",
+          content: oldContent("a.ts"),
+        });
+        expect(single.outcome).toBe(ToolOutcome.FAILED);
+        if (single.outcome !== ToolOutcome.FAILED) throw new Error("expected FAILED");
+        expect(single.failure_code).toBe(WRITE_NO_CHANGE);
+        expect(await ledger.find(db, "op-write-no-change", identity)).toBeNull();
+
+        const exact = await write.patch({
+          operation_id: "op-no-change",
+          replacement_files: [
+            {
+              relative_path: "a.ts",
+              replacements: [{ old_content: oldContent("a.ts"), new_content: oldContent("a.ts") }],
+            },
+          ],
+        });
+        expect(exact.outcome).toBe(ToolOutcome.FAILED);
+        if (exact.outcome !== ToolOutcome.FAILED) throw new Error("expected FAILED");
+        expect(exact.failure_code).toBe(WRITE_NO_CHANGE);
+        expect(await ledger.find(db, "op-no-change", identity)).toBeNull();
+
+        const mixed = await write.patch({
+          operation_id: "op-mixed-no-change",
+          replacement_files: [
+            {
+              relative_path: "a.ts",
+              replacements: [{ old_content: oldContent("a.ts"), new_content: newContent("a.ts") }],
+            },
+            {
+              relative_path: "docs/b.md",
+              replacements: [
+                { old_content: oldContent("docs/b.md"), new_content: oldContent("docs/b.md") },
+              ],
+            },
+          ],
+        });
+        expect(mixed.outcome).toBe(ToolOutcome.FAILED);
+        if (mixed.outcome !== ToolOutcome.FAILED) throw new Error("expected FAILED");
+        expect(mixed.failure_code).toBe(WRITE_NO_CHANGE);
+        expect(await ledger.find(db, "op-mixed-no-change", identity)).toBeNull();
+        expect(await onDisk("a.ts")).toBe(oldContent("a.ts"));
+        expect(await onDisk("docs/b.md")).toBe(oldContent("docs/b.md"));
+      });
+
+      it("refuses overlapping snapshot hunks before the first write or ledger entry", async () => {
+        const path = "src/Overlap.swift";
+        const original = "alpha beta gamma\n";
+        await writeFile(join(root, path), original);
+        const write = await tools();
+
+        const result = await write.patch({
+          operation_id: "op-overlapping-hunks",
+          replacement_files: [
+            {
+              relative_path: path,
+              replacements: [
+                { old_content: "alpha beta", new_content: "first" },
+                { old_content: "beta gamma", new_content: "second" },
+              ],
+            },
+          ],
+        });
+
+        expect(result.outcome).toBe(ToolOutcome.FAILED);
+        expect(await onDisk(path)).toBe(original);
+        expect(await ledger.find(db, "op-overlapping-hunks", identity)).toBeNull();
       });
     });
 

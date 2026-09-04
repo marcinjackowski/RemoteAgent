@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -60,7 +60,7 @@ class EngineeringScriptTransport implements RuntimeTransport {
   readonly requests: RuntimeRequest[] = [];
   #planning = 0;
   #implementation = 0;
-  #implementationAwaitingReport = false;
+  #implementationTurn = 0;
   #review = 0;
   #memory = 0;
 
@@ -132,50 +132,144 @@ class EngineeringScriptTransport implements RuntimeTransport {
     }
     if (name === "SliceImplementationReport_v1") {
       const index = this.#implementation;
-      if (!this.#implementationAwaitingReport) {
-        this.#implementationAwaitingReport = true;
-        const path = index === 2 ? "src/two.ts" : "src/one.ts";
-        const content =
-          index === 0
-            ? "bad implementation\n"
-            : index === 1
-              ? "good implementation\n"
-              : "second slice\n";
-        const tool =
-          index === 1
-            ? {
-                id: `patch-${String(index)}`,
-                name: "patch",
-                input: {
-                  replacement_files: [
-                    {
-                      relative_path: path,
-                      replacements: [
-                        {
-                          old_content: "bad implementation\n",
-                          new_content: "good implementation\n",
-                        },
-                      ],
-                    },
-                  ],
-                },
-              }
-            : {
-                id: `write-${String(index)}`,
-                name: "write",
-                input: { relative_path: path, content },
-              };
+      const turn = this.#implementationTurn++;
+      if (index === 0 && turn === 0) {
         return {
           model,
-          content: [{ type: "tool-use", ...tool }],
+          content: [
+            {
+              type: "tool-use",
+              id: "write-bad-flow",
+              name: "write",
+              input: { relative_path: "src/one.ts", content: "bad implementation\n" },
+            },
+            {
+              type: "tool-use",
+              id: "write-inert-view",
+              name: "write",
+              input: { relative_path: "src/one-view.ts", content: "inert action\n" },
+            },
+          ],
         };
       }
-      this.#implementationAwaitingReport = false;
-      this.#implementation += 1;
-      return json({
-        schema_version: 1,
-        changed_files: [index === 2 ? "src/two.ts" : "src/one.ts"],
-      });
+      if (index === 0 && turn === 1) {
+        this.#implementation += 1;
+        this.#implementationTurn = 0;
+        return json({
+          schema_version: 1,
+          changed_files: ["src/one-view.ts", "src/one.ts"],
+        });
+      }
+      if (index === 1 && turn === 0) {
+        return {
+          model,
+          content: [
+            {
+              type: "tool-use",
+              id: "patch-flow",
+              name: "patch",
+              input: {
+                replacement_files: [
+                  {
+                    relative_path: "src/one.ts",
+                    replacements: [
+                      {
+                        old_content: "bad implementation\n",
+                        new_content: "good implementation\n",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      if (index === 1 && turn === 1) {
+        return json({ schema_version: 1, changed_files: ["src/one.ts"] });
+      }
+      if (index === 1 && turn === 2) {
+        return {
+          model,
+          content: [
+            {
+              type: "tool-use",
+              id: "patch-view",
+              name: "patch",
+              input: {
+                replacement_files: [
+                  {
+                    relative_path: "src/one-view.ts",
+                    replacements: [
+                      {
+                        old_content: "inert action\n",
+                        new_content: "wired action compile broken\n",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      if (index === 1 && turn === 3) {
+        this.#implementation += 1;
+        this.#implementationTurn = 0;
+        return json({
+          schema_version: 1,
+          changed_files: ["src/one-view.ts", "src/one.ts"],
+        });
+      }
+      if (index === 2 && turn === 0) {
+        return {
+          model,
+          content: [
+            {
+              type: "tool-use",
+              id: "repair-review-regression",
+              name: "patch",
+              input: {
+                replacement_files: [
+                  {
+                    relative_path: "src/one-view.ts",
+                    replacements: [
+                      {
+                        old_content: "wired action compile broken\n",
+                        new_content: "wired action\n",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      if (index === 2 && turn === 1) {
+        this.#implementation += 1;
+        this.#implementationTurn = 0;
+        return json({ schema_version: 1, changed_files: ["src/one-view.ts"] });
+      }
+      if (index === 3 && turn === 0) {
+        return {
+          model,
+          content: [
+            {
+              type: "tool-use",
+              id: "write-second-slice",
+              name: "write",
+              input: { relative_path: "src/two.ts", content: "second slice\n" },
+            },
+          ],
+        };
+      }
+      if (index === 3 && turn === 1) {
+        this.#implementation += 1;
+        this.#implementationTurn = 0;
+        return json({ schema_version: 1, changed_files: ["src/two.ts"] });
+      }
+      throw new Error(`unexpected implementation turn ${String(index)}:${String(turn)}`);
     }
     if (name === "PreCommitReviewOutput_v1") {
       const review = this.#review++;
@@ -190,6 +284,13 @@ class EngineeringScriptTransport implements RuntimeTransport {
                   location: { relative_path: "src/one.ts", line: 1 },
                   evidence: "bad implementation",
                   required_fix: "Replace it with the accepted good implementation.",
+                },
+                {
+                  severity: "HIGH",
+                  summary: "The first view action is deliberately inert.",
+                  location: { relative_path: "src/one-view.ts", line: 1 },
+                  evidence: "inert action",
+                  required_fix: "Wire the accepted production action.",
                 },
               ],
               lines_examined: 20,
@@ -310,7 +411,10 @@ describeIntegration(
             gate_id: "unit",
             gate_class: VerificationGateClass.TEST,
             executable,
-            argv: ["-e", "process.exit(0)"],
+            argv: [
+              "-e",
+              "const fs=require('node:fs');const p='one-view.ts';if(fs.existsSync(p)&&fs.readFileSync(p,'utf8').includes('compile broken')){console.error('error: review correction introduced compile broken');process.exit(1)}",
+            ],
             relative_cwd: "src",
             required: true,
             baseline: false,
@@ -444,6 +548,12 @@ describeIntegration(
       expect(
         (await run("git", ["-C", source, "branch", "--format=%(refname:short)"])).stdout.trim(),
       ).toBe("main");
+      await expect(readFile(join(workspacePath, "src", "one.ts"), "utf8")).resolves.toBe(
+        "good implementation\n",
+      );
+      await expect(readFile(join(workspacePath, "src", "one-view.ts"), "utf8")).resolves.toBe(
+        "wired action\n",
+      );
       const artifacts = await db.query<{
         artifact_kind: string;
         stage_attempt: number;
@@ -455,8 +565,9 @@ describeIntegration(
       const implementationArtifacts = artifacts.rows.filter(
         (row) => row.artifact_kind === "SliceImplementationReceipt",
       );
-      expect(implementationArtifacts.map((row) => row.stage_attempt)).toEqual([1, 2, 3]);
+      expect(implementationArtifacts.map((row) => row.stage_attempt)).toEqual([1, 2, 3, 4]);
       expect(implementationArtifacts.map((row) => row.slice_id)).toEqual([
+        "slice-1",
         "slice-1",
         "slice-1",
         "slice-2",
@@ -465,7 +576,7 @@ describeIntegration(
         artifacts.rows
           .filter((row) => row.artifact_kind === "ReviewDecision")
           .map((row) => row.stage_attempt),
-      ).toEqual([1, 2, 3]);
+      ).toEqual([1, 3, 4]);
       expect(
         artifacts.rows
           .filter((row) => row.artifact_kind === "ReviewDecision")
@@ -474,25 +585,30 @@ describeIntegration(
       expect(
         artifacts.rows.filter((row) => row.artifact_kind === "LocalCommitReceipt"),
       ).toHaveLength(1);
+      expect(
+        artifacts.rows
+          .filter((row) => row.artifact_kind === "GateFailure")
+          .map((row) => row.stage_attempt),
+      ).toEqual([2]);
       const implementationRequests = transport.requests.filter(
         (request) => request.outputSchema?.name === "SliceImplementationReport_v1",
       );
-      expect(implementationRequests).toHaveLength(6);
+      expect(implementationRequests).toHaveLength(10);
       const correctionRequests = implementationRequests.filter(
         (request) =>
           request.tools
             ?.map((tool) => tool.name)
             .sort()
-            .join(",") === "mkdir,patch,write",
+            .join(",") === "mkdir,patch",
       );
-      expect(correctionRequests).toHaveLength(2);
+      expect(correctionRequests).toHaveLength(6);
       expect(
         correctionRequests.every(
           (request) =>
             request.tools
               ?.map((tool) => tool.name)
               .sort()
-              .join(",") === "mkdir,patch,write",
+              .join(",") === "mkdir,patch",
         ),
       ).toBe(true);
       const correctionPrompt = correctionRequests[0]?.messages
@@ -501,6 +617,34 @@ describeIntegration(
         .map((content) => content.text)
         .join("\n");
       expect(correctionPrompt).toContain('"relative_path":"src/one.ts"');
+      expect(correctionPrompt).toContain("Previous independent-review correction evidence");
+      expect(correctionPrompt).toContain("The first implementation is deliberately wrong");
+      expect(correctionPrompt).toContain("Replace it with the accepted good implementation");
+      expect(correctionPrompt).toContain("The first view action is deliberately inert");
+      expect(correctionPrompt).toContain("Wire the accepted production action");
+      expect(correctionPrompt).toContain("ENGINEERING_CORRECTION_CONTEXT_REFERENCE");
+      expect(correctionPrompt).toContain(canonicalDigest("context SLICE_IMPLEMENTATION"));
+      expect(correctionPrompt).not.toContain("Context: context SLICE_IMPLEMENTATION");
+      const regressionGuardPrompt = correctionRequests
+        .map((request) =>
+          request.messages
+            .flatMap((message) => message.content)
+            .filter((content) => content.type === "text")
+            .map((content) => content.text)
+            .join("\n"),
+        )
+        .find((prompt) => prompt.includes("active regression checklist"));
+      expect(regressionGuardPrompt).toContain("The first implementation is deliberately wrong");
+      expect(regressionGuardPrompt).toContain("The first view action is deliberately inert");
+      expect(regressionGuardPrompt).toContain('"mode":"REGRESSION_GUARD"');
+      expect(regressionGuardPrompt).toContain('"required_mutation_paths":[]');
+      expect(regressionGuardPrompt).toContain("patch only the exact current gate/compiler failure");
+      const firstImplementationPrompt = implementationRequests[0]?.messages
+        .flatMap((message) => message.content)
+        .filter((content) => content.type === "text")
+        .map((content) => content.text)
+        .join("\n");
+      expect(firstImplementationPrompt).toContain("Context: context SLICE_IMPLEMENTATION");
       const serializedPrefetch = correctionPrompt
         ?.split("Code-owned prefetched repository context: ")[1]
         ?.split("\nPrevious required-gate correction evidence:")[0];
@@ -508,12 +652,34 @@ describeIntegration(
         evidence: string;
         relative_path: string;
       }>;
-      expect(prefetched).toHaveLength(1);
-      expect(prefetched[0]?.relative_path).toBe("src/one.ts");
-      expect(JSON.parse(prefetched[0]?.evidence ?? "{}")).toMatchObject({
+      expect(prefetched).toHaveLength(2);
+      const prefetchedFlow = prefetched.find((entry) => entry.relative_path === "src/one.ts");
+      const prefetchedView = prefetched.find((entry) => entry.relative_path === "src/one-view.ts");
+      expect(JSON.parse(prefetchedFlow?.evidence ?? "{}")).toMatchObject({
         complete: true,
         content: "bad implementation\n",
         relative_path: "src/one.ts",
+      });
+      expect(JSON.parse(prefetchedView?.evidence ?? "{}")).toMatchObject({
+        complete: true,
+        content: "inert action\n",
+        relative_path: "src/one-view.ts",
+      });
+      const recoveryInstruction = correctionRequests[2]?.messages
+        .flatMap((message) => message.content)
+        .find(
+          (content) =>
+            content.type === "json" &&
+            typeof content.value === "object" &&
+            content.value !== null &&
+            !Array.isArray(content.value) &&
+            content.value.kind === "MUTATION_RECOVERY_REQUIRED",
+        );
+      expect(recoveryInstruction).toMatchObject({
+        type: "json",
+        value: {
+          required_correction_paths_all: ["src/one-view.ts"],
+        },
       });
       const ordinaryImplementationRequests = implementationRequests.filter(
         (request) => !correctionRequests.includes(request),

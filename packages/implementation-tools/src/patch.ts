@@ -59,6 +59,7 @@ import { dirname } from "node:path";
 
 import {
   TrustLevel,
+  canonicalDigest,
   canonicalJsonStringify,
   idString,
   sha256Digest,
@@ -107,6 +108,9 @@ export const WRITE_PARENT_NOT_A_DIRECTORY = "PARENT_NOT_A_DIRECTORY";
 /** An exact text replacement did not occur exactly once; nothing was written. */
 export const WRITE_REPLACEMENT_MISMATCH = "REPLACEMENT_MISMATCH";
 
+/** The requested post-state is byte-identical to the current file; nothing was written. */
+export const WRITE_NO_CHANGE = "NO_CHANGE";
+
 /** Last-resort code for a fault with no stable classification. */
 export const WRITE_TOOL_FAILED = "WRITE_TOOL_FAILED";
 
@@ -118,16 +122,115 @@ export type ImplementationWriteToolName = "write" | "patch";
  * host path can never reach a model-visible envelope through it.
  */
 export class ImplementationWriteError extends Error {
-  public constructor(public readonly code: string) {
+  public constructor(
+    public readonly code: string,
+    public readonly repairContext: Readonly<Record<string, unknown>> | null = null,
+  ) {
     super(code);
     this.name = "ImplementationWriteError";
   }
 }
 
 const encoder = new TextEncoder();
+const MAX_REPAIR_EXCERPT_BYTES = 8_192;
 
 function byteLength(value: string): number {
   return encoder.encode(value).length;
+}
+
+function boundedUtf8Prefix(value: string, maximumBytes: number): string {
+  if (byteLength(value) <= maximumBytes) return value;
+  let low = 0;
+  let high = value.length;
+  let best = "";
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = value.slice(0, mid);
+    if (byteLength(candidate) <= maximumBytes) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+function replacementRepairContext(
+  relativePath: string,
+  content: string,
+  oldContent: string,
+  replacementIndex: number,
+): Readonly<Record<string, unknown>> {
+  const anchor = oldContent
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length >= 4 && content.includes(line));
+  const anchorOffset = anchor === undefined ? 0 : Math.max(0, content.indexOf(anchor) - 512);
+  const remainingContent = content.slice(anchorOffset);
+  const excerpt = boundedUtf8Prefix(remainingContent, MAX_REPAIR_EXCERPT_BYTES);
+  return Object.freeze({
+    relative_path: relativePath,
+    replacement_index: replacementIndex,
+    expected_old_content_digest: canonicalDigest(oldContent),
+    current_excerpt: excerpt,
+    current_excerpt_digest: canonicalDigest(excerpt),
+    current_excerpt_complete: anchorOffset === 0 && excerpt === content,
+  });
+}
+
+type PlannedReplacement = Readonly<{
+  start: number;
+  end: number;
+  newContent: string;
+}>;
+
+/**
+ * Plan every exact replacement against the same immutable file snapshot.
+ *
+ * Applying hunks sequentially makes an earlier hunk capable of creating a second occurrence of a
+ * later hunk's `old_content`, even though every requested anchor was unique in the bytes the model
+ * actually inspected. Planning first and applying from the end preserves exact-match semantics,
+ * keeps offsets stable, and still refuses genuinely overlapping edits before the first write.
+ */
+function applySnapshotReplacements(
+  relativePath: string,
+  currentContent: string,
+  replacements: readonly Readonly<{ old_content: string; new_content: string }>[],
+): string {
+  const planned = replacements.map((replacement, replacementIndex): PlannedReplacement => {
+    const start = currentContent.indexOf(replacement.old_content);
+    const lastStart = currentContent.lastIndexOf(replacement.old_content);
+    if (start < 0 || start !== lastStart) {
+      throw new ImplementationWriteError(
+        WRITE_REPLACEMENT_MISMATCH,
+        replacementRepairContext(
+          relativePath,
+          currentContent,
+          replacement.old_content,
+          replacementIndex,
+        ),
+      );
+    }
+    return Object.freeze({
+      start,
+      end: start + replacement.old_content.length,
+      newContent: replacement.new_content,
+    });
+  });
+  const ascending = [...planned].sort((left, right) => left.start - right.start);
+  for (let index = 1; index < ascending.length; index += 1) {
+    if (ascending[index]!.start < ascending[index - 1]!.end) {
+      throw new ImplementationWriteError(INVALID_WRITE_REQUEST);
+    }
+  }
+  return [...ascending]
+    .reverse()
+    .reduce(
+      (content, replacement) =>
+        `${content.slice(0, replacement.start)}${replacement.newContent}${content.slice(replacement.end)}`,
+      currentContent,
+    );
 }
 
 const requestedFile = z.strictObject({
@@ -285,6 +388,12 @@ export type ImplementationWriteToolsOptions = Readonly<{
    */
   beforeMutation?: (event: ImplementationWriteProgress) => Promise<void>;
   observer?: ImplementationWriteObserver;
+  /**
+   * Optional code-owned content policy evaluated over the complete bytes that would be written.
+   * It runs during read-only preflight, before an operation intent or filesystem syscall exists.
+   * Returning a stable code refuses the whole batch without consuming the operation id.
+   */
+  contentPolicy?: (file: Readonly<{ relative_path: string; content: string }>) => string | null;
 }>;
 
 export type ImplementationWriteInput = Readonly<{
@@ -367,11 +476,16 @@ async function preflight(
   policy: WorkspacePathPolicy,
   root: VerifiedWorkspacePath,
   request: ImplementationPatchRequest,
+  contentPolicy?: ImplementationWriteToolsOptions["contentPolicy"],
+  allowNoChange = false,
 ): Promise<WritePlan> {
   const beforeDigest = await computeTreeDigest(root);
   const pinned = request.expected_before_digest;
   if (pinned !== undefined && pinned !== null && pinned !== beforeDigest) {
-    throw new ImplementationWriteError(WRITE_PRE_STATE_MISMATCH);
+    throw new ImplementationWriteError(
+      WRITE_PRE_STATE_MISMATCH,
+      Object.freeze({ observed_before_digest: beforeDigest }),
+    );
   }
   const requested =
     "files" in request
@@ -400,12 +514,10 @@ async function preflight(
             } finally {
               await handle.close();
             }
-            for (const replacement of file.replacements) {
-              const occurrences = content.split(replacement.old_content).length - 1;
-              if (occurrences !== 1) {
-                throw new ImplementationWriteError(WRITE_REPLACEMENT_MISMATCH);
-              }
-              content = content.replace(replacement.old_content, replacement.new_content);
+            const currentContent = content;
+            content = applySnapshotReplacements(file.relative_path, content, file.replacements);
+            if (!allowNoChange && content === currentContent) {
+              throw new ImplementationWriteError(WRITE_NO_CHANGE);
             }
             if (byteLength(content) > MAX_WRITE_TOTAL_BYTES) {
               throw new ImplementationWriteError(INVALID_WRITE_REQUEST);
@@ -420,12 +532,37 @@ async function preflight(
         ? 1
         : 0,
   );
+  for (const file of ordered) {
+    const refusal = contentPolicy?.({
+      relative_path: file.relative_path,
+      content: file.content,
+    });
+    if (refusal !== undefined && refusal !== null) {
+      throw new ImplementationWriteError(refusal);
+    }
+  }
   const files: PlannedFile[] = [];
   for (const file of ordered) {
     const target = await policy.validateCreateTarget(file.relative_path);
     const existing = await lstat(target).catch(() => null);
     if (existing !== null && !existing.isFile()) {
       throw new ImplementationWriteError(WRITE_TARGET_NOT_A_FILE);
+    }
+    if ("files" in request && existing !== null) {
+      const handle = await open(target, constants.O_RDONLY | NOFOLLOW).catch(() => {
+        throw new ImplementationWriteError(WRITE_TOOL_FAILED);
+      });
+      try {
+        const current = await handle.readFile();
+        if (!allowNoChange && current.equals(Buffer.from(file.content))) {
+          throw new ImplementationWriteError(WRITE_NO_CHANGE);
+        }
+      } catch (error) {
+        if (error instanceof ImplementationWriteError) throw error;
+        throw new ImplementationWriteError(WRITE_TOOL_FAILED);
+      } finally {
+        await handle.close();
+      }
     }
     const parent = await lstat(dirname(target)).catch(() => null);
     if (parent === null || !parent.isDirectory()) {
@@ -634,6 +771,7 @@ function render(
   tool: ImplementationWriteToolName,
   decision: Decision,
   errorCode: string | null,
+  repairContext: Readonly<Record<string, unknown>> | null,
 ): ToolOutput {
   const paths = decision.outcome === ToolOutcome.FAILED ? [] : decision.changedFiles;
   const body = (kept: number, complete: boolean): Record<string, unknown> => ({
@@ -644,6 +782,7 @@ function render(
     ambiguity_reason: decision.outcome === ToolOutcome.AMBIGUOUS ? decision.ambiguityReason : null,
     failure_code: decision.outcome === ToolOutcome.FAILED ? decision.failureCode : null,
     error_code: errorCode,
+    repair_context: decision.outcome === ToolOutcome.FAILED ? repairContext : null,
     dropped: paths.length - kept,
     changed_files: paths.slice(0, kept),
   });
@@ -675,6 +814,7 @@ function envelope(
   beforeDigest: string | null,
   decision: Decision,
   errorCode: string | null,
+  repairContext: Readonly<Record<string, unknown>> | null = null,
 ): ImplementationToolResult {
   const base = {
     schema_version: 1,
@@ -682,7 +822,7 @@ function envelope(
     identity,
     kind,
     before_digest: beforeDigest,
-    output: render(tool, decision, errorCode),
+    output: render(tool, decision, errorCode, repairContext),
   };
   if (decision.outcome === ToolOutcome.SUCCEEDED) {
     return implementationToolResult.parse({
@@ -725,7 +865,7 @@ export async function createImplementationWriteTools(
 ): Promise<ImplementationWriteTools> {
   const policy = await createWorkspacePathPolicy(options.root);
   const root = policy.root;
-  const { identity, ledger, runTransaction, beforeMutation, observer } = options;
+  const { identity, ledger, runTransaction, beforeMutation, observer, contentPolicy } = options;
 
   const apply = async (
     tool: ImplementationWriteToolName,
@@ -753,18 +893,39 @@ export async function createImplementationWriteTools(
     // they are a clean FAILED and are not worth an `operation_id`'s claim.
     let plan: WritePlan;
     try {
-      plan = await preflight(policy, root, parsed.data);
+      const existing = await runTransaction(async (tx) => ledger.find(tx, operationId, identity));
+      plan = await preflight(policy, root, parsed.data, contentPolicy, existing !== null);
     } catch (error) {
-      const code = failureCode(error);
-      return envelope(
-        tool,
-        kind,
-        identity,
-        operationId,
-        null,
-        { outcome: ToolOutcome.FAILED, afterDigest: null, failureCode: code },
-        code,
-      );
+      if (error instanceof ImplementationWriteError && error.code === WRITE_NO_CHANGE) {
+        const raced = await runTransaction(async (tx) => ledger.find(tx, operationId, identity));
+        if (raced !== null) {
+          plan = await preflight(policy, root, parsed.data, contentPolicy, true);
+        } else {
+          const code = failureCode(error);
+          return envelope(
+            tool,
+            kind,
+            identity,
+            operationId,
+            null,
+            { outcome: ToolOutcome.FAILED, afterDigest: null, failureCode: code },
+            code,
+            error.repairContext,
+          );
+        }
+      } else {
+        const code = failureCode(error);
+        return envelope(
+          tool,
+          kind,
+          identity,
+          operationId,
+          null,
+          { outcome: ToolOutcome.FAILED, afterDigest: null, failureCode: code },
+          code,
+          error instanceof ImplementationWriteError ? error.repairContext : null,
+        );
+      }
     }
 
     // Phase C + D: the intent is committed, and only then may anything be

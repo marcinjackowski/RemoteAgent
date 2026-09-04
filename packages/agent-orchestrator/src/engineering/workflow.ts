@@ -208,23 +208,33 @@ export type EngineeringStructuralState = Readonly<{
   designRevisions: Readonly<Record<string, number>>;
   sliceRevision: number;
   failedGateIds: readonly string[];
+  /** Exact durable gate-log identities; absent only on legacy/runtime-only evidence. */
+  failedGateEvidenceDigests?: readonly string[];
   unresolvedFindingIds: readonly string[];
   /** Deliberately excluded from the fingerprint. */
   narrative?: string;
 }>;
 
+function normalizedDesignRevisions(
+  designRevisions: Readonly<Record<string, number>>,
+): Readonly<Record<string, number>> {
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(designRevisions)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([name, revision]) => [
+          identifier(name, "design revision name"),
+          safeRevision(revision, name),
+        ]),
+    ),
+  );
+}
+
 /** Only durable structural facts influence progress identity. */
 export function engineeringStructuralFingerprint(state: EngineeringStructuralState): string {
   if (!SHA256.test(state.treeDigest))
     throw new EngineeringWorkflowPolicyError("treeDigest must be sha256");
-  const designRevisions = Object.fromEntries(
-    Object.entries(state.designRevisions)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([name, revision]) => [
-        identifier(name, "design revision name"),
-        safeRevision(revision, name),
-      ]),
-  );
+  const designRevisions = normalizedDesignRevisions(state.designRevisions);
   return canonicalDigest({
     tree_digest: state.treeDigest,
     design_revisions: designRevisions,
@@ -236,6 +246,87 @@ export function engineeringStructuralFingerprint(state: EngineeringStructuralSta
       ...new Set(state.unresolvedFindingIds.map((id) => identifier(id, "finding ID"))),
     ].sort(),
   });
+}
+
+/**
+ * Detect a review correction cycle independently from the reviewer's changing finding set.
+ * Finding locations remain load-bearing in the primary progress fingerprint, while this exact
+ * tree identity catches A/B repository oscillation even when a fresh reviewer reports a different
+ * subset or severity on each pass.
+ */
+export function engineeringReviewCycleFingerprint(state: EngineeringStructuralState): string {
+  if (!SHA256.test(state.treeDigest))
+    throw new EngineeringWorkflowPolicyError("treeDigest must be sha256");
+  return canonicalDigest({
+    tree_digest: state.treeDigest,
+    design_revisions: normalizedDesignRevisions(state.designRevisions),
+    slice_revision: safeRevision(state.sliceRevision, "sliceRevision"),
+  });
+}
+
+/**
+ * Identify whether a required-gate correction changed the failing observation. A changing tree is
+ * not progress when the same exact gate evidence remains red; conversely, a new log digest keeps
+ * the correction loop open because it proves that the failure itself changed.
+ */
+export function engineeringGateFailureFingerprint(state: EngineeringStructuralState): string {
+  const evidenceDigests = [...new Set(state.failedGateEvidenceDigests ?? [])].sort();
+  for (const digest of evidenceDigests) {
+    if (!SHA256.test(digest))
+      throw new EngineeringWorkflowPolicyError("gate evidence digest must be sha256");
+  }
+  return canonicalDigest({
+    design_revisions: normalizedDesignRevisions(state.designRevisions),
+    slice_revision: safeRevision(state.sliceRevision, "sliceRevision"),
+    failed_gate_ids: [
+      ...new Set(state.failedGateIds.map((id) => identifier(id, "gate ID"))),
+    ].sort(),
+    failed_gate_evidence_digests: evidenceDigests,
+  });
+}
+
+/**
+ * Detect a required-gate correction cycle independently from volatile compiler text/log bytes.
+ * The exact tree remains load-bearing here: A/B/A/B repository states are oscillation even when
+ * line numbers or compiler prose give every failed receipt a new log digest.
+ */
+export function engineeringGateFailureCycleFingerprint(state: EngineeringStructuralState): string {
+  if (!SHA256.test(state.treeDigest))
+    throw new EngineeringWorkflowPolicyError("treeDigest must be sha256");
+  return canonicalDigest({
+    tree_digest: state.treeDigest,
+    design_revisions: normalizedDesignRevisions(state.designRevisions),
+    slice_revision: safeRevision(state.sliceRevision, "sliceRevision"),
+    failed_gate_ids: [
+      ...new Set(state.failedGateIds.map((id) => identifier(id, "gate ID"))),
+    ].sort(),
+  });
+}
+
+export function evaluateEngineeringFingerprintProgress(input: {
+  readonly fingerprints: readonly string[];
+  readonly consecutiveRepeatLimit: number;
+  readonly oscillationLimit: number;
+}): "CONTINUE" | "NO_PROGRESS" | "OSCILLATION" {
+  if (
+    !Number.isSafeInteger(input.consecutiveRepeatLimit) ||
+    input.consecutiveRepeatLimit <= 0 ||
+    !Number.isSafeInteger(input.oscillationLimit) ||
+    input.oscillationLimit <= 0
+  ) {
+    throw new EngineeringWorkflowPolicyError("fingerprint progress limits must be positive");
+  }
+  const history = input.fingerprints;
+  if (history.length >= input.consecutiveRepeatLimit + 1) {
+    const tail = history.slice(-(input.consecutiveRepeatLimit + 1));
+    if (tail.every((fingerprint) => fingerprint === tail[0])) return "NO_PROGRESS";
+  }
+  let oscillations = 0;
+  for (let index = 2; index < history.length; index += 1) {
+    if (history[index] === history[index - 2] && history[index] !== history[index - 1])
+      oscillations += 1;
+  }
+  return oscillations >= input.oscillationLimit ? "OSCILLATION" : "CONTINUE";
 }
 
 export type EngineeringProgressDisposition =
@@ -285,18 +376,11 @@ export function evaluateEngineeringProgress(input: {
   if (input.stageCalls >= input.maxStageCalls) return "STAGE_LIMIT_EXHAUSTED";
   if (input.modelCalls >= input.maxModelCalls) return "CALL_LIMIT_EXHAUSTED";
 
-  const history = input.fingerprints;
-  if (history.length >= input.consecutiveRepeatLimit + 1) {
-    const tail = history.slice(-(input.consecutiveRepeatLimit + 1));
-    if (tail.every((fingerprint) => fingerprint === tail[0])) return "NO_PROGRESS";
-  }
-  let oscillations = 0;
-  for (let index = 2; index < history.length; index += 1) {
-    if (history[index] === history[index - 2] && history[index] !== history[index - 1])
-      oscillations += 1;
-  }
-  if (oscillations >= input.oscillationLimit) return "OSCILLATION";
-  return "CONTINUE";
+  return evaluateEngineeringFingerprintProgress({
+    fingerprints: input.fingerprints,
+    consecutiveRepeatLimit: input.consecutiveRepeatLimit,
+    oscillationLimit: input.oscillationLimit,
+  });
 }
 
 export type EngineeringStageBinding = Readonly<{
@@ -349,8 +433,12 @@ export type EngineeringRuntimeStopCode =
 export type EngineeringRuntimeSession = Readonly<{
   plan: EngineeringWorkflowPlan;
   fingerprints: readonly string[];
-  /** Latest durable gate-correction state; permits a restart-safe two-strike gate loop bound. */
+  /** Latest durable gate-correction state, retained for restart-safe correction identity. */
   lastGateFailureFingerprint?: string;
+  /** Restart-safe exact-tree history for gate-only A/B cycle detection. */
+  gateFailureCycleFingerprints?: readonly string[];
+  /** Restart-safe exact-tree history for review A/B cycles with volatile finding sets. */
+  reviewCycleFingerprints?: readonly string[];
   stageCalls: number;
   maxStageCalls: number;
   modelCalls: number;

@@ -83,6 +83,24 @@ export const TEST_FIRST_MUTATION_REQUIRED = "TEST_FIRST_MUTATION_REQUIRED";
 /** Existing files cannot be replaced wholesale through patch.files. */
 export const BOUNDED_PATCH_REQUIRES_EXACT_REPLACEMENTS = "PATCH_REQUIRES_EXACT_REPLACEMENTS";
 
+/** Code-owned generator outputs can be observed by the model, but never mutated by it. */
+export const CODE_OWNED_GENERATOR_OUTPUT_RESERVED = "CODE_OWNED_GENERATOR_OUTPUT_RESERVED";
+
+/** Tests must exercise behavior or public contracts, never inspect production source as text. */
+export const TEST_SOURCE_INTROSPECTION_REFUSED = "TEST_SOURCE_INTROSPECTION_REFUSED";
+
+/** A blocking correction cannot be satisfied by changing whitespace alone. */
+export const CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED = "CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED";
+
+/** A behavioral test correction cannot be satisfied by import/comment scaffolding alone. */
+export const CORRECTION_BEHAVIORAL_MUTATION_REQUIRED = "CORRECTION_BEHAVIORAL_MUTATION_REQUIRED";
+
+export const BOUNDED_TEST_CONTENT_POLICY = Object.freeze({
+  schema_version: 1 as const,
+  test_contract: "BEHAVIOR_OR_PUBLIC_API" as const,
+  source_text_introspection: "REFUSE" as const,
+});
+
 export const DEFAULT_BOUNDED_DISCOVERY_CALLS = 10;
 export const MAX_BOUNDED_DISCOVERY_CALLS = 24;
 
@@ -106,6 +124,20 @@ const PROTECTED_SEGMENTS: readonly string[] = Object.freeze([
   "credentials",
   "secrets",
 ]);
+
+const swiftProductionSourceHelper = /\bsourceFile\s*\(\s*#?"Sources\//u;
+const swiftFileContentsReader = /\b(?:String|Data)\s*\(\s*contentsOf(?:File)?\s*:/u;
+const productionSourcesLiteral = /#?"Sources\//u;
+
+/** Pure, deterministic content check shared by write and exact replacement preflight. */
+export function boundedTestContentPolicyViolation(content: string): string | null {
+  const sourceHelper = swiftProductionSourceHelper.test(content);
+  const sourceReader = swiftFileContentsReader.test(content);
+  const productionPath = productionSourcesLiteral.test(content);
+  return sourceHelper || (sourceReader && productionPath)
+    ? TEST_SOURCE_INTROSPECTION_REFUSED
+    : null;
+}
 
 /**
  * Repository instruction files. Protected because they are the agent's own
@@ -541,6 +573,14 @@ export type BoundedImplementationToolsetOptions = Omit<
     allowedPaths: readonly string[];
     /** Server-owned SliceContract test roots that must contain the first mutation. */
     firstMutationPaths: readonly string[];
+    /** Exact code-owned generator outputs reserved from every model mutation tool. */
+    reservedMutationPaths?: readonly string[];
+    /** Exact blocking-correction paths that require at least one non-whitespace replacement. */
+    requiredSubstantiveMutationPaths?: readonly string[];
+    /** Exact behavioral-test correction paths that must change executable/assertion code. */
+    requiredBehavioralMutationPaths?: readonly string[];
+    /** A prior durable attempt already proved the test-first mutation chronology for this slice. */
+    firstMutationAlreadySatisfied?: boolean;
     /**
      * Code-owned discovery ceiling. Production may raise this only to execute a validated
      * prefetched catalog plan; the model then receives mutation-only tools.
@@ -616,6 +656,50 @@ export async function createBoundedImplementationToolset(
   ) {
     throw new Error("first mutation paths must be contained by allowed paths");
   }
+  const reservedMutationPaths = Object.freeze(
+    [
+      ...new Set(
+        (options.reservedMutationPaths ?? []).map((path) => workspaceRelativePath.parse(path)),
+      ),
+    ].sort(),
+  );
+  if (
+    reservedMutationPaths.some(
+      (path) => !allowed.some((root) => path === root || path.startsWith(`${root}/`)),
+    )
+  ) {
+    throw new Error("reserved mutation paths must be contained by allowed paths");
+  }
+  const requiredSubstantiveMutationPaths = Object.freeze(
+    [
+      ...new Set(
+        (options.requiredSubstantiveMutationPaths ?? []).map((path) =>
+          workspaceRelativePath.parse(path),
+        ),
+      ),
+    ].sort(),
+  );
+  if (
+    requiredSubstantiveMutationPaths.some(
+      (path) => !allowed.some((root) => path === root || path.startsWith(`${root}/`)),
+    )
+  ) {
+    throw new Error("required substantive mutation paths must be contained by allowed paths");
+  }
+  const requiredBehavioralMutationPaths = Object.freeze(
+    [
+      ...new Set(
+        (options.requiredBehavioralMutationPaths ?? []).map((path) =>
+          workspaceRelativePath.parse(path),
+        ),
+      ),
+    ].sort(),
+  );
+  if (
+    requiredBehavioralMutationPaths.some((path) => !requiredSubstantiveMutationPaths.includes(path))
+  ) {
+    throw new Error("behavioral mutation paths must also require substantive correction");
+  }
   const maxDiscoveryCalls = options.maxDiscoveryCalls ?? DEFAULT_BOUNDED_DISCOVERY_CALLS;
   if (
     !Number.isSafeInteger(maxDiscoveryCalls) ||
@@ -636,6 +720,12 @@ export async function createBoundedImplementationToolset(
     ledger: options.ledger,
     runTransaction: options.runTransaction,
     beforeMutation: async () => options.beforeMutation(),
+    contentPolicy: ({ relative_path, content }) =>
+      firstMutationPaths.some(
+        (root) => relative_path === root || relative_path.startsWith(`${root}/`),
+      )
+        ? boundedTestContentPolicyViolation(content)
+        : null,
   });
   const mkdir = await createImplementationMkdirTool({
     root: options.root,
@@ -647,7 +737,8 @@ export async function createBoundedImplementationToolset(
   let sequence = 0;
   let ambiguous = false;
   let discoveryCalls = 0;
-  let firstMutationSucceeded = false;
+  let firstMutationSucceeded = options.firstMutationAlreadySatisfied === true;
+  const satisfiedSubstantiveMutationPaths = new Set<string>();
 
   const nextId = (tool: BoundedImplementationToolName): string => {
     if (ambiguous) throw new Error("AMBIGUOUS implementation operation requires reconciliation");
@@ -667,6 +758,71 @@ export async function createBoundedImplementationToolset(
     allowed.some((root) => path === root || path.startsWith(`${root}/`));
   const isFirstMutationPath = (path: string): boolean =>
     firstMutationPaths.some((root) => path === root || path.startsWith(`${root}/`));
+  const isReservedMutationPath = (path: string): boolean =>
+    reservedMutationPaths.some((root) => path === root || path.startsWith(`${root}/`));
+  const requiresSubstantiveMutation = (path: string): boolean =>
+    requiredSubstantiveMutationPaths.includes(path);
+  const requiresBehavioralMutation = (path: string): boolean =>
+    requiredBehavioralMutationPaths.includes(path);
+  const changesNonWhitespace = (oldContent: string, newContent: string): boolean =>
+    oldContent.replace(/\s/gu, "") !== newContent.replace(/\s/gu, "");
+  const behavioralContent = (content: string): string =>
+    content
+      .replace(/\/\*[\s\S]*?\*\//gu, "")
+      .split(/\r?\n/gu)
+      .filter((line) => {
+        const trimmed = line.trim();
+        return (
+          trimmed.length > 0 &&
+          !trimmed.startsWith("//") &&
+          !/^(?:@testable\s+)?import\s+/u.test(trimmed) &&
+          !/^#include\s*[<"]/u.test(trimmed)
+        );
+      })
+      .join("\n")
+      .replace(/\s/gu, "");
+  const changesBehavior = (oldContent: string, newContent: string): boolean =>
+    behavioralContent(oldContent) !== behavioralContent(newContent);
+  const requireSubstantiveCorrection = (
+    tool: "write" | "patch",
+    kind: ToolKind,
+    operationId: string,
+    requestedPaths: readonly string[],
+    qualifyingPaths: readonly string[],
+  ): ImplementationToolResult | null => {
+    const pendingPaths = requiredSubstantiveMutationPaths.filter(
+      (path) => !satisfiedSubstantiveMutationPaths.has(path),
+    );
+    if (pendingPaths.length === 0) return null;
+    const requestedPendingPaths = pendingPaths.filter((path) => requestedPaths.includes(path));
+    const missingQualification = requestedPendingPaths.find(
+      (path) => !qualifyingPaths.includes(path),
+    );
+    if (requestedPendingPaths.length > 0 && missingQualification === undefined) return null;
+    const behavioralRequired = requiresBehavioralMutation(missingQualification ?? pendingPaths[0]!);
+    return refuseMutation(
+      tool,
+      kind,
+      operationId,
+      behavioralRequired
+        ? CORRECTION_BEHAVIORAL_MUTATION_REQUIRED
+        : CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED,
+      behavioralRequired
+        ? "Change executable behavior or assertions in every exact behavioral correction path; import, comment, and whitespace-only edits do not count."
+        : "Make a non-whitespace edit to every exact required correction path before unrelated mutations.",
+    );
+  };
+  const markSubstantiveCorrection = (
+    result: ImplementationToolResult,
+    qualifyingPaths: readonly string[],
+  ): ImplementationToolResult => {
+    if (result.outcome === ToolOutcome.SUCCEEDED) {
+      for (const path of qualifyingPaths) {
+        if (result.changed_files.includes(path)) satisfiedSubstantiveMutationPaths.add(path);
+      }
+    }
+    return result;
+  };
   const protectedResult = (
     tool: string,
     kind: ToolKind,
@@ -760,6 +916,21 @@ export async function createBoundedImplementationToolset(
       },
     });
   };
+  const explainTestContentRefusal = (
+    result: ImplementationToolResult,
+    tool: "write" | "patch",
+    kind: ToolKind,
+    operationId: string,
+  ): ImplementationToolResult =>
+    "failure_code" in result && result.failure_code === TEST_SOURCE_INTROSPECTION_REFUSED
+      ? refuseMutation(
+          tool,
+          kind,
+          operationId,
+          TEST_SOURCE_INTROSPECTION_REFUSED,
+          "Replace production-source text inspection with behavioral assertions or a public-API contract test.",
+        )
+      : result;
   const requireTestFirst = (
     tool: BoundedImplementationToolName,
     kind: ToolKind,
@@ -900,6 +1071,17 @@ export async function createBoundedImplementationToolset(
       if (!isAllowed(input.relative_path)) {
         return observe(refuseOutside("write", ToolKind.WRITE_FILE, operationId));
       }
+      if (isReservedMutationPath(input.relative_path)) {
+        return observe(
+          refuseMutation(
+            "write",
+            ToolKind.WRITE_FILE,
+            operationId,
+            CODE_OWNED_GENERATOR_OUTPUT_RESERVED,
+            "Do not mutate code-owned generator outputs; change an allowed generator input instead.",
+          ),
+        );
+      }
       const denied = protectedResult("write", ToolKind.WRITE_FILE, operationId, [
         input.relative_path,
       ]);
@@ -908,24 +1090,43 @@ export async function createBoundedImplementationToolset(
         input.relative_path,
       ]);
       if (testFirst !== null) return observe(testFirst);
+      const substantiveWritePaths =
+        requiresSubstantiveMutation(input.relative_path) &&
+        input.content.replace(/\s/gu, "") !== "" &&
+        (!requiresBehavioralMutation(input.relative_path) ||
+          behavioralContent(input.content) !== "")
+          ? [input.relative_path]
+          : [];
+      const correction = requireSubstantiveCorrection(
+        "write",
+        ToolKind.WRITE_FILE,
+        operationId,
+        [input.relative_path],
+        substantiveWritePaths,
+      );
+      if (correction !== null) return observe(correction);
       const target = await pathPolicy.validateCreateTarget(input.relative_path);
       if ((await lstat(target).catch(() => null)) !== null) {
         return observe(refuseExistingWrite(operationId));
       }
+      const result = await writes.write(
+        input.expected_before_digest === undefined
+          ? {
+              operation_id: operationId,
+              relative_path: input.relative_path,
+              content: input.content,
+            }
+          : {
+              operation_id: operationId,
+              relative_path: input.relative_path,
+              content: input.content,
+              expected_before_digest: input.expected_before_digest,
+            },
+      );
       return markFirstMutation(
-        await writes.write(
-          input.expected_before_digest === undefined
-            ? {
-                operation_id: operationId,
-                relative_path: input.relative_path,
-                content: input.content,
-              }
-            : {
-                operation_id: operationId,
-                relative_path: input.relative_path,
-                content: input.content,
-                expected_before_digest: input.expected_before_digest,
-              },
+        markSubstantiveCorrection(
+          explainTestContentRefusal(result, "write", ToolKind.WRITE_FILE, operationId),
+          substantiveWritePaths,
         ),
         true,
       );
@@ -939,10 +1140,52 @@ export async function createBoundedImplementationToolset(
       if (paths.some((path) => !isAllowed(path))) {
         return observe(refuseOutside("patch", ToolKind.APPLY_PATCH, operationId));
       }
+      if (paths.some((path) => isReservedMutationPath(path))) {
+        return observe(
+          refuseMutation(
+            "patch",
+            ToolKind.APPLY_PATCH,
+            operationId,
+            CODE_OWNED_GENERATOR_OUTPUT_RESERVED,
+            "Do not mutate code-owned generator outputs; change an allowed generator input instead.",
+          ),
+        );
+      }
       const denied = protectedResult("patch", ToolKind.APPLY_PATCH, operationId, paths);
       if (denied !== null) return observe(denied);
       const testFirst = requireTestFirst("patch", ToolKind.APPLY_PATCH, operationId, paths);
       if (testFirst !== null) return observe(testFirst);
+      const substantivePatchPaths =
+        "files" in input
+          ? input.files
+              .filter(
+                (file) =>
+                  requiresSubstantiveMutation(file.relative_path) &&
+                  file.content.replace(/\s/gu, "") !== "" &&
+                  (!requiresBehavioralMutation(file.relative_path) ||
+                    behavioralContent(file.content) !== ""),
+              )
+              .map((file) => file.relative_path)
+          : input.replacement_files
+              .filter(
+                (file) =>
+                  requiresSubstantiveMutation(file.relative_path) &&
+                  file.replacements.some(
+                    (replacement) =>
+                      changesNonWhitespace(replacement.old_content, replacement.new_content) &&
+                      (!requiresBehavioralMutation(file.relative_path) ||
+                        changesBehavior(replacement.old_content, replacement.new_content)),
+                  ),
+              )
+              .map((file) => file.relative_path);
+      const correction = requireSubstantiveCorrection(
+        "patch",
+        ToolKind.APPLY_PATCH,
+        operationId,
+        paths,
+        substantivePatchPaths,
+      );
+      if (correction !== null) return observe(correction);
       if ("files" in input) {
         const existing = await Promise.all(
           input.files.map(async (file) => {
@@ -962,23 +1205,27 @@ export async function createBoundedImplementationToolset(
           );
         }
       }
+      const result = await writes.patch(
+        "files" in input
+          ? input.expected_before_digest === undefined
+            ? { operation_id: operationId, files: input.files }
+            : {
+                operation_id: operationId,
+                files: input.files,
+                expected_before_digest: input.expected_before_digest,
+              }
+          : input.expected_before_digest === undefined
+            ? { operation_id: operationId, replacement_files: input.replacement_files }
+            : {
+                operation_id: operationId,
+                replacement_files: input.replacement_files,
+                expected_before_digest: input.expected_before_digest,
+              },
+      );
       return markFirstMutation(
-        await writes.patch(
-          "files" in input
-            ? input.expected_before_digest === undefined
-              ? { operation_id: operationId, files: input.files }
-              : {
-                  operation_id: operationId,
-                  files: input.files,
-                  expected_before_digest: input.expected_before_digest,
-                }
-            : input.expected_before_digest === undefined
-              ? { operation_id: operationId, replacement_files: input.replacement_files }
-              : {
-                  operation_id: operationId,
-                  replacement_files: input.replacement_files,
-                  expected_before_digest: input.expected_before_digest,
-                },
+        markSubstantiveCorrection(
+          explainTestContentRefusal(result, "patch", ToolKind.APPLY_PATCH, operationId),
+          substantivePatchPaths,
         ),
         true,
       );
@@ -988,6 +1235,17 @@ export async function createBoundedImplementationToolset(
       const operationId = nextId("mkdir");
       if (!isAllowed(input.relative_path)) {
         return observe(refuseOutside("mkdir", ToolKind.WRITE_FILE, operationId));
+      }
+      if (isReservedMutationPath(input.relative_path)) {
+        return observe(
+          refuseMutation(
+            "mkdir",
+            ToolKind.WRITE_FILE,
+            operationId,
+            CODE_OWNED_GENERATOR_OUTPUT_RESERVED,
+            "Do not mutate code-owned generator outputs; change an allowed generator input instead.",
+          ),
+        );
       }
       const denied = protectedResult("mkdir", ToolKind.WRITE_FILE, operationId, [
         input.relative_path,

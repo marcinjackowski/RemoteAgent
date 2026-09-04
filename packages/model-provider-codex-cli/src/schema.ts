@@ -33,6 +33,10 @@ function arraySchema(values: RuntimeJsonValue[]): RuntimeJsonValue {
   return values;
 }
 
+function isJsonObject(value: unknown): value is Record<string, RuntimeJsonValue> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function copyJson(value: RuntimeJsonValue, state: { nodes: number }, depth = 0): RuntimeJsonValue {
   state.nodes += 1;
   if (state.nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
@@ -85,6 +89,63 @@ function copyTools(tools: readonly RuntimeToolDefinition[]): readonly RuntimeToo
   return Object.freeze(copies);
 }
 
+function schemaAllowsNull(schema: RuntimeJsonValue): boolean {
+  if (!isJsonObject(schema)) return false;
+  const type = schema["type"];
+  if (type === "null" || (Array.isArray(type) && type.includes("null"))) return true;
+  const anyOf = schema["anyOf"];
+  return Array.isArray(anyOf) && anyOf.some(schemaAllowsNull);
+}
+
+/**
+ * Codex strict structured output requires every object property to appear in
+ * `required`. Provider-neutral tool schemas intentionally use omitted fields
+ * for optionals, so the response-only schema represents those fields as
+ * required nullable placeholders. The original tool schema and authority
+ * digest remain unchanged and are sent to the model in the protocol payload.
+ */
+function codexStrictToolSchema(
+  value: RuntimeJsonValue,
+  state: { nodes: number } = { nodes: 0 },
+  depth = 0,
+): RuntimeJsonValue {
+  state.nodes += 1;
+  if (state.nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
+    throw new Error("Codex strict tool schema exceeds its structural boundary");
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return value;
+  if (Array.isArray(value)) {
+    return arraySchema(value.map((entry) => codexStrictToolSchema(entry, state, depth + 1)));
+  }
+
+  const properties = value["properties"];
+  const propertyEntries = isJsonObject(properties) ? Object.entries(properties) : null;
+  const originalRequired = new Set(
+    Array.isArray(value["required"])
+      ? value["required"].filter((entry): entry is string => typeof entry === "string")
+      : [],
+  );
+  const copy: Record<string, RuntimeJsonValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if ((key === "properties" || key === "required") && propertyEntries !== null) continue;
+    copy[key] = codexStrictToolSchema(entry, state, depth + 1);
+  }
+  if (propertyEntries !== null) {
+    const strictProperties: Record<string, RuntimeJsonValue> = {};
+    for (const [key, propertySchema] of propertyEntries) {
+      const strict = codexStrictToolSchema(propertySchema, state, depth + 1);
+      strictProperties[key] =
+        originalRequired.has(key) || schemaAllowsNull(propertySchema)
+          ? strict
+          : objectSchema({ anyOf: arraySchema([strict, objectSchema({ type: "null" })]) });
+    }
+    copy["properties"] = objectSchema(strictProperties);
+    copy["required"] = arraySchema(propertyEntries.map(([key]) => key));
+  }
+  return objectSchema(copy);
+}
+
 function toolCallSchema(tools: readonly RuntimeToolDefinition[]): RuntimeJsonValue {
   if (tools.length === 0) return objectSchema({ type: "null" });
   return objectSchema({
@@ -95,7 +156,7 @@ function toolCallSchema(tools: readonly RuntimeToolDefinition[]): RuntimeJsonVal
           properties: objectSchema({
             id: objectSchema({ type: "string", pattern: "^[A-Za-z0-9._:-]{1,256}$" }),
             name: objectSchema({ type: "string", const: tool.name }),
-            input: tool.inputSchema,
+            input: codexStrictToolSchema(tool.inputSchema),
           }),
           required: arraySchema(["id", "name", "input"]),
           additionalProperties: false,

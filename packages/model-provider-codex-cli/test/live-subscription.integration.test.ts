@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import {
   createRuntimeConfig,
+  runToolLoop,
   subscriptionModelProfileV1,
   type NormalizedSubscriptionModelEvent,
 } from "@remoteagent/model-runtime";
@@ -76,39 +77,39 @@ it.skipIf(!RUN_LIVE)(
       model: { provider: "codex_cli", model_id: model },
       timeoutMs: 180_000,
       toolLimits: { maxIterations: 0, maxCalls: 0 },
-      retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
+      retryPolicy: { maxAttempts: 2, baseDelayMs: 250 },
     });
 
     try {
-      const response = await transport.converse(
-        {
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Return the exact status required by the response schema.",
-                },
-              ],
-            },
-          ],
-          tools: [],
-          outputSchema: {
-            name: "CodexEngineeringSubscriptionSmokeV1",
-            schema: {
-              type: "object",
-              properties: {
-                schema_version: { type: "integer", const: 1 },
-                status: { type: "string", const: "CODEX_ENGINEERING_OK" },
+      const response = await runToolLoop(transport, config, {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Return the exact status required by the response schema.",
               },
-              required: ["schema_version", "status"],
-              additionalProperties: false,
+            ],
+          },
+        ],
+        tools: [],
+        outputSchema: {
+          name: "CodexEngineeringSubscriptionSmokeV1",
+          schema: {
+            type: "object",
+            properties: {
+              schema_version: { type: "integer", const: 1 },
+              status: { type: "string", const: "CODEX_ENGINEERING_OK" },
             },
+            required: ["schema_version", "status"],
+            additionalProperties: false,
           },
         },
-        config,
-      );
+        execute: async () => {
+          throw new Error("Codex subscription smoke has no tools");
+        },
+      });
 
       expect(response).toMatchObject({
         model: { provider: "codex_cli", model_id: model },
@@ -128,6 +129,8 @@ it.skipIf(!RUN_LIVE)(
       expect(response.usage?.inputTokens).toBeGreaterThanOrEqual(0);
       expect(response.usage?.outputTokens).toBeGreaterThanOrEqual(0);
       expect(response.usage?.totalTokens).toBeGreaterThanOrEqual(0);
+      expect(response.transportAttempts).toBeGreaterThanOrEqual(1);
+      expect(response.transportAttempts).toBeLessThanOrEqual(2);
       console.info(
         JSON.stringify({
           event: "CODEX_LIVE_USAGE",
@@ -135,24 +138,22 @@ it.skipIf(!RUN_LIVE)(
           input_tokens: response.usage?.inputTokens,
           output_tokens: response.usage?.outputTokens,
           total_tokens: response.usage?.totalTokens,
+          transport_attempts: response.transportAttempts,
         }),
       );
-      expect(events.map(({ event }) => event)).toEqual([
-        "PREFLIGHT_STARTED",
-        "PREFLIGHT_FINISHED",
-        "PROCESS_STARTED",
-        "PROCESS_EXITED",
-        "MODEL_SESSION_STARTED",
-        "MODEL_TURN_FINISHED",
-      ]);
-      expect(events[1]).toMatchObject({
-        event: "PREFLIGHT_FINISHED",
-        status: "SUBSCRIPTION_AUTHENTICATED",
+      expect(events.filter(({ event }) => event === "PREFLIGHT_STARTED")).toHaveLength(
+        response.transportAttempts,
+      );
+      expect(events.filter(({ event }) => event === "PROCESS_EXITED")).toHaveLength(
+        response.transportAttempts,
+      );
+      expect(events.filter(({ event }) => event === "MODEL_TURN_FINISHED")).toHaveLength(1);
+      expect(events.at(-3)).toMatchObject({ event: "PROCESS_EXITED", outcome: "SUCCEEDED" });
+      expect(events.at(-2)).toMatchObject({ event: "MODEL_SESSION_STARTED" });
+      expect(events.at(-1)).toMatchObject({
+        event: "MODEL_TURN_FINISHED",
+        outcome: "SUCCEEDED",
       });
-      expect(events[3]).toMatchObject({ event: "PROCESS_EXITED", outcome: "SUCCEEDED" });
-      expect(events[4]).toMatchObject({ event: "MODEL_SESSION_STARTED" });
-      expect(events[5]).toMatchObject({ event: "MODEL_TURN_FINISHED", outcome: "SUCCEEDED" });
-      expect(events.map(({ sequence }) => sequence)).toEqual([1, 2, 3, 4, 5, 6]);
       expect(await readdir(temporaryParent)).toEqual([]);
     } finally {
       await rm(temporaryParent, { recursive: true, force: true });

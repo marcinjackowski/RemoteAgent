@@ -48,6 +48,30 @@ function uniqueToolNames(values: unknown, field: string): readonly string[] {
   return Object.freeze(names);
 }
 
+function canonicalRelativePaths(values: unknown, field: string): readonly string[] | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values) || values.length === 0 || values.length > 512) {
+    throw new ConfigurationError(`${field} must be an array with 1 to 512 entries`);
+  }
+  return Object.freeze(
+    [...new Set(values)]
+      .map((path) => {
+        if (
+          typeof path !== "string" ||
+          path.length < 1 ||
+          path.length > 1024 ||
+          path.startsWith("/") ||
+          path.includes("\\") ||
+          path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+        ) {
+          throw new ConfigurationError(`${field} must contain canonical relative paths`);
+        }
+        return path;
+      })
+      .sort(),
+  );
+}
+
 /** Validate and copy the safe, provider-neutral portion of runtime settings. */
 export function createRuntimeConfig(input: RuntimeConfigInput): RuntimeConfig {
   if (input === null || typeof input !== "object") {
@@ -120,6 +144,25 @@ export function createRuntimeConfig(input: RuntimeConfigInput): RuntimeConfig {
       "toolLoopPolicy.retainRecentToolPairs",
       toolLimits.maxIterations,
     );
+    const maxReadonlyIterationsBeforeMutation =
+      input.toolLoopPolicy.maxReadonlyIterationsBeforeMutation === undefined
+        ? undefined
+        : requireBoundedInteger(
+            input.toolLoopPolicy.maxReadonlyIterationsBeforeMutation,
+            "toolLoopPolicy.maxReadonlyIterationsBeforeMutation",
+            toolLimits.maxIterations,
+          );
+    const contextEpochPairLimit =
+      input.toolLoopPolicy.contextEpochPairLimit === undefined
+        ? undefined
+        : requireBoundedInteger(
+            input.toolLoopPolicy.contextEpochPairLimit,
+            "toolLoopPolicy.contextEpochPairLimit",
+            toolLimits.maxIterations,
+          );
+    if (contextEpochPairLimit === 0) {
+      throw new ConfigurationError("toolLoopPolicy.contextEpochPairLimit must be at least 1");
+    }
     if (
       input.toolLoopPolicy.requireSuccessfulMutationAfterFailure !== undefined &&
       typeof input.toolLoopPolicy.requireSuccessfulMutationAfterFailure !== "boolean"
@@ -128,17 +171,67 @@ export function createRuntimeConfig(input: RuntimeConfigInput): RuntimeConfig {
         "toolLoopPolicy.requireSuccessfulMutationAfterFailure must be a boolean",
       );
     }
+    if (
+      input.toolLoopPolicy.requireSuccessfulMutationBeforeFinal !== undefined &&
+      typeof input.toolLoopPolicy.requireSuccessfulMutationBeforeFinal !== "boolean"
+    ) {
+      throw new ConfigurationError(
+        "toolLoopPolicy.requireSuccessfulMutationBeforeFinal must be a boolean",
+      );
+    }
+    if (
+      input.toolLoopPolicy.requireSuccessfulMutationBeforeFinal === true &&
+      mutationToolNames.length === 0
+    ) {
+      throw new ConfigurationError(
+        "toolLoopPolicy.requireSuccessfulMutationBeforeFinal needs a mutation tool",
+      );
+    }
+    const requiredSuccessfulMutationPaths = canonicalRelativePaths(
+      input.toolLoopPolicy.requiredSuccessfulMutationPaths,
+      "toolLoopPolicy.requiredSuccessfulMutationPaths",
+    );
+    const requiredSuccessfulMutationPathsAll = canonicalRelativePaths(
+      input.toolLoopPolicy.requiredSuccessfulMutationPathsAll,
+      "toolLoopPolicy.requiredSuccessfulMutationPathsAll",
+    );
+    if (
+      (requiredSuccessfulMutationPaths !== undefined ||
+        requiredSuccessfulMutationPathsAll !== undefined) &&
+      mutationToolNames.length === 0
+    ) {
+      throw new ConfigurationError("toolLoopPolicy required mutation paths need a mutation tool");
+    }
+    if (maxReadonlyIterationsBeforeMutation !== undefined && mutationToolNames.length === 0) {
+      throw new ConfigurationError(
+        "toolLoopPolicy.maxReadonlyIterationsBeforeMutation needs a mutation tool",
+      );
+    }
     toolLoopPolicy = Object.freeze({
       readonlyToolNames,
       mutationToolNames,
       mutationIterationsReserved,
+      ...(maxReadonlyIterationsBeforeMutation === undefined
+        ? {}
+        : { maxReadonlyIterationsBeforeMutation }),
       retainRecentToolPairs,
+      ...(contextEpochPairLimit === undefined ? {} : { contextEpochPairLimit }),
       ...(input.toolLoopPolicy.requireSuccessfulMutationAfterFailure === undefined
         ? {}
         : {
             requireSuccessfulMutationAfterFailure:
               input.toolLoopPolicy.requireSuccessfulMutationAfterFailure,
           }),
+      ...(input.toolLoopPolicy.requireSuccessfulMutationBeforeFinal === undefined
+        ? {}
+        : {
+            requireSuccessfulMutationBeforeFinal:
+              input.toolLoopPolicy.requireSuccessfulMutationBeforeFinal,
+          }),
+      ...(requiredSuccessfulMutationPaths === undefined ? {} : { requiredSuccessfulMutationPaths }),
+      ...(requiredSuccessfulMutationPathsAll === undefined
+        ? {}
+        : { requiredSuccessfulMutationPathsAll }),
     });
   }
 

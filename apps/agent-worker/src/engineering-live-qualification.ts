@@ -2,6 +2,7 @@ import { canonicalDigest, sha256Digest } from "@remoteagent/contracts";
 import * as z from "zod";
 
 import type { EngineeringExecutionConfig } from "./engineering-execution.js";
+import { ENGINEERING_MODEL_DIAGNOSTIC_BUDGET_MULTIPLIER } from "./engineering-debug-journal.js";
 import type { ProductionEngineeringModelRouting } from "./engineering-model-routing.js";
 
 const selection = z
@@ -20,6 +21,17 @@ export const ENGINEERING_LIVE_ENV = Object.freeze({
   implementerProfile: "RA_LIVE_ENGINEERING_IMPLEMENTER_PROFILE",
   reviewerProfile: "RA_LIVE_ENGINEERING_REVIEWER_PROFILE",
 });
+
+/**
+ * The live harness is only an outer process backstop. Keep it proportional to
+ * the explicitly enlarged diagnostic token budget so it cannot terminate a
+ * bounded Engineering run while its own stage, attempt, token, and deadline
+ * guards still permit progress.
+ */
+export const ENGINEERING_LIVE_EXECUTION_BUDGET_MS =
+  2 * 60 * 60_000 * ENGINEERING_MODEL_DIAGNOSTIC_BUDGET_MULTIPLIER;
+export const ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS =
+  ENGINEERING_LIVE_EXECUTION_BUDGET_MS + 15 * 60_000;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();

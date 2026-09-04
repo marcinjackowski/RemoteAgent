@@ -16,6 +16,9 @@ import {
   type Database,
 } from "@remoteagent/database";
 import {
+  CODE_OWNED_GENERATOR_OUTPUT_RESERVED,
+  CORRECTION_BEHAVIORAL_MUTATION_REQUIRED,
+  CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED,
   TEST_FIRST_MUTATION_REQUIRED,
   TOOLSET_PATH_OUTSIDE_ALLOWED,
   ToolOutcome,
@@ -40,12 +43,15 @@ import {
 import {
   ENGINEERING_DIFF_POLICY,
   ENGINEERING_DIFF_POLICY_REFUSED,
+  assertEngineeringDiffWithinPolicy,
   buildEvidenceBoundCommitDescriptor,
+  buildSliceImplementationReceipt,
   executeEvidenceBoundLocalCommit,
   executeVerticalSlice as executeVerticalSliceProduction,
   executeVerticalSliceGates as executeVerticalSliceGatesProduction,
   executeVerticalSliceReview as executeVerticalSliceReviewProduction,
   recoverEvidenceBoundLocalCommit,
+  scheduledEngineeringGateTiers,
   verticalSliceWorkspaceId,
   type VerticalSliceWriterFence,
 } from "../src/vertical-slice-executor.js";
@@ -66,6 +72,14 @@ const executeVerticalSliceReview = (
 describeIntegration(
   "server-owned vertical slice executor",
   () => {
+    it("records only gate tiers actually scheduled for the slice", () => {
+      expect(scheduledEngineeringGateTiers([{ gate_tier: "FAST" }])).toEqual(["FAST"]);
+      expect(scheduledEngineeringGateTiers([{ gate_tier: "FULL" }])).toEqual(["FULL"]);
+      expect(scheduledEngineeringGateTiers([{ gate_tier: "FULL" }, { gate_tier: "FAST" }])).toEqual(
+        ["FAST", "FULL"],
+      );
+    });
+
     let db: Database;
     let drop: () => Promise<void>;
     let parent: string;
@@ -333,9 +347,16 @@ describeIntegration(
 
     it("accepts a localized diff under the frozen code-owned policy", async () => {
       expect(Object.isFrozen(ENGINEERING_DIFF_POLICY)).toBe(true);
+      expect(() =>
+        assertEngineeringDiffWithinPolicy({
+          filesChanged: 17,
+          insertions: 417,
+          deletions: 10,
+        }),
+      ).not.toThrow();
       expect(ENGINEERING_DIFF_POLICY).toEqual({
         schema_version: 1,
-        max_files_changed: 16,
+        max_files_changed: 32,
         max_total_changes: 2_000,
         max_deletions: 800,
         destructive_deletion_ratio: 0.8,
@@ -502,6 +523,47 @@ describeIntegration(
       expect(refusedLedger.rows[0]?.count).toBe("0");
     });
 
+    it("lets an exact correction receipt satisfy test-first before a production repair", async () => {
+      const correctionSlice = engineeringSliceContract.parse({
+        ...slice,
+        slice_id: "slice-test-first-correction",
+        allowed_paths: ["src"],
+        test_paths: ["src/feature.test.ts"],
+      });
+      const authority: Authority = {
+        owner: "writer-a",
+        token: 7,
+        enabled: true,
+        inImplementation: false,
+      };
+      const result = await executeVerticalSlice({
+        db,
+        workspaceConfig: config(),
+        repositoryId: "repo",
+        baseSha,
+        caseId,
+        runId: "run-vslice",
+        checkpointRevision: 0,
+        writer: writer(authority),
+        slice: correctionSlice,
+        attempt: 1,
+        testFirstAlreadySatisfied: true,
+        implement: async (tools) => {
+          const production = await tools.write({
+            relative_path: "src/feature.ts",
+            content: "export const feature = true;\n",
+          });
+          expect(production.outcome).toBe(ToolOutcome.SUCCEEDED);
+          return { changed_files: ["src/feature.ts"] };
+        },
+      });
+
+      expect(result.actual.changedFiles).toEqual(["src/feature.ts"]);
+      expect(await readFile(join(result.workspacePath, "src", "feature.ts"), "utf8")).toBe(
+        "export const feature = true;\n",
+      );
+    });
+
     it("runs a code-owned generator in a disposable copy and binds its materialized output", async () => {
       const executable = await realpath(process.execPath);
       const generatorCatalog = await CodeOwnedGeneratorCatalog.create({
@@ -551,19 +613,27 @@ describeIntegration(
             content: "expect(true).toBe(true);\n",
           });
           expect(test.outcome).toBe(ToolOutcome.SUCCEEDED);
+          const reserved = await tools.write({
+            relative_path: "src/generated.ts",
+            content: "export const forged = true;\n",
+          });
+          expect(reserved.outcome).toBe(ToolOutcome.FAILED);
+          if (reserved.outcome !== ToolOutcome.FAILED) throw new Error("expected refusal");
+          expect(reserved.failure_code).toBe(CODE_OWNED_GENERATOR_OUTPUT_RESERVED);
           return { changed_files: ["src/schema.test.ts"] };
         },
       });
 
       expect(result.actual.changedFiles).toEqual(["src/generated.ts", "src/schema.test.ts"]);
-      expect(result.operationResults).toHaveLength(3);
+      expect(result.operationResults).toHaveLength(4);
       expect(result.operationResults.map((entry) => entry.kind)).toEqual([
+        "WRITE_FILE",
         "WRITE_FILE",
         "RUN_COMMAND",
         "APPLY_PATCH",
       ]);
       expect(
-        result.operationResults.slice(1).every((entry) => /^vsg:/.test(entry.operation_id)),
+        result.operationResults.slice(2).every((entry) => /^vsg:/.test(entry.operation_id)),
       ).toBe(true);
       await expect(
         readFile(join(result.workspacePath, "src", "generated.ts"), "utf8"),
@@ -896,6 +966,15 @@ describeIntegration(
           slice_id: "slice-one",
           attempt: 1,
         },
+        slice_scope: {
+          slice_id: "slice-one",
+          objective: slice.objective,
+          observable_result: slice.observable_result,
+          allowed_paths: slice.allowed_paths,
+          code_owned_generator_paths: [],
+          inspection_method: slice.inspection_method,
+          stop_condition: slice.stop_condition,
+        },
         actual_diff_digest: first.actual.diffDigest,
         tree_digest: first.actual.treeDigest,
         evidence_bundle: firstGates.bundle,
@@ -1162,6 +1241,207 @@ describeIntegration(
       ).toBe("1");
     });
 
+    it("records the actual cumulative Git surface when a correction restores a prior path", async () => {
+      const authority: Authority = {
+        owner: "writer-a",
+        token: 7,
+        enabled: true,
+        inImplementation: false,
+      };
+      const writerFence = writer(authority);
+      const first = await executeVerticalSlice({
+        db,
+        workspaceConfig: config(),
+        repositoryId: "repo",
+        baseSha,
+        caseId,
+        runId: "run-vslice",
+        checkpointRevision: 0,
+        writer: writerFence,
+        slice,
+        attempt: 1,
+        testFirstAlreadySatisfied: true,
+        implement: async (tools) => {
+          const result = await tools.patch({
+            replacement_files: [
+              {
+                relative_path: "src/base.ts",
+                replacements: [
+                  {
+                    old_content: "export const base = true;\n",
+                    new_content: "export const base = false;\n",
+                  },
+                ],
+              },
+            ],
+          });
+          expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+          return { changed_files: ["src/base.ts"] };
+        },
+      });
+      expect(first.actual.cumulativeAgentPaths).toEqual(["src/base.ts"]);
+
+      const corrected = await executeVerticalSlice({
+        db,
+        workspaceConfig: config(),
+        repositoryId: "repo",
+        baseSha,
+        caseId,
+        runId: "run-vslice",
+        checkpointRevision: 0,
+        writer: writerFence,
+        slice,
+        attempt: 2,
+        priorAgentPaths: first.actual.cumulativeAgentPaths,
+        testFirstAlreadySatisfied: true,
+        implement: async (tools) => {
+          const result = await tools.patch({
+            replacement_files: [
+              {
+                relative_path: "src/base.ts",
+                replacements: [
+                  {
+                    old_content: "export const base = false;\n",
+                    new_content: "export const base = true;\n",
+                  },
+                ],
+              },
+            ],
+          });
+          expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+          return { changed_files: ["src/base.ts"] };
+        },
+      });
+
+      expect(corrected.actual.changedFiles).toEqual(["src/base.ts"]);
+      expect(corrected.actual.cumulativeAgentPaths).toEqual([]);
+      expect(corrected.actual.filesChanged).toBe(0);
+      expect(
+        buildSliceImplementationReceipt({
+          result: corrected,
+          runId: "run-vslice",
+          workUnitId: "wu-vslice",
+          repositoryId: "repo",
+          baseSha,
+          branchName: `remoteagent/${corrected.workspaceId}`,
+          checkpointRevision: 0,
+        }),
+      ).toMatchObject({
+        changed_paths: ["src/base.ts"],
+        cumulative_paths: [],
+        files_changed: 0,
+      });
+    });
+
+    it("passes exact correction paths to the bounded tool boundary and refuses whitespace-only progress", async () => {
+      const authority: Authority = {
+        owner: "writer-a",
+        token: 7,
+        enabled: true,
+        inImplementation: false,
+      };
+      await expect(
+        executeVerticalSlice({
+          db,
+          workspaceConfig: config(),
+          repositoryId: "repo",
+          baseSha,
+          caseId,
+          runId: "run-vslice",
+          checkpointRevision: 0,
+          writer: writer(authority),
+          slice,
+          attempt: 1,
+          testFirstAlreadySatisfied: true,
+          requiredSubstantiveMutationPaths: ["src/base.ts"],
+          implement: async (tools) => {
+            const result = await tools.patch({
+              replacement_files: [
+                {
+                  relative_path: "src/base.ts",
+                  replacements: [
+                    {
+                      old_content: "export const base = true;",
+                      new_content: "export const base = true; ",
+                    },
+                  ],
+                },
+              ],
+            });
+            expect(result.outcome).toBe(ToolOutcome.FAILED);
+            if (result.outcome !== ToolOutcome.FAILED) {
+              return { changed_files: ["src/base.ts"] };
+            }
+            expect(result.failure_code).toBe(CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED);
+            return { changed_files: [] };
+          },
+        }),
+      ).rejects.toThrow(/NO_PROGRESS/u);
+      const operations = await db.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM implementation_tool_operations",
+      );
+      expect(operations.rows[0]?.count).toBe("0");
+      const workspacePath = join(workspaceRoot, caseId, verticalSliceWorkspaceId(caseId));
+      expect(await readFile(join(workspacePath, "src", "base.ts"), "utf8")).toBe(
+        "export const base = true;\n",
+      );
+    });
+
+    it("passes exact behavioral correction paths and refuses import-only progress", async () => {
+      const authority: Authority = {
+        owner: "writer-a",
+        token: 7,
+        enabled: true,
+        inImplementation: false,
+      };
+      await expect(
+        executeVerticalSlice({
+          db,
+          workspaceConfig: config(),
+          repositoryId: "repo",
+          baseSha,
+          caseId,
+          runId: "run-vslice",
+          checkpointRevision: 0,
+          writer: writer(authority),
+          slice,
+          attempt: 1,
+          testFirstAlreadySatisfied: true,
+          requiredSubstantiveMutationPaths: ["src/base.ts"],
+          requiredBehavioralMutationPaths: ["src/base.ts"],
+          implement: async (tools) => {
+            const result = await tools.patch({
+              replacement_files: [
+                {
+                  relative_path: "src/base.ts",
+                  replacements: [
+                    {
+                      old_content: "export const base = true;",
+                      new_content: "import Dependency;\nexport const base = true;",
+                    },
+                  ],
+                },
+              ],
+            });
+            expect(result.outcome).toBe(ToolOutcome.FAILED);
+            if (result.outcome !== ToolOutcome.FAILED) {
+              return { changed_files: ["src/base.ts"] };
+            }
+            expect(result.failure_code).toBe(CORRECTION_BEHAVIORAL_MUTATION_REQUIRED);
+            return { changed_files: [] };
+          },
+        }),
+      ).rejects.toThrow(/NO_PROGRESS/u);
+      const operations = await db.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM implementation_tool_operations",
+      );
+      expect(operations.rows[0]?.count).toBe("0");
+      const workspacePath = join(workspaceRoot, caseId, verticalSliceWorkspaceId(caseId));
+      expect(await readFile(join(workspacePath, "src", "base.ts"), "utf8")).toBe(
+        "export const base = true;\n",
+      );
+    });
+
     it("rejects omission of any server-required gate before creating an operation", async () => {
       const scheduled = await gateLease();
       const authority: Authority = {
@@ -1291,9 +1571,13 @@ describeIntegration(
         priorAgentPaths: ["src/actual.ts"],
         implement: async (tools) => {
           await tools.write({ relative_path: "src/corrected.ts", content: "corrected\n" });
-          return { changed_files: ["src/corrected.ts"] };
+          // A fresh model session can conservatively repeat an exact path from
+          // the durable prior receipt. It is accepted only as known prior state
+          // and never enters the fresh authoritative delta.
+          return { changed_files: ["src/actual.ts", "src/corrected.ts"] };
         },
       });
+      expect(corrected.implementerReport.changed_files).toEqual(["src/corrected.ts"]);
       const artifactRoot = join(parent, "failed-artifacts");
       await mkdir(artifactRoot);
       const gateBase = {

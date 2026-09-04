@@ -178,6 +178,10 @@ describeIntegration("receipt-bound code-owned generators", () => {
 
   it("runs outside the authority tree and materializes the exact declared output with receipts", async () => {
     const selected = await catalog();
+    expect(selected.selectedForScope(["src"]).map((entry) => entry.generator_id)).toEqual([
+      "client_codegen",
+    ]);
+    expect(selected.selectedForScope(["src2"])).toEqual([]);
     const result = await execute({ catalog: selected });
 
     expect(await readFile(join(root, "generated", "client.ts"), "utf8")).toBe(

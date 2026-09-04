@@ -80,6 +80,8 @@ function session(
     linesExamined?: number;
     summary?: string;
     evidence?: string;
+    relativePath?: string;
+    line?: number;
   } = {},
 ): PreCommitReviewSession {
   return Object.freeze({
@@ -93,6 +95,17 @@ function session(
       expect(typeof request.patch).toBe("string");
       expect(request.raw_patch_digest).toBe(canonicalDigest(request.patch));
       expect(request.raw_patch_digest).not.toBe(request.actual_diff_digest);
+      expect(Array.isArray(request.changed_line_ranges)).toBe(true);
+      if (
+        request.patch === PATCH &&
+        request.slice_scope.allowed_paths.some(
+          (root) => root === "src/auth.ts" || "src/auth.ts".startsWith(`${root}/`),
+        )
+      ) {
+        expect(request.changed_line_ranges).toEqual([
+          { relative_path: "src/auth.ts", start_line: 1, end_line: 1 },
+        ]);
+      }
       return {
         output: preCommitReviewOutput.parse({
           schema_version: 1,
@@ -103,7 +116,10 @@ function session(
                   {
                     severity: input.severity,
                     summary: input.summary ?? "Authorization was widened by this exact line.",
-                    location: { relative_path: "src/auth.ts", line: 1 },
+                    location: {
+                      relative_path: input.relativePath ?? "src/auth.ts",
+                      line: input.line ?? 1,
+                    },
                     evidence: input.evidence ?? "export const allowed = true;",
                     required_fix: "Restore the denied authorization default.",
                   },
@@ -119,6 +135,7 @@ function session(
 async function execute(
   options: {
     reviewer?: PreCommitReviewSession;
+    actual?: PreCommitActualObservation;
     observed?: () => Promise<PreCommitActualObservation>;
     evidence?: EngineeringEvidenceBundle;
     expectedEvidenceDigest?: string;
@@ -126,22 +143,162 @@ async function execute(
   } = {},
 ) {
   const reviewer = options.reviewer ?? session();
+  const actual = options.actual ?? observation();
+  const evidence =
+    options.evidence ?? bundle({ tree_digest: actual.treeDigest, diff_digest: actual.diffDigest });
   return executeFreshPreCommitReview({
     binding,
     taskBrief: "Keep authorization closed by default.",
-    actual: observation(),
-    evidenceBundle: options.evidence ?? bundle(),
-    expectedEvidenceBundleDigest:
-      options.expectedEvidenceDigest ?? canonicalDigest(options.evidence ?? bundle()),
+    sliceScope: {
+      slice_id: binding.sliceId,
+      objective: "keep the current authorization helper closed by default",
+      observable_result: "the focused denial test passes",
+      allowed_paths: ["src"],
+      test_paths: ["src/auth.test.ts"],
+      code_owned_generator_paths: [],
+      inspection_method: "focused test",
+      stop_condition: "review finds no current-slice defect",
+    },
+    actual,
+    evidenceBundle: evidence,
+    expectedEvidenceBundleDigest: options.expectedEvidenceDigest ?? canonicalDigest(evidence),
     ...(options.previousBlockingRawPatchDigest === undefined
       ? {}
       : { previousBlockingRawPatchDigest: options.previousBlockingRawPatchDigest }),
-    observeActual: options.observed ?? (async () => observation()),
+    observeActual: options.observed ?? (async () => actual),
     createSession: async () => reviewer,
   });
 }
 
 describe("fresh pre-commit review boundary", () => {
+  it("does not turn a code-owned generator output into model correction authority", async () => {
+    const patch = `diff --git a/src/generated.ts b/src/generated.ts
+--- a/src/generated.ts
++++ b/src/generated.ts
+@@ -1 +1,2 @@
+ export const generated = true;
++export const help = "help";
+`;
+    const actual = {
+      patch,
+      diffDigest: canonicalDigest({ patch, files_changed: 1 }),
+      treeDigest: TREE,
+    };
+    const evidence = bundle({
+      tree_digest: actual.treeDigest,
+      diff_digest: actual.diffDigest,
+    });
+    const result = await executeFreshPreCommitReview({
+      binding,
+      taskBrief: "consume exact generated output",
+      sliceScope: {
+        slice_id: binding.sliceId,
+        objective: "consume the generated help accessor",
+        observable_result: "the caller renders the generated asset",
+        allowed_paths: ["src/generated.ts"],
+        test_paths: [],
+        code_owned_generator_paths: ["src/generated.ts"],
+        inspection_method: "inspect caller and compile",
+        stop_condition: "compile passes",
+      },
+      actual,
+      evidenceBundle: evidence,
+      expectedEvidenceBundleDigest: canonicalDigest(evidence),
+      observeActual: async () => actual,
+      createSession: async () =>
+        session({
+          severity: ReviewSeverity.BLOCKER,
+          relativePath: "src/generated.ts",
+          line: 2,
+          evidence: 'export const help = "help";',
+          summary: "Generated output was changed.",
+        }),
+    });
+
+    expect(result.readiness).toBe(ReviewReadiness.READY);
+    expect(result.blockingFindingIds).toEqual([]);
+    expect(result.findings).toMatchObject([{ severity: ReviewSeverity.LOW, required_fix: "" }]);
+  });
+
+  it("groups code-owned exact changed-line coordinates and excludes context lines", async () => {
+    const patch = `diff --git a/src/flow.swift b/src/flow.swift
+--- a/src/flow.swift
++++ b/src/flow.swift
+@@ -8,3 +8,7 @@
+ context
++let first = true
++let second = true
+ context
++let fourth = true
+`;
+    const actual = {
+      patch,
+      diffDigest: canonicalDigest({ patch, files_changed: 1 }),
+      treeDigest: TREE,
+    };
+    const evidence = bundle({ tree_digest: actual.treeDigest, diff_digest: actual.diffDigest });
+    let ranges: unknown;
+    await executeFreshPreCommitReview({
+      binding,
+      taskBrief: "review exact flow wiring",
+      sliceScope: {
+        slice_id: binding.sliceId,
+        objective: "wire the flow",
+        observable_result: "the flow is reachable",
+        allowed_paths: ["src"],
+        test_paths: [],
+        code_owned_generator_paths: [],
+        inspection_method: "inspect",
+        stop_condition: "pass",
+      },
+      actual,
+      evidenceBundle: evidence,
+      expectedEvidenceBundleDigest: canonicalDigest(evidence),
+      observeActual: async () => actual,
+      createSession: async () => ({
+        ...session(),
+        review: async (request) => {
+          ranges = request.changed_line_ranges;
+          return { output: { schema_version: 1, findings: [], lines_examined: 7 }, modelCalls: 1 };
+        },
+      }),
+    });
+
+    expect(ranges).toEqual([
+      { relative_path: "src/flow.swift", start_line: 9, end_line: 10 },
+      { relative_path: "src/flow.swift", start_line: 12, end_line: 12 },
+    ]);
+  });
+
+  it("rejects foreign code-owned generator provenance before opening a reviewer session", async () => {
+    let opened = 0;
+    await expect(
+      executeFreshPreCommitReview({
+        binding,
+        taskBrief: "review exact patch",
+        sliceScope: {
+          slice_id: binding.sliceId,
+          objective: "bounded change",
+          observable_result: "focused behavior",
+          allowed_paths: ["src/auth.ts"],
+          test_paths: [],
+          code_owned_generator_paths: ["src/generated.ts"],
+          inspection_method: "inspect",
+          stop_condition: "pass",
+        },
+        actual: observation(),
+        evidenceBundle: bundle(),
+        expectedEvidenceBundleDigest: canonicalDigest(bundle()),
+        observeActual: async () => observation(),
+        createSession: async () => {
+          opened += 1;
+          return session();
+        },
+      }),
+    ).rejects.toThrow(/generator paths.*within slice scope/);
+    expect(opened).toBe(0);
+  });
+
   it("binds raw patch, actual diff, tree and EvidenceBundle while passing LOW/NIT", async () => {
     for (const severity of [null, ReviewSeverity.LOW, ReviewSeverity.NIT] as const) {
       const result = await execute({ reviewer: session({ severity }) });
@@ -168,7 +325,7 @@ describe("fresh pre-commit review boundary", () => {
     }
   });
 
-  it("downgrades a blocking finding whose model evidence is absent from the actual patch", async () => {
+  it("server-anchors an absence finding to its exact changed line", async () => {
     const result = await execute({
       reviewer: session({
         severity: ReviewSeverity.HIGH,
@@ -176,8 +333,133 @@ describe("fresh pre-commit review boundary", () => {
       }),
     });
 
+    expect(result.readiness).toBe(ReviewReadiness.CHANGES_REQUIRED);
+    expect(result.blockingFindingIds).toHaveLength(1);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        severity: ReviewSeverity.HIGH,
+        evidence: "+export const allowed = true;",
+      }),
+    ]);
+  });
+
+  it("downgrades blocking findings outside server-observed changed lines", async () => {
+    for (const location of [
+      { relativePath: "src/auth.ts", line: 2 },
+      { relativePath: "src/foreign.ts", line: 1 },
+    ]) {
+      const result = await execute({
+        reviewer: session({
+          severity: ReviewSeverity.HIGH,
+          evidence: "export const allowed = true;",
+          ...location,
+        }),
+      });
+
+      expect(result.readiness).toBe(ReviewReadiness.READY);
+      expect(result.blockingFindingIds).toEqual([]);
+      expect(result.findings).toEqual([
+        expect.objectContaining({
+          severity: ReviewSeverity.LOW,
+          summary: "Reviewer finding was not anchored in the actual patch.",
+        }),
+      ]);
+    }
+  });
+
+  it("does not let an earlier slice path authorize a blocking correction", async () => {
+    const result = await executeFreshPreCommitReview({
+      binding,
+      taskBrief: "finish the current release-note slice",
+      sliceScope: {
+        slice_id: binding.sliceId,
+        objective: "add the release note",
+        observable_result: "the note names the shipped behavior",
+        allowed_paths: ["docs/release.md"],
+        test_paths: [],
+        code_owned_generator_paths: [],
+        inspection_method: "inspect the current note",
+        stop_condition: "the current-slice note is complete",
+      },
+      actual: observation(),
+      evidenceBundle: bundle(),
+      expectedEvidenceBundleDigest: canonicalDigest(bundle()),
+      observeActual: async () => observation(),
+      createSession: async () =>
+        session({
+          severity: ReviewSeverity.BLOCKER,
+          relativePath: "src/auth.ts",
+          line: 1,
+          summary: "An earlier slice still needs unrelated production wiring.",
+        }),
+    });
+
     expect(result.readiness).toBe(ReviewReadiness.READY);
     expect(result.blockingFindingIds).toEqual([]);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        severity: ReviewSeverity.LOW,
+        summary: "Reviewer finding was not anchored in the actual patch.",
+      }),
+    ]);
+  });
+
+  it("reanchors a short changed-line location to the nearest substantive changed line", async () => {
+    const patch = `diff --git a/src/view.swift b/src/view.swift
+new file mode 100644
+--- /dev/null
++++ b/src/view.swift
+@@ -0,0 +1,2 @@
++let closeAction = dismissSafetyAlert
++}
+`;
+    const result = await execute({
+      actual: {
+        patch,
+        diffDigest: canonicalDigest({ patch, files_changed: 1 }),
+        treeDigest: TREE,
+      },
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        relativePath: "src/view.swift",
+        line: 2,
+        evidence: "The closing brace omits the required action wiring.",
+      }),
+    });
+
+    expect(result.readiness).toBe(ReviewReadiness.CHANGES_REQUIRED);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        severity: ReviewSeverity.HIGH,
+        location: { relative_path: "src/view.swift", line: 1 },
+        evidence: "+let closeAction = dismissSafetyAlert",
+      }),
+    ]);
+  });
+
+  it("downgrades a blocking finding when its changed file has no substantive anchor", async () => {
+    const patch = `diff --git a/src/empty.swift b/src/empty.swift
+new file mode 100644
+--- /dev/null
++++ b/src/empty.swift
+@@ -0,0 +1,1 @@
++}
+`;
+    const result = await execute({
+      actual: {
+        patch,
+        diffDigest: canonicalDigest({ patch, files_changed: 1 }),
+        treeDigest: TREE,
+      },
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        relativePath: "src/empty.swift",
+        line: 1,
+        evidence: "The file contains no usable implementation behavior.",
+      }),
+    });
+
+    expect(result.readiness).toBe(ReviewReadiness.READY);
     expect(result.findings).toEqual([
       expect.objectContaining({
         severity: ReviewSeverity.LOW,
@@ -270,6 +552,16 @@ describe("fresh pre-commit review boundary", () => {
     const second = await executeFreshPreCommitReview({
       binding: { ...binding, attempt: 3 },
       taskBrief: "Keep authorization closed by default.",
+      sliceScope: {
+        slice_id: binding.sliceId,
+        objective: "keep the current authorization helper closed by default",
+        observable_result: "the focused denial test passes",
+        allowed_paths: ["src"],
+        test_paths: ["src/auth.test.ts"],
+        code_owned_generator_paths: [],
+        inspection_method: "focused test",
+        stop_condition: "review finds no current-slice defect",
+      },
       actual: fixedActual,
       evidenceBundle: bundle({
         tree_digest: fixedActual.treeDigest,

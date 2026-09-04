@@ -612,6 +612,69 @@ describe("runStructuredContract", () => {
     expect(transport.requests[1]?.outputSchema).toBe(programDesignDefinition.outputSchema);
   });
 
+  it("repairs a schema-valid value that violates a code-owned semantic policy", async () => {
+    const transport = new ScriptTransport([
+      response(validProgramDesign, "policy-invalid-request"),
+      response(validProgramDesign, "policy-repair-request"),
+    ]);
+    let validations = 0;
+    const secretError = "do-not-echo-semantic-error";
+
+    const result = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "engineering.policy.v1",
+      messages: [],
+      validateValue: () => {
+        validations += 1;
+        if (validations === 1) {
+          throw Object.assign(new Error(secretError), { detailCode: "WRITE_ROOT_LIMIT" });
+        }
+      },
+      validationRepairInstruction:
+        "Also satisfy the server-owned bounded write-root policy in the original request.",
+    });
+
+    expect(result.repaired).toBe(true);
+    expect(result.modelCompletions).toHaveLength(2);
+    expect(validations).toBe(2);
+    expect(JSON.stringify(transport.requests[1]?.messages)).toContain(
+      "server-owned bounded write-root policy",
+    );
+    expect(JSON.stringify(transport.requests[1]?.messages)).toContain(
+      "server-owned validation failure code is WRITE_ROOT_LIMIT",
+    );
+    expect(JSON.stringify(transport.requests[1]?.messages)).not.toContain(secretError);
+  });
+
+  it("retains only a bounded semantic detail code after the single repair fails", async () => {
+    const transport = new ScriptTransport([
+      response(validProgramDesign, "policy-invalid-request"),
+      response(validProgramDesign, "policy-invalid-repair"),
+    ]);
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "engineering.policy.v1",
+      messages: [],
+      validateValue: () => {
+        throw Object.assign(new Error("sensitive semantic detail"), {
+          detailCode: "WRITE_ROOT_LIMIT",
+        });
+      },
+      validationRepairInstruction:
+        "Also satisfy the server-owned bounded write-root policy in the original request.",
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredContractOutputError);
+    expect(error).toMatchObject({ detailCode: "WRITE_ROOT_LIMIT" });
+    expect(String(error)).not.toContain("sensitive semantic detail");
+    expect(transport.requests).toHaveLength(2);
+  });
+
   it("never repairs a malformed implementation report", async () => {
     const invalidCanary = "malformed-implementation-canary";
     const transport = new ScriptTransport([
@@ -649,8 +712,51 @@ describe("runStructuredContract", () => {
     }).catch((value: unknown) => value);
 
     expect(error).toBeInstanceOf(StructuredContractOutputError);
+    expect(error).toMatchObject({
+      detailCode: "STRUCTURED_SCHEMA_INVALID:invalid_value:schema_version",
+    });
     expect(String(error)).not.toContain(invalidCanary);
     expect(transport.requests).toHaveLength(2);
+    expect(JSON.stringify(transport.requests[1]?.messages)).toContain(
+      "server-owned validation failure code is " +
+        "STRUCTURED_SCHEMA_INVALID:invalid_value:schema_version",
+    );
+  });
+
+  it("reports only the first bounded nested schema coordinate to repair", async () => {
+    const invalidPathCanary = "tests/private-canary.test.ts";
+    const invalid = {
+      ...validProgramDesign,
+      slice_blueprints: [
+        {
+          ...validProgramDesign.slice_blueprints[0],
+          test_paths: [invalidPathCanary],
+        },
+      ],
+    };
+    const transport = new ScriptTransport([
+      response(invalid, "initial-invalid-path"),
+      response(invalid, "repair-invalid-path"),
+    ]);
+
+    const error = await runStructuredContract(transport, config, {
+      definition: programDesignDefinition,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      expectedSchemaDigest: programDesignDefinition.schemaDigest,
+      promptVersion: "v1",
+      messages: [],
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(StructuredContractOutputError);
+    expect(error).toMatchObject({
+      detailCode: "STRUCTURED_SCHEMA_INVALID:custom:slice_blueprints.0.test_paths.0",
+    });
+    const repairInstruction = JSON.stringify(transport.requests[1]?.messages.at(-1));
+    expect(repairInstruction).toContain(
+      "STRUCTURED_SCHEMA_INVALID:custom:slice_blueprints.0.test_paths.0",
+    );
+    expect(repairInstruction).not.toContain(invalidPathCanary);
+    expect(String(error)).not.toContain(invalidPathCanary);
   });
 
   it("repairs from complete tool-loop history without exposing tools to repair", async () => {
@@ -713,7 +819,10 @@ describe("runStructuredContract", () => {
         content: [
           {
             type: "text",
-            text: "Return only one valid JSON object matching ProgramDesign_v2 schema version 2.",
+            text:
+              "Return only one valid JSON object matching ProgramDesign_v2 schema version 2. " +
+              "The server-owned validation failure code is " +
+              "STRUCTURED_SCHEMA_INVALID:invalid_value:schema_version.",
           },
         ],
       },

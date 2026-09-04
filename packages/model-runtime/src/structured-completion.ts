@@ -36,6 +36,7 @@ export class StructuredCompletionError extends TransportError {
 
 export interface StructuredCompletionRequest {
   readonly messages: readonly RuntimeMessage[];
+  readonly epochHandoffMessages?: readonly RuntimeMessage[];
   readonly tools?: readonly RuntimeToolDefinition[];
   readonly execute?: ToolExecutor;
   readonly signal?: AbortSignal;
@@ -83,6 +84,10 @@ export interface StructuredContractRequest<
   readonly stage: EngineeringStage;
   readonly expectedSchemaDigest: string;
   readonly promptVersion: string;
+  /** Optional code-owned semantic policy applied after schema parsing. */
+  readonly validateValue?: (value: z.output<TSchema>) => void;
+  /** Bounded code-owned guidance used only for the single tools-disabled repair. */
+  readonly validationRepairInstruction?: string;
 }
 
 export interface StructuredContractResult<TSchema extends z.ZodType> {
@@ -244,16 +249,45 @@ function pinModelIdentity(transport: RuntimeTransport, config: RuntimeConfig): R
 
 function structuredRepairInstruction(
   definition: StructuredContractDefinition<z.ZodType>,
+  validationInstruction?: string,
+  validationDetailCode?: string,
 ): RuntimeMessage {
   return {
     role: "user",
     content: [
       {
         type: "text",
-        text: `Return only one valid JSON object matching ${definition.name} schema version ${definition.version}.`,
+        text:
+          `Return only one valid JSON object matching ${definition.name} schema version ${definition.version}.` +
+          (validationInstruction === undefined ? "" : ` ${validationInstruction}`) +
+          (validationDetailCode === undefined
+            ? ""
+            : ` The server-owned validation failure code is ${validationDetailCode}.`),
       },
     ],
   };
+}
+
+function structuredValidationDetailCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const detailCode = (error as Record<string, unknown>)["detailCode"];
+  if (typeof detailCode === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(detailCode)) {
+    return detailCode;
+  }
+  if (!(error instanceof z.ZodError)) return undefined;
+  const issue = error.issues[0];
+  if (issue === undefined) return "STRUCTURED_SCHEMA_INVALID";
+  const issueCode = /^[A-Za-z0-9._-]{1,32}$/u.test(issue.code) ? issue.code : "invalid";
+  const issuePath = issue.path
+    .slice(0, 8)
+    .map((part) =>
+      String(part)
+        .replace(/[^A-Za-z0-9_-]/gu, "_")
+        .slice(0, 32),
+    )
+    .filter((part) => part.length > 0)
+    .join(".");
+  return `STRUCTURED_SCHEMA_INVALID:${issueCode}:${issuePath || "root"}`.slice(0, 128);
 }
 
 /** Run a server-owned structured contract through the provider-neutral tool loop. */
@@ -271,10 +305,34 @@ export async function runStructuredContract<TSchema extends z.ZodType>(
   if ((request.tools?.length ?? 0) > 0 && request.execute === undefined) {
     throw new ConfigurationError("Tool executor is required when tools are provided");
   }
+  if (
+    (request.validateValue === undefined) !==
+    (request.validationRepairInstruction === undefined)
+  ) {
+    throw new ConfigurationError(
+      "Structured semantic validation and its repair instruction must be configured together",
+    );
+  }
+  if (
+    request.validationRepairInstruction !== undefined &&
+    (request.validationRepairInstruction.trim().length === 0 ||
+      request.validationRepairInstruction.length > 4096)
+  ) {
+    throw new ConfigurationError("Structured semantic repair instruction must be bounded");
+  }
+
+  const parseAndValidate = (content: readonly RuntimeContent[]): z.output<TSchema> => {
+    const value = request.definition.parse(parseContent(content));
+    request.validateValue?.(value);
+    return value;
+  };
 
   const pinnedTransport = pinModelIdentity(transport, config);
   const loop = await runToolLoop(pinnedTransport, config, {
     messages: request.messages,
+    ...(request.epochHandoffMessages === undefined
+      ? {}
+      : { epochHandoffMessages: request.epochHandoffMessages }),
     tools: request.tools ?? [],
     execute: request.execute ?? (async () => null),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -283,7 +341,7 @@ export async function runStructuredContract<TSchema extends z.ZodType>(
   });
   try {
     return {
-      value: request.definition.parse(parseContent(loop.content)),
+      value: parseAndValidate(loop.content),
       model: loop.model,
       stage: stage.data,
       schemaName: request.definition.name,
@@ -298,15 +356,22 @@ export async function runStructuredContract<TSchema extends z.ZodType>(
       toolCalls: loop.calls,
       modelCompletions: loop.modelCompletions,
     };
-  } catch {
+  } catch (initialError) {
     if (stage.data === EngineeringStage.SLICE_IMPLEMENTATION) {
-      throw new StructuredContractOutputError();
+      throw new StructuredContractOutputError(structuredValidationDetailCode(initialError));
     }
     const repairExecution = await executeTransportDetailed(
       pinnedTransport,
       config,
       {
-        messages: [...loop.history, structuredRepairInstruction(request.definition)],
+        messages: [
+          ...loop.history,
+          structuredRepairInstruction(
+            request.definition,
+            request.validationRepairInstruction,
+            structuredValidationDetailCode(initialError),
+          ),
+        ],
         outputSchema: request.definition.outputSchema,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       },
@@ -321,7 +386,7 @@ export async function runStructuredContract<TSchema extends z.ZodType>(
     };
     try {
       return {
-        value: request.definition.parse(parseContent(repair.content)),
+        value: parseAndValidate(repair.content),
         model: repair.model,
         stage: stage.data,
         schemaName: request.definition.name,
@@ -336,8 +401,10 @@ export async function runStructuredContract<TSchema extends z.ZodType>(
         toolCalls: loop.calls,
         modelCompletions: [...loop.modelCompletions, repairMetadata],
       };
-    } catch {
-      throw new StructuredContractOutputError();
+    } catch (repairError) {
+      throw new StructuredContractOutputError(
+        structuredValidationDetailCode(repairError) ?? structuredValidationDetailCode(initialError),
+      );
     }
   }
 }
@@ -386,6 +453,9 @@ export async function runStructuredCompletion(
   }
   const loop = await runToolLoop(transport, config, {
     messages: request.messages,
+    ...(request.epochHandoffMessages === undefined
+      ? {}
+      : { epochHandoffMessages: request.epochHandoffMessages }),
     tools: request.tools ?? [],
     execute: request.execute ?? (async () => null),
     ...(request.signal === undefined ? {} : { signal: request.signal }),

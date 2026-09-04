@@ -2673,6 +2673,54 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "items": {
           "additionalProperties": false,
           "properties": {
+            "compiler_diagnostics": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                  "digest": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string",
+                  },
+                  "excerpt": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "line": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer",
+                  },
+                  "message": {
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "path": {
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._+/-]+$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "path",
+                  "line",
+                  "column",
+                  "message",
+                  "excerpt",
+                  "digest",
+                ],
+                "type": "object",
+              },
+              "maxItems": 32,
+              "type": "array",
+            },
             "excerpt": {
               "maxLength": 16384,
               "minLength": 1,
@@ -2701,6 +2749,62 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
                 "INFRASTRUCTURE",
               ],
               "type": "string",
+            },
+            "test_diagnostics": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "digest": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string",
+                  },
+                  "line": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "message": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "path": {
+                    "anyOf": [
+                      {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9._+/-]+$",
+                        "type": "string",
+                      },
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "test_name": {
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "test_name",
+                  "message",
+                  "path",
+                  "line",
+                  "digest",
+                ],
+                "type": "object",
+              },
+              "maxItems": 32,
+              "type": "array",
             },
             "trust": {
               "const": "UNTRUSTED_DATA",

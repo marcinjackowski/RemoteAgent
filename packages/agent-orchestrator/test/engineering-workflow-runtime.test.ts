@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   EngineeringStage,
+  engineeringGateFailureCycleFingerprint,
+  engineeringGateFailureFingerprint,
+  engineeringReviewCycleFingerprint,
   engineeringStructuralFingerprint,
   evaluateEngineeringApproval,
   evaluateEngineeringProgress,
@@ -494,6 +497,135 @@ describe("SupervisorRuntime engineering stage driver", () => {
     ).toHaveLength(6);
   });
 
+  it("stops a review A/B tree cycle even when fresh finding identities change", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (result.status !== "COMPLETED") return result;
+      return {
+        ...result,
+        evidence: {
+          structuralState: {
+            treeDigest: input.binding.attempt % 2 === 1 ? sha("a") : sha("b"),
+            designRevisions: {},
+            sliceRevision: 1,
+            failedGateIds: [],
+            unresolvedFindingIds: [`finding-${String(input.binding.attempt)}`],
+          },
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: [],
+            directive:
+              input.binding.stage === EngineeringStage.SLICE_REVIEW
+                ? ("CORRECT_SLICE" as const)
+                : ("CONTINUE" as const),
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      summary: expect.stringContaining("OSCILLATION"),
+    });
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.SLICE_REVIEW),
+    ).toHaveLength(6);
+  });
+
+  it("stops an A/B required-gate tree cycle even when every compiler log digest changes", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (
+        result.status !== "COMPLETED" ||
+        input.binding.stage !== EngineeringStage.GATE_EXECUTION
+      ) {
+        return result;
+      }
+      return {
+        ...result,
+        evidence: {
+          structuralState: {
+            treeDigest: input.binding.attempt % 2 === 1 ? sha("a") : sha("b"),
+            designRevisions: {},
+            sliceRevision: 1,
+            failedGateIds: ["swift-compile"],
+            failedGateEvidenceDigests: [sha(String(input.binding.attempt))],
+            unresolvedFindingIds: [],
+          },
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: [],
+            directive: "CORRECT_SLICE" as const,
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      summary: expect.stringContaining("OSCILLATION"),
+    });
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.GATE_EXECUTION),
+    ).toHaveLength(6);
+  });
+
+  it("gives an unchanged required-gate receipt the configured correction budget before no-progress", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (
+        result.status !== "COMPLETED" ||
+        input.binding.stage !== EngineeringStage.GATE_EXECUTION
+      ) {
+        return result;
+      }
+      return {
+        ...result,
+        evidence: {
+          structuralState: {
+            treeDigest: sha(String(input.binding.attempt % 10)),
+            designRevisions: {},
+            sliceRevision: 1,
+            failedGateIds: ["flow-integration"],
+            failedGateEvidenceDigests: [sha("f")],
+            unresolvedFindingIds: [],
+          },
+          slice: {
+            activeSliceId: "slice-1",
+            expectedSliceId: "slice-1",
+            completedSliceIds: [],
+            directive: "CORRECT_SLICE" as const,
+          },
+        },
+      };
+    };
+
+    await runtime(store, port).pumpOnce();
+
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      summary: expect.stringContaining("NO_PROGRESS"),
+    });
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.GATE_EXECUTION),
+    ).toHaveLength(5);
+  });
+
   it("executes two slices in ProgramDesign order before verification and local commit", async () => {
     const store = new MemoryRuntimeStore();
     const port = new MemoryStagePort("MEDIUM");
@@ -874,6 +1006,66 @@ describe("engineering workflow policy", () => {
     );
     expect(engineeringStructuralFingerprint(base)).not.toBe(
       engineeringStructuralFingerprint({ ...base, sliceRevision: 5 }),
+    );
+  });
+
+  it("fingerprints review cycles without volatile finding identities", () => {
+    const base = {
+      treeDigest: sha("1"),
+      designRevisions: { system: 2, program: 3 },
+      sliceRevision: 4,
+      failedGateIds: [],
+      unresolvedFindingIds: ["finding-a"],
+    };
+    expect(engineeringReviewCycleFingerprint(base)).toBe(
+      engineeringReviewCycleFingerprint({
+        ...base,
+        unresolvedFindingIds: ["finding-b", "finding-c"],
+      }),
+    );
+    expect(engineeringReviewCycleFingerprint(base)).not.toBe(
+      engineeringReviewCycleFingerprint({ ...base, treeDigest: sha("2") }),
+    );
+  });
+
+  it("treats an unchanged exact gate failure as no progress even when the tree changes", () => {
+    const base = {
+      treeDigest: sha("1"),
+      designRevisions: { system: 2, program: 3 },
+      sliceRevision: 4,
+      failedGateIds: ["gate-b", "gate-a"],
+      failedGateEvidenceDigests: [sha("8"), sha("7")],
+      unresolvedFindingIds: [],
+    };
+    expect(engineeringGateFailureFingerprint(base)).toBe(
+      engineeringGateFailureFingerprint({
+        ...base,
+        treeDigest: sha("2"),
+        failedGateIds: ["gate-a", "gate-b"],
+        failedGateEvidenceDigests: [sha("7"), sha("8"), sha("7")],
+      }),
+    );
+    expect(engineeringGateFailureFingerprint(base)).not.toBe(
+      engineeringGateFailureFingerprint({
+        ...base,
+        treeDigest: sha("2"),
+        failedGateEvidenceDigests: [sha("9")],
+      }),
+    );
+    expect(() =>
+      engineeringGateFailureFingerprint({
+        ...base,
+        failedGateEvidenceDigests: ["not-a-digest"],
+      }),
+    ).toThrow("gate evidence digest must be sha256");
+    expect(engineeringGateFailureCycleFingerprint(base)).toBe(
+      engineeringGateFailureCycleFingerprint({
+        ...base,
+        failedGateEvidenceDigests: [sha("9")],
+      }),
+    );
+    expect(engineeringGateFailureCycleFingerprint(base)).not.toBe(
+      engineeringGateFailureCycleFingerprint({ ...base, treeDigest: sha("2") }),
     );
   });
 

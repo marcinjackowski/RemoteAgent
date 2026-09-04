@@ -9,6 +9,8 @@ import { afterEach, expect, it } from "vitest";
 import { EngineeringDebugJournal } from "../src/engineering-debug-journal.js";
 import {
   assertEngineeringLiveQualificationAuthority,
+  ENGINEERING_LIVE_EXECUTION_BUDGET_MS,
+  ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS,
   engineeringLiveQualificationSelectionFromEnv,
 } from "../src/engineering-live-qualification.js";
 import type { EngineeringExecutionConfig } from "../src/engineering-execution.js";
@@ -49,6 +51,14 @@ function routing(): ProductionEngineeringModelRouting {
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+it("scales the outer live timeout with the diagnostic budget multiplier", () => {
+  expect(ENGINEERING_LIVE_EXECUTION_BUDGET_MS).toBe(6 * 60 * 60_000);
+  expect(ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS).toBe(6 * 60 * 60_000 + 15 * 60_000);
+  expect(ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS).toBeGreaterThan(
+    ENGINEERING_LIVE_EXECUTION_BUDGET_MS,
+  );
 });
 
 it("keeps live qualification disabled unless the complete explicit selection is present", () => {

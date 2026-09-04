@@ -37,6 +37,9 @@ export const MAX_FINDINGS = 256;
 /** Shortest evidence quote that can be considered substantive. */
 export const MIN_EVIDENCE_LENGTH = 12;
 
+/** Longest exact diff quote that can cross the review boundary. */
+export const MAX_EVIDENCE_LENGTH = 4096;
+
 /**
  * Severity of a review finding.
  *
@@ -127,7 +130,7 @@ export const reviewFinding = versionedContract({
    * Quoting the diff is what ties a finding to the real change rather than to a
    * description of it (criterion 6).
    */
-  evidence: z.string().max(4096),
+  evidence: z.string().max(MAX_EVIDENCE_LENGTH),
   /** The change required to resolve it. Empty for NIT. */
   required_fix: z.string().max(2048),
 }).superRefine((finding, ctx) => {
@@ -253,7 +256,7 @@ export const preCommitModelFinding = valueObject({
   severity: reviewSeverity,
   summary: z.string().min(8).max(2048),
   location: reviewLocation,
-  evidence: z.string().max(4096),
+  evidence: z.string().max(MAX_EVIDENCE_LENGTH),
   required_fix: z.string().max(2048),
 }).superRefine((finding, ctx) => {
   if (!isBlockingSeverity(finding.severity)) return;

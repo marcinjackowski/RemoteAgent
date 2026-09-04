@@ -44,11 +44,15 @@ import { describeIntegration, ensurePostgres } from "../../database/test/integra
 import {
   BOUNDED_DISCOVERY_BUDGET_EXHAUSTED,
   BOUNDED_PATCH_REQUIRES_EXACT_REPLACEMENTS,
+  CODE_OWNED_GENERATOR_OUTPUT_RESERVED,
+  CORRECTION_BEHAVIORAL_MUTATION_REQUIRED,
+  CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED,
   BOUNDED_WRITE_REQUIRES_NEW_FILE,
   OperationLedgerRepository,
   OperationStatus,
   TOOLSET_PATH_PROTECTED,
   TEST_FIRST_MUTATION_REQUIRED,
+  TEST_SOURCE_INTROSPECTION_REFUSED,
   ToolKind,
   ToolOutcome,
   createBoundedImplementationToolset,
@@ -748,6 +752,248 @@ describeIntegration(
         expect(await readFile(join(root, "src", "production.ts"), "utf8")).toBe(
           "export const production = 2;\n",
         );
+      });
+
+      it("refuses a new test that reads production sources as text before bytes or ledger exist", async () => {
+        await mkdir(join(root, "src", "tests"), { recursive: true });
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/tests"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `source-test-${tool}-${String(sequence)}`,
+        });
+
+        const refused = await bounded.write({
+          relative_path: "src/tests/router.test.swift",
+          content: [
+            'let source = try String(contentsOf: root.appendingPathComponent("Sources/App.swift"))',
+            'expect(source).to(contain("router.route"))',
+          ].join("\n"),
+        });
+
+        expect(failureOf(refused)).toBe(TEST_SOURCE_INTROSPECTION_REFUSED);
+        expect(body(refused)).toMatchObject({
+          failure_code: TEST_SOURCE_INTROSPECTION_REFUSED,
+          next_action:
+            "Replace production-source text inspection with behavioral assertions or a public-API contract test.",
+        });
+        expect(await exists(join(root, "src", "tests", "router.test.swift"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "source-test-write-0")).toBeNull();
+
+        const stillLocked = await bounded.write({
+          relative_path: "src/production.ts",
+          content: "export const production = true;\n",
+        });
+        expect(failureOf(stillLocked)).toBe(TEST_FIRST_MUTATION_REQUIRED);
+        expect(await exists(join(root, "src", "production.ts"))).toBe(false);
+      });
+
+      it("refuses an exact replacement that turns a behavioral test into source inspection", async () => {
+        const testPath = join(root, "src", "tests", "router.test.swift");
+        await mkdir(join(root, "src", "tests"), { recursive: true });
+        const original = "func testRoute() { XCTAssertTrue(router.route()) }\n";
+        await writeFile(testPath, original);
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/tests"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `source-patch-${tool}-${String(sequence)}`,
+        });
+
+        const refused = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/tests/router.test.swift",
+              replacements: [
+                {
+                  old_content: original.trimEnd(),
+                  new_content:
+                    'func testRoute() throws { _ = try sourceFile("Sources/App.swift") }',
+                },
+              ],
+            },
+          ],
+        });
+
+        expect(failureOf(refused)).toBe(TEST_SOURCE_INTROSPECTION_REFUSED);
+        expect(await readFile(testPath, "utf8")).toBe(original);
+        expect(await ledger.findUnscoped(db, "source-patch-patch-0")).toBeNull();
+      });
+
+      it("allows a code-owned compiler correction after prior durable test-first evidence", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/app.test.ts"],
+          firstMutationAlreadySatisfied: true,
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `compiler-repair-${tool}-${String(sequence)}`,
+        });
+
+        const production = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [{ old_content: "a = 1", new_content: "a = 2" }],
+            },
+          ],
+        });
+        expect(production.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toContain("a = 2");
+      });
+
+      it("requires a successful substantive correction before unrelated mutations", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/app.ts"],
+          firstMutationAlreadySatisfied: true,
+          requiredSubstantiveMutationPaths: ["src/app.ts"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `substantive-${tool}-${String(sequence)}`,
+        });
+
+        const unrelated = await bounded.write({
+          relative_path: "src/notes.ts",
+          content: "export const note = true;\n",
+        });
+        expect(failureOf(unrelated)).toBe(CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED);
+        expect(await exists(join(root, "src", "notes.ts"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "substantive-write-0")).toBeNull();
+
+        const result = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [
+                { old_content: "export const a = 1;", new_content: "export const a = 1; " },
+              ],
+            },
+          ],
+        });
+
+        expect(failureOf(result)).toBe(CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+        expect(await ledger.findUnscoped(db, "substantive-patch-1")).toBeNull();
+
+        const stillUnrelated = await bounded.write({
+          relative_path: "src/changelog.ts",
+          content: "export const changelog = true;\n",
+        });
+        expect(failureOf(stillUnrelated)).toBe(CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED);
+        expect(await exists(join(root, "src", "changelog.ts"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "substantive-write-2")).toBeNull();
+
+        const substantive = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [
+                { old_content: "export const a = 1;", new_content: "export const a = 2;" },
+              ],
+            },
+          ],
+        });
+        expect(substantive.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 2;\n");
+
+        const ancillary = await bounded.write({
+          relative_path: "src/notes.ts",
+          content: "export const note = true;\n",
+        });
+        expect(ancillary.outcome).toBe(ToolOutcome.SUCCEEDED);
+        expect(await readFile(join(root, "src", "notes.ts"), "utf8")).toBe(
+          "export const note = true;\n",
+        );
+      });
+
+      it("refuses import-only progress on an exact behavioral correction path", async () => {
+        await writeFile(
+          join(root, "src", "FlowTests.swift"),
+          "import XCTest\n\nfinal class FlowTests: XCTestCase {\n    func testFlow() { XCTAssertTrue(true) }\n}\n",
+        );
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/FlowTests.swift"],
+          firstMutationAlreadySatisfied: true,
+          requiredSubstantiveMutationPaths: ["src/FlowTests.swift"],
+          requiredBehavioralMutationPaths: ["src/FlowTests.swift"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `behavioral-${tool}-${String(sequence)}`,
+        });
+
+        const importOnly = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/FlowTests.swift",
+              replacements: [
+                { old_content: "import XCTest", new_content: "import XCTest\nimport Dependencies" },
+              ],
+            },
+          ],
+        });
+        expect(failureOf(importOnly)).toBe(CORRECTION_BEHAVIORAL_MUTATION_REQUIRED);
+        expect(await readFile(join(root, "src", "FlowTests.swift"), "utf8")).not.toContain(
+          "Dependencies",
+        );
+        expect(await ledger.findUnscoped(db, "behavioral-patch-0")).toBeNull();
+
+        const behavioral = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/FlowTests.swift",
+              replacements: [
+                {
+                  old_content: "func testFlow() { XCTAssertTrue(true) }",
+                  new_content: "func testFlow() { XCTAssertEqual(flowResult(), .presented) }",
+                },
+              ],
+            },
+          ],
+        });
+        expect(behavioral.outcome).toBe(ToolOutcome.SUCCEEDED);
+      });
+
+      it("refuses model mutation of an exact code-owned generator output before ledger effects", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/app.test.ts"],
+          firstMutationAlreadySatisfied: true,
+          reservedMutationPaths: ["src/generated.ts"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `reserved-${tool}-${String(sequence)}`,
+        });
+
+        const result = await bounded.write({
+          relative_path: "src/generated.ts",
+          content: "export const generated = true;\n",
+        });
+
+        expect(failureOf(result)).toBe(CODE_OWNED_GENERATOR_OUTPUT_RESERVED);
+        expect(await exists(join(root, "src", "generated.ts"))).toBe(false);
+        expect(await ledger.findUnscoped(db, "reserved-write-0")).toBeNull();
       });
 
       it("refuses complete replacement of an existing file before delegate or ledger", async () => {

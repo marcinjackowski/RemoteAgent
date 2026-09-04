@@ -29,6 +29,7 @@ import {
   WorkUnitRepository,
   productionRuntime,
   type Database,
+  type EngineeringControlArtifactRevisionRow,
 } from "@remoteagent/database";
 import { MetricName, MetricRegistry, StructuredLogger } from "@remoteagent/observability";
 import { gitEvidenceBoundCommitDescriptor } from "@remoteagent/git-lifecycle";
@@ -48,6 +49,8 @@ import {
   assertGateEvidenceAuthority,
   createPostgresEngineeringRuntimePort as createPostgresEngineeringRuntimePortProduction,
   engineeringApprovalCandidateFromLease,
+  engineeringGateFailureEvidenceDigests,
+  engineeringImplementationStageModelCallReserve,
   gateExecutionIntentDescriptor,
   type EngineeringStageExecutor,
   type EngineeringSliceImplementationStageExecutor,
@@ -58,6 +61,7 @@ import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
 import {
   createEngineeringDebugTransport,
+  ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE,
   ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
   ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
   EngineeringDebugJournal,
@@ -77,6 +81,36 @@ const SLICE_PLANNING_CONSTRAINTS = Object.freeze({
   allowedPaths: WRITE_POLICY.write_path_allowlist,
   allowedTestPaths: WRITE_POLICY.write_path_allowlist,
   requiredGateIds: Object.freeze(["gate-1"]),
+});
+
+it("uses the smaller stage reserve only for an exact durable correction directive", () => {
+  expect(engineeringImplementationStageModelCallReserve([])).toBe(
+    ENGINEERING_MODEL_CALL_TOKEN_RESERVE,
+  );
+  const rows = [
+    {
+      stage_attempt: 1,
+      revision: 0,
+      payload_digest: sha("a"),
+      payload: { artifact_kind: "SliceContract", slice_id: "slice-1" },
+    },
+    {
+      stage_attempt: 1,
+      revision: 0,
+      payload_digest: sha("b"),
+      payload: {
+        artifact_kind: "GateFailure",
+        slice_id: "slice-1",
+        attempt: 1,
+        tree_digest: sha("c"),
+        blocking_gate_ids: ["gate-1"],
+        diagnostics: [],
+      },
+    },
+  ] as unknown as readonly EngineeringControlArtifactRevisionRow[];
+  expect(engineeringImplementationStageModelCallReserve(rows)).toBe(
+    ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE,
+  );
 });
 const createPostgresEngineeringRuntimePort = (
   input: Omit<
@@ -580,6 +614,132 @@ it("binds GateFailure correction evidence to the immutable gate context and deci
   ).toThrow(/immutable intent authority/);
 });
 
+it("uses stable structured Xcode failures instead of volatile whole-log digests", () => {
+  const testIdentity = {
+    test_name: "-[SharedTests.SafetyAlertTests testCloseDismissesAlert]",
+    message: "XCTAssertFalse failed - alert remained visible",
+    path: "Tests/SafetyAlertTests.swift",
+    line: 73,
+  } as const;
+  const failure = (logDigest: string, structured: boolean) =>
+    engineeringArtifact.parse({
+      schema_version: 1,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt: 2,
+      tree_digest: sha("1"),
+      diff_digest: sha("2"),
+      context_digest: sha("3"),
+      config_digest: sha("4"),
+      blocking_gate_ids: ["ios-tests"],
+      receipt_ids: ["receipt-1"],
+      decision_ids: [],
+      diagnostics: [
+        {
+          gate_id: "ios-tests",
+          outcome: "FAILED",
+          log_digest: logDigest,
+          trust: TrustLevel.UNTRUSTED_DATA,
+          excerpt: "Test Case failed",
+          compiler_diagnostics: [],
+          test_diagnostics: structured
+            ? [{ ...testIdentity, digest: canonicalDigest(testIdentity) }]
+            : [],
+        },
+      ],
+    });
+
+  const first = failure(sha("a"), true);
+  const second = failure(sha("b"), true);
+  if (first.artifact_kind !== "GateFailure" || second.artifact_kind !== "GateFailure") {
+    throw new Error("fixture must be GateFailure");
+  }
+  expect(engineeringGateFailureEvidenceDigests(first)).toEqual(
+    engineeringGateFailureEvidenceDigests(second),
+  );
+  const legacyFirst = failure(sha("a"), false);
+  const legacySecond = failure(sha("b"), false);
+  if (legacyFirst.artifact_kind !== "GateFailure" || legacySecond.artifact_kind !== "GateFailure") {
+    throw new Error("fixture must be GateFailure");
+  }
+  expect(engineeringGateFailureEvidenceDigests(legacyFirst)).not.toEqual(
+    engineeringGateFailureEvidenceDigests(legacySecond),
+  );
+});
+
+it("fingerprints the semantic compiler failure across line and excerpt-only edits", () => {
+  const failure = (input: { line: number; column: number; excerpt: string; message?: string }) => {
+    const compiler = {
+      path: "Sources/Shared/AgentAI/AgentAIFlow.swift",
+      line: input.line,
+      column: input.column,
+      message:
+        input.message ??
+        "type 'AgentAIFlow' does not conform to protocol 'SafetyAlertActionHandling'",
+      excerpt: input.excerpt,
+    };
+    return engineeringArtifact.parse({
+      schema_version: 1,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt: 2,
+      tree_digest: sha("1"),
+      diff_digest: sha("2"),
+      context_digest: sha("3"),
+      config_digest: sha("4"),
+      blocking_gate_ids: ["ios-build"],
+      receipt_ids: ["receipt-1"],
+      decision_ids: [],
+      diagnostics: [
+        {
+          gate_id: "ios-build",
+          outcome: "FAILED",
+          log_digest: sha("5"),
+          trust: TrustLevel.UNTRUSTED_DATA,
+          excerpt: input.excerpt,
+          compiler_diagnostics: [{ ...compiler, digest: canonicalDigest(compiler) }],
+          test_diagnostics: [],
+        },
+      ],
+    });
+  };
+
+  const first = failure({ line: 22, column: 20, excerpt: "class AgentAIFlow" });
+  const shifted = failure({
+    line: 119,
+    column: 5,
+    excerpt: "func handleSafetyAlertAction(_ action: sending SafetyAlertAction)",
+  });
+  const changed = failure({
+    line: 119,
+    column: 5,
+    excerpt: "func handleSafetyAlertAction(_ action: SafetyAlertAction)",
+    message: "type 'AgentAIFlow' has no member 'closeSafetyAlert'",
+  });
+  if (
+    first.artifact_kind !== "GateFailure" ||
+    shifted.artifact_kind !== "GateFailure" ||
+    changed.artifact_kind !== "GateFailure"
+  ) {
+    throw new Error("fixtures must be GateFailure");
+  }
+
+  expect(engineeringGateFailureEvidenceDigests(first)).toEqual(
+    engineeringGateFailureEvidenceDigests(shifted),
+  );
+  expect(engineeringGateFailureEvidenceDigests(first)).not.toEqual(
+    engineeringGateFailureEvidenceDigests(changed),
+  );
+});
+
 function runtimeIdentity() {
   const workUnit: WorkUnit = {
     schema_version: 1,
@@ -1039,6 +1199,7 @@ describeIntegration(
       expect(firstSession).toMatchObject({
         stageCalls: 0,
         modelCalls: 0,
+        maxModelCalls: 96,
         deadlineMs: expectedDeadline,
       });
       expect(await first.recoverStage(binding)).toEqual({ status: "NOT_STARTED" });
@@ -2071,6 +2232,7 @@ describeIntegration(
       const resumed = createPostgresEngineeringRuntimePort(options);
       const session = await resumed.open(runtimeIdentity());
       expect(session.fingerprints).toHaveLength(1);
+      expect(session.reviewCycleFingerprints).toHaveLength(1);
       const recoveredReview = await resumed.recoverStage({
         caseId: "case-1",
         workUnitId: "unit-1",
@@ -2225,7 +2387,7 @@ describeIntegration(
       });
     });
 
-    it("materializes two v2 blueprints in order without model slice planning", async () => {
+    it("materializes two v2 blueprints and preserves current gate-failure progress after an earlier pass", async () => {
       const jobs = new JobStore(runtime);
       await jobs.enqueue(db, {
         caseId: "case-1",
@@ -2285,7 +2447,40 @@ describeIntegration(
         reviewExecutor: executor,
         implementationExecutor: fakeImplementationExecutor(),
         localCommitExecutor: fakeLocalCommitExecutor(),
-        executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
+        executeSystemStage: async ({ binding, context, decisionIds }) => {
+          if (
+            binding.stage === EngineeringStage.GATE_EXECUTION &&
+            (binding.attempt === 2 || binding.attempt === 3)
+          ) {
+            return engineeringArtifact.parse({
+              schema_version: 1,
+              artifact_kind: "GateFailure",
+              case_id: binding.caseId,
+              run_id: binding.runId,
+              revision: binding.checkpointRevision,
+              authority: "SERVER_OWNED",
+              slice_id: "slice-2",
+              attempt: binding.attempt,
+              tree_digest: binding.attempt === 2 ? sha("2") : sha("3"),
+              diff_digest: sha("1"),
+              context_digest: engineeringArtifactDigest(context.compiled.manifest),
+              config_digest: sha("3"),
+              blocking_gate_ids: ["gate-1"],
+              receipt_ids: [`receipt-failed-${String(binding.attempt)}`],
+              decision_ids: decisionIds,
+              diagnostics: [
+                {
+                  gate_id: "gate-1",
+                  outcome: "FAILED",
+                  log_digest: sha("4"),
+                  trust: TrustLevel.UNTRUSTED_DATA,
+                  excerpt: "bounded gate failure",
+                },
+              ],
+            });
+          }
+          return systemArtifact(binding.stage, binding.attempt);
+        },
         policy: {
           riskFacts: {
             authority: "SERVER_OWNED",
@@ -2356,8 +2551,46 @@ describeIntegration(
         },
       });
       await invoke(EngineeringStage.SLICE_IMPLEMENTATION, 2);
-      await invoke(EngineeringStage.GATE_EXECUTION, 2);
-      const secondReview = await invoke(EngineeringStage.SLICE_REVIEW, 2);
+      expect(await invoke(EngineeringStage.GATE_EXECUTION, 2)).toMatchObject({
+        evidence: { slice: { activeSliceId: "slice-2", directive: "CORRECT_SLICE" } },
+      });
+      await invoke(EngineeringStage.SLICE_IMPLEMENTATION, 3);
+      expect(await invoke(EngineeringStage.GATE_EXECUTION, 3)).toMatchObject({
+        evidence: { slice: { activeSliceId: "slice-2", directive: "CORRECT_SLICE" } },
+      });
+      const resumed = createPostgresEngineeringRuntimePort({
+        db,
+        lease: lease!,
+        jobs,
+        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        executor,
+        reviewExecutor: executor,
+        implementationExecutor: fakeImplementationExecutor(),
+        localCommitExecutor: fakeLocalCommitExecutor(),
+        executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
+        policy: {
+          riskFacts: {
+            authority: "SERVER_OWNED",
+            security_or_policy: false,
+            migration: false,
+            irreversible_side_effect: false,
+            broad_public_contract_change: false,
+            multi_module: true,
+            new_architecture: false,
+            deterministic_oracle: true,
+            user_data: false,
+            concurrency: false,
+            external_side_effect: false,
+          },
+        },
+      });
+      const resumedSession = await resumed.open(runtimeIdentity());
+      expect(resumedSession.gateFailureCycleFingerprints).toHaveLength(2);
+      expect(new Set(resumedSession.gateFailureCycleFingerprints).size).toBe(2);
+
+      await invoke(EngineeringStage.SLICE_IMPLEMENTATION, 4);
+      await invoke(EngineeringStage.GATE_EXECUTION, 4);
+      const secondReview = await invoke(EngineeringStage.SLICE_REVIEW, 4);
       expect(secondReview).toMatchObject({
         status: "COMPLETED",
         evidence: {
@@ -3454,6 +3687,16 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
       each: "EACH_SLICE" as const,
       last: "LAST_SLICE" as const,
     },
+    requiredGateTestPaths: {
+      first: ["apps/agent-worker/src/required-first.test.ts"],
+      each: [],
+      last: ["apps/agent-worker/src/required-last.test.ts"],
+    },
+    requiredGateMutationPaths: {
+      first: ["apps/agent-worker/src/required-first.ts"],
+      each: [],
+      last: ["apps/agent-worker/src/required-last.ts"],
+    },
   };
   const modelDesign = currentProgramDesignArtifact({
     count: 3,
@@ -3499,6 +3742,150 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
     ["each"],
     ["each", "last"],
   ]);
+  expect(result.artifact.slice_blueprints.map((blueprint) => blueprint.test_paths)).toEqual([
+    [
+      "apps/agent-worker/src/engineering-workflow.ts",
+      "apps/agent-worker/src/required-first.test.ts",
+    ],
+    ["apps/agent-worker/src/engineering-workflow.ts"],
+    [
+      "apps/agent-worker/src/engineering-workflow.ts",
+      "apps/agent-worker/src/required-last.test.ts",
+    ],
+  ]);
+  expect(result.artifact.slice_blueprints.map((blueprint) => blueprint.allowed_paths)).toEqual([
+    [
+      "apps/agent-worker/src",
+      "apps/agent-worker/src/required-first.test.ts",
+      "apps/agent-worker/src/required-first.ts",
+    ],
+    ["apps/agent-worker/src"],
+    [
+      "apps/agent-worker/src",
+      "apps/agent-worker/src/required-last.test.ts",
+      "apps/agent-worker/src/required-last.ts",
+    ],
+  ]);
+});
+
+it("repairs one schema-valid ProgramDesign that violates server-owned slice constraints", async () => {
+  const validDesign = currentProgramDesignArtifact({ count: 2 });
+  if (validDesign.artifact_kind !== "ProgramDesign" || validDesign.schema_version !== 2) {
+    throw new Error("current ProgramDesign fixture mismatch");
+  }
+  const invalidDesign = engineeringArtifact.parse({
+    ...validDesign,
+    slice_blueprints: validDesign.slice_blueprints.map((blueprint, index) =>
+      index === 0
+        ? {
+            ...blueprint,
+            allowed_paths: [
+              "apps/agent-worker/src/a",
+              "apps/agent-worker/src/b",
+              "apps/agent-worker/src/c",
+              "apps/agent-worker/src/d",
+              "apps/agent-worker/src/e",
+            ],
+            test_paths: ["apps/agent-worker/src/a"],
+          }
+        : blueprint,
+    ),
+  });
+  const config = createRuntimeConfig({
+    model: { provider: "qualification_fake", model_id: "test-model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 2, maxCalls: 2 },
+  });
+  const transport = new FakeTransport([
+    { model: config.model, content: [{ type: "json", value: invalidDesign }] },
+    { model: config.model, content: [{ type: "json", value: validDesign }] },
+  ]);
+  const executor = createStructuredEngineeringStageExecutor({
+    transport,
+    config,
+    slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+  });
+
+  const result = await executor.execute({
+    binding: {
+      caseId: "case-1",
+      workUnitId: "unit-1",
+      runId: "run-1",
+      checkpointRevision: 0,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      attempt: 1,
+    },
+    objective: "bounded slices",
+    context: manifest(EngineeringStage.PROGRAM_DESIGN),
+    orderedArtifacts: [],
+    processClass: "MEDIUM",
+  });
+
+  expect(result).toMatchObject({ kind: "ARTIFACT", modelCalls: 2 });
+  expect(transport.requests).toHaveLength(2);
+  expect(
+    transport.requests[1]!.messages.flatMap((message) => message.content)
+      .map((content) => (content.type === "text" ? content.text : ""))
+      .join("\n"),
+  ).toContain("no more than four model-authored write roots per slice");
+});
+
+it("identifies an outside-write-cap ProgramDesign repair without exposing raw validation prose", async () => {
+  const validDesign = currentProgramDesignArtifact({ count: 2 });
+  if (validDesign.artifact_kind !== "ProgramDesign" || validDesign.schema_version !== 2) {
+    throw new Error("current ProgramDesign fixture mismatch");
+  }
+  const invalidDesign = engineeringArtifact.parse({
+    ...validDesign,
+    slice_blueprints: validDesign.slice_blueprints.map((blueprint, index) =>
+      index === 0
+        ? {
+            ...blueprint,
+            allowed_paths: ["apps/foreign/src"],
+            test_paths: ["apps/foreign/src/feature.test.ts"],
+          }
+        : blueprint,
+    ),
+  });
+  const config = createRuntimeConfig({
+    model: { provider: "qualification_fake", model_id: "test-model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 2, maxCalls: 2 },
+  });
+  const transport = new FakeTransport([
+    { model: config.model, content: [{ type: "json", value: invalidDesign }] },
+    { model: config.model, content: [{ type: "json", value: validDesign }] },
+  ]);
+  const executor = createStructuredEngineeringStageExecutor({
+    transport,
+    config,
+    slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+  });
+
+  const result = await executor.execute({
+    binding: {
+      caseId: "case-1",
+      workUnitId: "unit-1",
+      runId: "run-1",
+      checkpointRevision: 0,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      attempt: 1,
+    },
+    objective: "bounded slices",
+    context: manifest(EngineeringStage.PROGRAM_DESIGN),
+    orderedArtifacts: [],
+    processClass: "MEDIUM",
+  });
+
+  expect(result).toMatchObject({ kind: "ARTIFACT", modelCalls: 2 });
+  const repairInstruction = transport.requests[1]!.messages.at(-1)!
+    .content.map((content) => (content.type === "text" ? content.text : ""))
+    .join("\n");
+  expect(repairInstruction).toContain(
+    "server-owned validation failure code is PLANNING_PATH_OUTSIDE_WRITE_CAP",
+  );
+  expect(repairInstruction).toContain("slash-delimited descendant");
+  expect(repairInstruction).not.toContain("apps/foreign/src");
 });
 
 it("creates a fresh tools-disabled provider-neutral pre-commit session", async () => {
@@ -3536,6 +3923,17 @@ it("creates a fresh tools-disabled provider-neutral pre-commit session", async (
       attempt: 1,
     },
     task_brief: "review exact patch",
+    slice_scope: {
+      slice_id: "slice-1",
+      objective: "review exact patch",
+      observable_result: "focused behavior is correct",
+      allowed_paths: ["src"],
+      test_paths: ["src"],
+      code_owned_generator_paths: ["src/generated.ts"],
+      inspection_method: "inspect patch",
+      stop_condition: "no current-slice findings",
+    },
+    changed_line_ranges: [{ relative_path: "src/change.ts", start_line: 1, end_line: 1 }],
     patch: "+safe change\n",
     raw_patch_digest: sha("1"),
     actual_diff_digest: sha("2"),
@@ -3549,4 +3947,19 @@ it("creates a fresh tools-disabled provider-neutral pre-commit session", async (
   expect(captured).toHaveLength(1);
   expect(captured[0]).toMatchObject({ tools: [] });
   expect(JSON.stringify(captured[0])).toContain("one contiguous verbatim quote");
+  expect(JSON.stringify(captured[0])).toContain("exact new-file line");
+  expect(JSON.stringify(captured[0])).toContain("changed_line_ranges");
+  expect(JSON.stringify(captured[0])).toContain("Never count hunk headers or context lines");
+  expect(JSON.stringify(captured[0])).toContain("exhaustive pre-commit review");
+  expect(JSON.stringify(captured[0])).toContain("every independent blocking finding");
+  expect(JSON.stringify(captured[0])).toContain("exact durable acceptance boundary");
+  expect(JSON.stringify(captured[0])).toContain("later slices and final verification");
+  expect(JSON.stringify(captured[0])).toContain('\\"slice_scope\\":{\\"slice_id\\":\\"slice-1\\"');
+  expect(JSON.stringify(captured[0])).toContain("production reachability");
+  expect(JSON.stringify(captured[0])).toContain("existing production flow");
+  expect(JSON.stringify(captured[0])).toContain("concurrency and idempotency");
+  expect(JSON.stringify(captured[0])).toContain("server-owned generator");
+  expect(JSON.stringify(captured[0])).toContain(
+    '\\"code_owned_generator_paths\\":[\\"src/generated.ts\\"]',
+  );
 });

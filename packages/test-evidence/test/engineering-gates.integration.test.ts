@@ -800,15 +800,88 @@ describeIntegration("durable engineering gate executor", () => {
     ]);
     const fast = await catalogFrom([{ gate_id: "tiered", gate_tier: VerificationGateTier.FAST }]);
     const firstSlice = await catalogFrom([{ gate_id: "tiered", gate_schedule: "FIRST_SLICE" }]);
+    const withRequiredTest = await catalogFrom([
+      { gate_id: "tiered", required_test_paths: ["tests/feature.test.ts"] },
+    ]);
+    const withRequiredMutation = await catalogFrom([
+      { gate_id: "tiered", required_mutation_paths: ["src/feature.ts"] },
+    ]);
 
     expect(implicit.definitions[0]?.gate_tier).toBe(VerificationGateTier.FULL);
+    expect(implicit.definitions[0]?.execution_order).toBe(1_000);
     expect(implicit.config_digest).toBe(explicitFull.config_digest);
     expect(implicit.commandDigest("tiered")).toBe(explicitFull.commandDigest("tiered"));
     expect(fast.config_digest).not.toBe(explicitFull.config_digest);
     expect(fast.commandDigest("tiered")).not.toBe(explicitFull.commandDigest("tiered"));
     expect(implicit.definitions[0]?.gate_schedule).toBe("EACH_SLICE");
+    expect(implicit.definitions[0]?.required_test_paths).toEqual([]);
+    expect(implicit.definitions[0]?.required_mutation_paths).toEqual([]);
+    expect(withRequiredTest.definitions[0]?.required_test_paths).toEqual(["tests/feature.test.ts"]);
+    expect(Object.isFrozen(withRequiredTest.definitions[0]?.required_test_paths)).toBe(true);
+    expect(withRequiredMutation.definitions[0]?.required_mutation_paths).toEqual([
+      "src/feature.ts",
+    ]);
+    expect(Object.isFrozen(withRequiredMutation.definitions[0]?.required_mutation_paths)).toBe(
+      true,
+    );
+    expect(withRequiredTest.config_digest).not.toBe(implicit.config_digest);
+    expect(withRequiredTest.commandDigest("tiered")).toBe(implicit.commandDigest("tiered"));
+    expect(withRequiredMutation.config_digest).not.toBe(implicit.config_digest);
+    expect(withRequiredMutation.commandDigest("tiered")).toBe(implicit.commandDigest("tiered"));
     expect(firstSlice.config_digest).not.toBe(explicitFull.config_digest);
     expect(firstSlice.commandDigest("tiered")).not.toBe(explicitFull.commandDigest("tiered"));
+    await expect(
+      catalogFrom([
+        {
+          gate_id: "duplicate-tests",
+          required_test_paths: ["tests/feature.test.ts", "tests/feature.test.ts"],
+        },
+      ]),
+    ).rejects.toThrow(/required test paths must be unique/u);
+    await expect(
+      catalogFrom([
+        {
+          gate_id: "duplicate-mutations",
+          required_mutation_paths: ["src/feature.ts", "src/feature.ts"],
+        },
+      ]),
+    ).rejects.toThrow(/required mutation paths must be unique/u);
+  });
+
+  it("runs a cheaper FAST preflight before an expensive FAST test by code-owned order", async () => {
+    const ordered = await catalogFrom([
+      {
+        gate_id: "a-expensive-test",
+        gate_tier: VerificationGateTier.FAST,
+        execution_order: 200,
+      },
+      {
+        gate_id: "z-compile-preflight",
+        gate_tier: VerificationGateTier.FAST,
+        execution_order: 100,
+      },
+    ]);
+
+    expect(ordered.definitions.map((gate) => gate.gate_id)).toEqual([
+      "z-compile-preflight",
+      "a-expensive-test",
+    ]);
+    expect(ordered.config_digest).not.toBe(
+      (
+        await catalogFrom([
+          {
+            gate_id: "a-expensive-test",
+            gate_tier: VerificationGateTier.FAST,
+            execution_order: 100,
+          },
+          {
+            gate_id: "z-compile-preflight",
+            gate_tier: VerificationGateTier.FAST,
+            execution_order: 200,
+          },
+        ])
+      ).config_digest,
+    );
   });
 
   it("finishes both targets of a failed FAST test-first gate and blocks lexical-first FULL", async () => {

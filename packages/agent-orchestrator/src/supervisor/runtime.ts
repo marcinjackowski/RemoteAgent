@@ -8,8 +8,12 @@ import {
 
 import { mergeReadOnlyResults, type ReadOnlyMerge } from "./merge.js";
 import {
+  engineeringGateFailureCycleFingerprint,
+  engineeringGateFailureFingerprint,
+  engineeringReviewCycleFingerprint,
   engineeringStructuralFingerprint,
   evaluateEngineeringApproval,
+  evaluateEngineeringFingerprintProgress,
   evaluateEngineeringProgress,
   type EngineeringRuntimePort,
   type EngineeringRuntimeStopCode,
@@ -682,7 +686,8 @@ export class SupervisorRuntime {
     if (!port) throw new RuntimeInvariantError("engineering runtime port is not configured");
     const session = await port.open({ unit: state, run: state.run });
     const fingerprints = [...session.fingerprints];
-    let lastGateFailureFingerprint = session.lastGateFailureFingerprint;
+    const gateFailureCycleFingerprints = [...(session.gateFailureCycleFingerprints ?? [])];
+    const reviewCycleFingerprints = [...(session.reviewCycleFingerprints ?? [])];
     let stageCalls = session.stageCalls;
     let modelCalls = session.modelCalls;
     let cancelled = session.cancelled;
@@ -733,19 +738,48 @@ export class SupervisorRuntime {
       // into A,A,A and the next into B,B,B, which makes a genuine A/B oscillation invisible. A
       // passing gate is deliberately not sampled because review owns that attempt's state.
       if (!alreadyCounted && stage === EngineeringStage.SLICE_REVIEW) {
-        lastGateFailureFingerprint = undefined;
         fingerprints.push(engineeringStructuralFingerprint(evidence.structuralState));
+        if (evidence.slice.directive === "CORRECT_SLICE") {
+          reviewCycleFingerprints.push(engineeringReviewCycleFingerprint(evidence.structuralState));
+          const cycleDisposition = evaluateEngineeringFingerprintProgress({
+            fingerprints: reviewCycleFingerprints,
+            consecutiveRepeatLimit: session.consecutiveRepeatLimit,
+            oscillationLimit: session.oscillationLimit,
+          });
+          if (cycleDisposition !== "CONTINUE") {
+            return stop(
+              cycleDisposition,
+              `engineering review correction stopped: ${cycleDisposition}`,
+            );
+          }
+        }
       } else if (
         !alreadyCounted &&
         stage === EngineeringStage.GATE_EXECUTION &&
         evidence.slice.directive === "CORRECT_SLICE"
       ) {
-        const fingerprint = engineeringStructuralFingerprint(evidence.structuralState);
-        const repeated = fingerprint === lastGateFailureFingerprint;
-        lastGateFailureFingerprint = fingerprint;
+        const fingerprint = engineeringGateFailureFingerprint(evidence.structuralState);
         fingerprints.push(fingerprint);
-        if (repeated) {
-          return stop("NO_PROGRESS", "engineering workflow stopped: NO_PROGRESS");
+        // Required-gate corrections share the same deterministic progress budget as review
+        // corrections. One unchanged receipt is useful feedback, not yet proof of a stuck loop:
+        // a model may have repaired one half of an exact multi-file contract while the remaining
+        // failed criterion keeps the receipt digest stable. `stopForProgress` evaluates the
+        // durable fingerprint history before the next stage and stops only after the configured
+        // consecutive-repeat limit. The independent exact-tree history below still catches A/B
+        // oscillation even when every compiler/log digest changes.
+        gateFailureCycleFingerprints.push(
+          engineeringGateFailureCycleFingerprint(evidence.structuralState),
+        );
+        const cycleDisposition = evaluateEngineeringFingerprintProgress({
+          fingerprints: gateFailureCycleFingerprints,
+          consecutiveRepeatLimit: session.consecutiveRepeatLimit,
+          oscillationLimit: session.oscillationLimit,
+        });
+        if (cycleDisposition !== "CONTINUE") {
+          return stop(
+            cycleDisposition,
+            `engineering required-gate correction stopped: ${cycleDisposition}`,
+          );
         }
       }
       return undefined;

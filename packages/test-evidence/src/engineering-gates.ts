@@ -141,6 +141,8 @@ const verificationGateDefinitionSchema = versionedContract({
   gate_class: verificationGateClass,
   gate_tier: verificationGateTier.default(VerificationGateTier.FULL),
   gate_schedule: verificationGateSchedule.default(VerificationGateSchedule.EACH_SLICE),
+  /** Lower values execute first within one tier; the id remains the deterministic tie-breaker. */
+  execution_order: z.int().nonnegative().max(10_000).default(1_000),
   executable: absoluteExecutable,
   argv: z.array(z.string().max(4096)).max(128),
   relative_cwd: relativeRepositoryPath,
@@ -151,6 +153,10 @@ const verificationGateDefinitionSchema = versionedContract({
   environment_profile: z.enum(["HERMETIC", "BUILD_TOOLCHAIN"]),
   network_profile: z.enum(["DENY", "LOOPBACK", "PLATFORM_MANAGED"]),
   mutable_outputs: z.array(relativeRepositoryPath).max(128),
+  /** Exact test files that must be writable on every slice where this gate is scheduled. */
+  required_test_paths: z.array(relativeRepositoryPath).max(16).default([]),
+  /** Exact implementation files a matching gate diagnostic may require a correction to mutate. */
+  required_mutation_paths: z.array(relativeRepositoryPath).max(16).default([]),
   implementation_guidance: z.string().min(1).max(4096).optional(),
   implementation_context: z.array(implementationContextEntry).min(1).max(24).optional(),
 }).superRefine((definition, ctx) => {
@@ -181,6 +187,22 @@ const verificationGateDefinitionSchema = versionedContract({
       code: "custom",
       path: ["mutable_outputs"],
       message: "mutable output paths must be unique",
+    });
+  }
+  if (new Set(definition.required_test_paths).size !== definition.required_test_paths.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["required_test_paths"],
+      message: "required test paths must be unique",
+    });
+  }
+  if (
+    new Set(definition.required_mutation_paths).size !== definition.required_mutation_paths.length
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["required_mutation_paths"],
+      message: "required mutation paths must be unique",
     });
   }
   if (definition.implementation_context !== undefined) {
@@ -342,9 +364,13 @@ function verificationGateFreezeDefinition(
     ...definition,
     argv: [...definition.argv],
     mutable_outputs: [...definition.mutable_outputs],
+    required_test_paths: [...definition.required_test_paths],
+    required_mutation_paths: [...definition.required_mutation_paths],
   };
   Object.freeze(snapshot.argv);
   Object.freeze(snapshot.mutable_outputs);
+  Object.freeze(snapshot.required_test_paths);
+  Object.freeze(snapshot.required_mutation_paths);
   return Object.freeze(snapshot);
 }
 
@@ -446,6 +472,9 @@ export class VerificationGateCatalog {
     definitions.sort((left, right) => {
       if (left.gate_tier !== right.gate_tier) {
         return left.gate_tier === VerificationGateTier.FAST ? -1 : 1;
+      }
+      if (left.execution_order !== right.execution_order) {
+        return left.execution_order - right.execution_order;
       }
       return left.gate_id < right.gate_id ? -1 : left.gate_id > right.gate_id ? 1 : 0;
     });

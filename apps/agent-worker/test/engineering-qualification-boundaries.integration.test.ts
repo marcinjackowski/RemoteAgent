@@ -51,6 +51,7 @@ class BoundaryTransport implements RuntimeTransport {
   reviewAttempts = 0;
   planningCalls = 0;
   #awaitingImplementationReport = false;
+  #repeatingNoChangeReport = false;
 
   public constructor(
     private readonly binding: { caseId: string; runId: string },
@@ -137,12 +138,16 @@ class BoundaryTransport implements RuntimeTransport {
       });
     }
     if (name === "SliceImplementationReport_v1") {
+      if (this.#repeatingNoChangeReport) {
+        return json({ schema_version: 1, changed_files: [] });
+      }
       const content = this.scenario.contents[this.implementationAttempts];
       if (content === undefined) throw new Error("unexpected extra implementation attempt");
       if (!this.#awaitingImplementationReport) {
         const priorContent = this.scenario.contents[this.implementationAttempts - 1];
         if (priorContent === content) {
           this.implementationAttempts += 1;
+          this.#repeatingNoChangeReport = true;
           return json({ schema_version: 1, changed_files: [] });
         }
         this.#awaitingImplementationReport = true;
@@ -340,7 +345,7 @@ describeIntegration(
           policy: { riskFacts: smallRiskFacts },
         });
 
-        await production.handler(lease, async () => undefined);
+        await expect(production.handler(lease, async () => undefined)).resolves.toBeUndefined();
 
         expect(transport.implementationAttempts).toBe(expectedImplementationAttempts);
         expect(transport.reviewAttempts).toBe(expectedReviewAttempts);
@@ -355,7 +360,7 @@ describeIntegration(
             summary:
               terminal === "NO_PROGRESS"
                 ? expect.stringMatching(/^NO_PROGRESS:/u)
-                : `engineering workflow stopped: ${terminal}`,
+                : `engineering review correction stopped: ${terminal}`,
           },
         ]);
         if (terminal === "NO_PROGRESS") {
@@ -385,7 +390,7 @@ describeIntegration(
       },
     );
 
-    it("does not let an unsubstantiated review finding block a gate-verified slice", async () => {
+    it("fails closed when a review finding is not substantiated by the actual patch", async () => {
       const fixture = await createEngineeringQualificationFixture({ id: "review-contract-error" });
       active.push(fixture);
       const transport = new BoundaryTransport(
@@ -402,7 +407,9 @@ describeIntegration(
         policy: { riskFacts: smallRiskFacts },
       });
 
-      await expect(production.handler(lease, async () => undefined)).resolves.toBeUndefined();
+      await expect(production.handler(lease, async () => undefined)).rejects.toThrow(
+        /did not complete its work/u,
+      );
       expect(transport.reviewAttempts).toBe(1);
       const terminalArtifacts = await fixture.db.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM engineering_artifact_revisions
@@ -415,7 +422,7 @@ describeIntegration(
           WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt'`,
         [fixture.ids.runId],
       );
-      expect(commits.rows[0]?.count).toBe("1");
+      expect(commits.rows[0]?.count).toBe("0");
     });
 
     it("opens a fresh reviewer when a new slice matches an older rejected patch", async () => {
@@ -442,7 +449,7 @@ describeIntegration(
         },
       });
 
-      await production.handler(lease, async () => undefined);
+      await expect(production.handler(lease, async () => undefined)).resolves.toBeUndefined();
 
       expect(transport.planningCalls).toBe(0);
       expect(transport.implementationAttempts).toBe(3);
@@ -687,7 +694,10 @@ describeIntegration(
         {
           contents: [
             "export const value = 'not-accepted';\n",
-            "export const value = 'not-accepted';\n",
+            "export const value = 'still-not-accepted-2';\n",
+            "export const value = 'still-not-accepted-3';\n",
+            "export const value = 'still-not-accepted-4';\n",
+            "export const value = 'still-not-accepted-5';\n",
           ],
           reviews: [],
         },
@@ -697,7 +707,7 @@ describeIntegration(
         transport,
         policy: { riskFacts: smallRiskFacts },
       });
-      await production.handler(lease, async () => undefined);
+      await expect(production.handler(lease, async () => undefined)).resolves.toBeUndefined();
 
       const completion = await fixture.db.query<{ status: string; summary: string }>(
         `SELECT completion->>'status' AS status, completion->>'summary' AS summary
@@ -710,7 +720,7 @@ describeIntegration(
       });
       await assertNoAcceptedWrite(fixture);
       expect(transport.reviewAttempts).toBe(0);
-      expect(transport.implementationAttempts).toBe(2);
+      expect(transport.implementationAttempts).toBe(5);
     });
 
     it.each([

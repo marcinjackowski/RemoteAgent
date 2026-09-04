@@ -729,13 +729,18 @@ describeIntegration(
         catalogue: {},
         artifactRoot,
       });
-      await expect(
-        toolsetB.write({
-          operation_id: "fenced-op",
-          relative_path: "src/app.ts",
-          content: "hijacked by B\n",
-        }),
-      ).rejects.toThrow();
+      const refused = await toolsetB.write({
+        operation_id: "fenced-op",
+        relative_path: "src/app.ts",
+        content: "hijacked by B\n",
+      });
+      expect(refused).toMatchObject({
+        identity: identityB,
+        operation_id: "fenced-op",
+        outcome: "FAILED",
+        changed_files: [],
+        failure_code: "WRITE_TOOL_FAILED",
+      });
 
       // A's bytes are intact: the refusal happened before any write.
       expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("owned by A\n");

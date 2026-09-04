@@ -49,6 +49,10 @@ function pathContained(path: string, roots: readonly string[]): boolean {
   return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
+function pathsOverlap(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
 export class CodeOwnedGeneratorCatalog {
   public readonly definitions: readonly CodeOwnedGeneratorDefinition[];
   public readonly config_digest: string;
@@ -105,6 +109,21 @@ export class CodeOwnedGeneratorCatalog {
     return Object.freeze(
       this.definitions.filter((definition) =>
         changedPaths.some((path) => pathContained(path, definition.trigger_paths)),
+      ),
+    );
+  }
+
+  /**
+   * Resolve the generators whose immutable trigger surface intersects a planned
+   * slice. This is planning authority only: execution still requires an actual
+   * changed path under one of the exact trigger roots.
+   */
+  public selectedForScope(scopePaths: readonly string[]): readonly CodeOwnedGeneratorDefinition[] {
+    return Object.freeze(
+      this.definitions.filter((definition) =>
+        scopePaths.some((scope) =>
+          definition.trigger_paths.some((trigger) => pathsOverlap(scope, trigger)),
+        ),
       ),
     );
   }

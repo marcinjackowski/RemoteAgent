@@ -643,6 +643,36 @@ describe("engineering workflow contracts", () => {
               log_digest: digest,
               trust: "UNTRUSTED_DATA",
               excerpt: "error: cannot find symbol",
+              compiler_diagnostics: [
+                {
+                  path: "Sources/Feature.swift",
+                  line: 12,
+                  column: 9,
+                  message: "cannot find symbol",
+                  excerpt: "Sources/Feature.swift:12:9: error: cannot find symbol",
+                  digest: canonicalDigest({
+                    path: "Sources/Feature.swift",
+                    line: 12,
+                    column: 9,
+                    message: "cannot find symbol",
+                    excerpt: "Sources/Feature.swift:12:9: error: cannot find symbol",
+                  }),
+                },
+              ],
+              test_diagnostics: [
+                {
+                  test_name: "-[SharedTests.SafetyAlertTests testCloseDismissesAlert]",
+                  message: "XCTAssertFalse failed - alert remained visible",
+                  path: "Tests/SafetyAlertTests.swift",
+                  line: 73,
+                  digest: canonicalDigest({
+                    test_name: "-[SharedTests.SafetyAlertTests testCloseDismissesAlert]",
+                    message: "XCTAssertFalse failed - alert remained visible",
+                    path: "Tests/SafetyAlertTests.swift",
+                    line: 73,
+                  }),
+                },
+              ],
             },
           ],
         },
@@ -672,6 +702,72 @@ describe("engineering workflow contracts", () => {
         `${name} literal kind`,
       ).toBe(false);
     }
+  });
+
+  it("binds Xcode test failure identity, assertion, and optional location to its digest", () => {
+    const identity = {
+      test_name: "-[SharedTests.SafetyAlertTests testCloseDismissesAlert]",
+      message: "XCTAssertFalse failed - alert remained visible",
+      path: "Tests/SafetyAlertTests.swift",
+      line: 73,
+    } as const;
+    const artifact = {
+      schema_version: 1,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: 1,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt: 1,
+      tree_digest: digest,
+      diff_digest: digest,
+      context_digest: digest,
+      config_digest: digest,
+      blocking_gate_ids: ["ios-tests"],
+      receipt_ids: ["receipt-1"],
+      decision_ids: [],
+      diagnostics: [
+        {
+          gate_id: "ios-tests",
+          outcome: "FAILED",
+          log_digest: digest,
+          trust: "UNTRUSTED_DATA",
+          excerpt: "Test Case failed",
+          compiler_diagnostics: [],
+          test_diagnostics: [{ ...identity, digest: canonicalDigest(identity) }],
+        },
+      ],
+    } as const;
+
+    expect(engineeringGateFailure.safeParse(artifact).success).toBe(true);
+    expect(
+      engineeringGateFailure.safeParse({
+        ...artifact,
+        diagnostics: [
+          {
+            ...artifact.diagnostics[0],
+            test_diagnostics: [{ ...artifact.diagnostics[0].test_diagnostics[0], digest }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringGateFailure.safeParse({
+        ...artifact,
+        diagnostics: [
+          {
+            ...artifact.diagnostics[0],
+            test_diagnostics: [
+              {
+                ...artifact.diagnostics[0].test_diagnostics[0],
+                path: null,
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps local commit evidence strict and server-owned", () => {
@@ -800,6 +896,44 @@ describe("engineering workflow contracts", () => {
     expect(
       engineeringSliceContract.safeParse({ ...slice, test_paths: ["foreign/a.test.ts"] }).success,
     ).toBe(false);
+  });
+
+  it("accepts a correction that restores an attempt path out of the cumulative Git diff", () => {
+    const receipt = {
+      schema_version: 1,
+      artifact_kind: "SliceImplementationReceipt",
+      case_id: "case",
+      run_id: "run",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      receipt_id: "receipt",
+      work_unit_id: "work-unit",
+      slice_id: "slice",
+      attempt: 2,
+      workspace_id: "workspace",
+      repository_id: "repo",
+      base_sha: "a".repeat(40),
+      branch: "remoteagent/workspace",
+      baseline: {
+        baseline_id: `slice-baseline-${"b".repeat(64)}`,
+        tree_digest: digest,
+      },
+      tree_digest: digest,
+      diff_digest: digest,
+      raw_patch_digest: digest,
+      changed_paths: ["src/restored.ts"],
+      cumulative_paths: [],
+      files_changed: 0,
+      insertions: 0,
+      deletions: 0,
+      tool_receipt_digests: [digest],
+    } as const;
+
+    expect(engineeringSliceImplementationReceipt.parse(receipt)).toMatchObject({
+      changed_paths: ["src/restored.ts"],
+      cumulative_paths: [],
+      files_changed: 0,
+    });
   });
 
   it("enforces server-owned minimum process class", () => {

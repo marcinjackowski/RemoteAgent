@@ -8,6 +8,8 @@ import {
   ReviewContractError,
   ReviewReadiness,
   ReviewSeverity,
+  MAX_EVIDENCE_LENGTH,
+  MIN_EVIDENCE_LENGTH,
   isBlockingSeverity,
   preCommitReviewOutput,
   reviewFinding,
@@ -37,6 +39,18 @@ export type PreCommitActualObservation = Readonly<{
   treeDigest: string;
 }>;
 
+export type PreCommitReviewSliceScope = Readonly<{
+  slice_id: string;
+  objective: string;
+  observable_result: string;
+  allowed_paths: readonly string[];
+  test_paths: readonly string[];
+  /** Exact files materialized by a server-owned generator, never by the implementer model. */
+  code_owned_generator_paths: readonly string[];
+  inspection_method: string;
+  stop_condition: string;
+}>;
+
 /** Data-only request. No tool/store/workspace handle can cross this boundary. */
 export type PreCommitReviewRequest = Readonly<{
   binding: Readonly<{
@@ -47,6 +61,17 @@ export type PreCommitReviewRequest = Readonly<{
     attempt: number;
   }>;
   task_brief: string;
+  /** Exact durable current-slice acceptance scope; it cannot widen repository authority. */
+  slice_scope: PreCommitReviewSliceScope;
+  /**
+   * Compact server-parsed coordinates for every editable added line in `patch`.
+   * The reviewer chooses an anchor from these ranges; the server still re-parses and verifies it.
+   */
+  changed_line_ranges: readonly Readonly<{
+    relative_path: string;
+    start_line: number;
+    end_line: number;
+  }>[];
   patch: string;
   raw_patch_digest: string;
   actual_diff_digest: string;
@@ -117,28 +142,172 @@ function severityRank(severity: ReviewSeverity): number {
   return { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3, NIT: 4 }[severity];
 }
 
-function serverFindings(output: PreCommitReviewOutput, patch: string): readonly ReviewFinding[] {
-  const normalizedPatch = patch.replace(/\s+/gu, " ");
+type ChangedLineEvidence = Readonly<{
+  relativePath: string;
+  line: number;
+  evidence: string;
+}>;
+
+type ChangedLineRange = PreCommitReviewRequest["changed_line_ranges"][number];
+
+function changedLineEvidence(patch: string): readonly ChangedLineEvidence[] {
+  const evidence: ChangedLineEvidence[] = [];
+  let relativePath: string | null = null;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      relativePath = null;
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const candidate = line.slice(4);
+      relativePath =
+        candidate === "/dev/null" || !candidate.startsWith("b/") ? null : candidate.slice(2);
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("@@ ")) {
+      const match = /\+(\d+)(?:,\d+)?/u.exec(line);
+      if (relativePath === null || match?.[1] === undefined) {
+        inHunk = false;
+        continue;
+      }
+      newLine = Number.parseInt(match[1], 10);
+      inHunk = Number.isSafeInteger(newLine) && newLine >= 0;
+      continue;
+    }
+    if (!inHunk || relativePath === null || line.startsWith("\\")) continue;
+    if (line.startsWith("-")) continue;
+    if (line.startsWith("+")) {
+      evidence.push(Object.freeze({ relativePath, line: newLine, evidence: line }));
+    }
+    newLine += 1;
+  }
+
+  return Object.freeze(evidence);
+}
+
+/** Collapse exact added-line coordinates without duplicating the raw patch in the model request. */
+function changedLineRanges(
+  patch: string,
+  codeOwnedGeneratorPaths: readonly string[],
+  sliceAllowedPaths: readonly string[],
+): readonly ChangedLineRange[] {
+  const generatorPaths = new Set(codeOwnedGeneratorPaths);
+  const byPath = new Map<string, Set<number>>();
+  for (const entry of changedLineEvidence(patch)) {
+    if (
+      generatorPaths.has(entry.relativePath) ||
+      !sliceAllowedPaths.some(
+        (root) => entry.relativePath === root || entry.relativePath.startsWith(`${root}/`),
+      )
+    ) {
+      continue;
+    }
+    const lines = byPath.get(entry.relativePath) ?? new Set<number>();
+    lines.add(entry.line);
+    byPath.set(entry.relativePath, lines);
+  }
+
+  const ranges: ChangedLineRange[] = [];
+  for (const relativePath of [...byPath.keys()].sort()) {
+    const lines = [...byPath.get(relativePath)!].sort((left, right) => left - right);
+    let start = lines[0];
+    let end = lines[0];
+    for (const line of lines.slice(1)) {
+      if (line === end! + 1) {
+        end = line;
+        continue;
+      }
+      ranges.push(
+        Object.freeze({ relative_path: relativePath, start_line: start!, end_line: end! }),
+      );
+      start = line;
+      end = line;
+    }
+    if (start !== undefined && end !== undefined) {
+      ranges.push(Object.freeze({ relative_path: relativePath, start_line: start, end_line: end }));
+    }
+  }
+  return Object.freeze(ranges);
+}
+
+function serverFindings(
+  output: PreCommitReviewOutput,
+  patch: string,
+  codeOwnedGeneratorPaths: readonly string[],
+  sliceAllowedPaths: readonly string[],
+): readonly ReviewFinding[] {
+  const generatorPaths = new Set(codeOwnedGeneratorPaths);
+  // A generator output remains in the exact patch/digests for verification and compile evidence,
+  // but it cannot authorize a model-correction loop: the model has no write capability for it.
+  // Reviewers must anchor a consumption defect in an editable caller instead.
+  const changedLines = changedLineEvidence(patch).filter(
+    (entry) =>
+      !generatorPaths.has(entry.relativePath) &&
+      sliceAllowedPaths.some(
+        (root) => entry.relativePath === root || entry.relativePath.startsWith(`${root}/`),
+      ),
+  );
+  const serverEvidenceByLocation = new Map(
+    changedLines.map((entry) => [`${entry.relativePath}:${String(entry.line)}`, entry]),
+  );
   const byLocation = new Map<string, PreCommitReviewOutput["findings"][number]>();
   for (const candidate of output.findings) {
-    const quote = candidate.evidence.trim().replace(/\s+/gu, " ");
-    const supported = quote.length === 0 || normalizedPatch.includes(quote);
-    const effective =
-      supported || !isBlockingSeverity(candidate.severity)
-        ? candidate
-        : {
+    const location = `${candidate.location.relative_path}:${String(candidate.location.line)}`;
+    const directServerEvidence = serverEvidenceByLocation.get(location);
+    const serverEvidence =
+      directServerEvidence === undefined
+        ? undefined
+        : directServerEvidence.evidence.trim().length >= MIN_EVIDENCE_LENGTH &&
+            directServerEvidence.evidence.length <= MAX_EVIDENCE_LENGTH
+          ? directServerEvidence
+          : changedLines
+              .filter(
+                (entry) =>
+                  entry.relativePath === directServerEvidence.relativePath &&
+                  entry.evidence.trim().length >= MIN_EVIDENCE_LENGTH &&
+                  entry.evidence.length <= MAX_EVIDENCE_LENGTH,
+              )
+              .sort((left, right) => {
+                const distance =
+                  Math.abs(left.line - directServerEvidence.line) -
+                  Math.abs(right.line - directServerEvidence.line);
+                return distance === 0 ? left.line - right.line : distance;
+              })[0];
+    // Absence defects cannot quote code that does not exist. The authority anchor is therefore
+    // the server-parsed new-file line in the actual unified diff. Model prose is never enough:
+    // an unchanged line or a foreign path is downgraded even when its evidence resembles code.
+    const blocking = isBlockingSeverity(candidate.severity);
+    const effective = blocking
+      ? serverEvidence === undefined
+        ? {
             ...candidate,
             severity: ReviewSeverity.LOW,
             summary: "Reviewer finding was not anchored in the actual patch.",
             required_fix: "",
-          };
-    const location = `${candidate.location.relative_path}:${String(candidate.location.line)}`;
-    const current = byLocation.get(location);
+          }
+        : {
+            ...candidate,
+            location: {
+              relative_path: serverEvidence.relativePath,
+              line: serverEvidence.line,
+            },
+            // Blocking authority is always the exact server-observed changed line. The model's
+            // quote may be useful prose but never overrides or weakens this anchor.
+            evidence: serverEvidence.evidence,
+          }
+      : candidate;
+    const effectiveLocation = `${effective.location.relative_path}:${String(effective.location.line)}`;
+    const current = byLocation.get(effectiveLocation);
     if (
       current === undefined ||
       severityRank(effective.severity) < severityRank(current.severity)
     ) {
-      byLocation.set(location, effective);
+      byLocation.set(effectiveLocation, effective);
     }
   }
   return Object.freeze(
@@ -163,6 +332,7 @@ function serverFindings(output: PreCommitReviewOutput, patch: string): readonly 
 export async function executeFreshPreCommitReview(input: {
   binding: PreCommitReviewBinding;
   taskBrief: string;
+  sliceScope: PreCommitReviewSliceScope;
   actual: PreCommitActualObservation;
   evidenceBundle: EngineeringEvidenceBundle;
   expectedEvidenceBundleDigest: string;
@@ -172,6 +342,18 @@ export async function executeFreshPreCommitReview(input: {
   createSession: PreCommitReviewSessionFactory;
 }): Promise<FreshPreCommitReviewResult> {
   assertBinding(input.binding);
+  const codeOwnedGeneratorPaths = [...input.sliceScope.code_owned_generator_paths];
+  if (
+    new Set(codeOwnedGeneratorPaths).size !== codeOwnedGeneratorPaths.length ||
+    codeOwnedGeneratorPaths.some(
+      (path, index) => index > 0 && codeOwnedGeneratorPaths[index - 1]! >= path,
+    ) ||
+    codeOwnedGeneratorPaths.some((path) => !input.sliceScope.allowed_paths.includes(path))
+  ) {
+    throw new ReviewContractError(
+      "pre-commit code-owned generator paths must be sorted, unique and within slice scope",
+    );
+  }
   const evidence = engineeringEvidenceBundle.parse(input.evidenceBundle);
   const evidenceBundleDigest = canonicalDigest(evidence);
   if (
@@ -199,6 +381,17 @@ export async function executeFreshPreCommitReview(input: {
       attempt: input.binding.attempt,
     }),
     task_brief: input.taskBrief,
+    slice_scope: Object.freeze({
+      ...input.sliceScope,
+      allowed_paths: Object.freeze([...input.sliceScope.allowed_paths]),
+      test_paths: Object.freeze([...input.sliceScope.test_paths]),
+      code_owned_generator_paths: Object.freeze(codeOwnedGeneratorPaths),
+    }),
+    changed_line_ranges: changedLineRanges(
+      input.actual.patch,
+      codeOwnedGeneratorPaths,
+      input.sliceScope.allowed_paths,
+    ),
     patch: input.actual.patch,
     raw_patch_digest: rawPatchDigest,
     actual_diff_digest: input.actual.diffDigest,
@@ -242,7 +435,12 @@ export async function executeFreshPreCommitReview(input: {
   }
   assertExactObservation(input.actual, await input.observeActual());
 
-  const findings = serverFindings(output, input.actual.patch);
+  const findings = serverFindings(
+    output,
+    input.actual.patch,
+    request.slice_scope.code_owned_generator_paths,
+    request.slice_scope.allowed_paths,
+  );
   const report = reviewReport.parse({
     schema_version: 1,
     report_id: `precommit-report-${canonicalDigest({

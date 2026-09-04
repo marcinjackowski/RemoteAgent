@@ -1,4 +1,7 @@
+import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 
 import {
   CaseMessageRepository,
@@ -19,6 +22,10 @@ import { createEngineeringRoleContextReader } from "../src/context.js";
 import {
   createEngineeringDebugTransport,
   EngineeringDebugJournal,
+  engineeringCompilerDiagnosticJournalRows,
+  engineeringXcodeTestDiagnosticJournalRows,
+  engineeringDebugErrorCode,
+  engineeringDebugErrorDetailCode,
   engineeringDebugErrorDigest,
   runWithEngineeringDebugJournal,
 } from "../src/engineering-debug-journal.js";
@@ -26,9 +33,12 @@ import {
   createEngineeringRoleModelComposition,
   loadEngineeringExecutionConfig,
   createProductionEngineeringRuntimePort,
+  engineeringImplementationContext,
 } from "../src/engineering-execution.js";
 import {
   assertEngineeringLiveQualificationAuthority,
+  ENGINEERING_LIVE_EXECUTION_BUDGET_MS,
+  ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS,
   engineeringLiveQualificationSelectionFromEnv,
 } from "../src/engineering-live-qualification.js";
 import { engineeringModelRoutingFromEnv } from "../src/engineering-model-routing.js";
@@ -43,6 +53,7 @@ import { createTestDatabase } from "../../../packages/database/test/harness.js";
 
 const enabled = process.env.RA_RUN_LIVE_IOS_ENGINEERING === "1";
 const live = enabled ? it : it.skip;
+const runExecutable = promisify(execFile);
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -78,6 +89,214 @@ live(
 
     try {
       const config = await loadEngineeringExecutionConfig(configPath);
+      const liveGateSchedules = new Map(
+        config.catalog.definitions.map((definition) => [
+          definition.gate_id,
+          definition.gate_schedule,
+        ]),
+      );
+      if (liveGateSchedules.get("mobl-2023-safety-alert-contract") !== "LAST_SLICE") {
+        throw new Error("live task-wide safety-alert contract must run only on the last slice");
+      }
+      const incrementalSafetyContract = config.catalog.get(
+        "mobl-2023-safety-alert-contract-incremental",
+      );
+      const finalSafetyContract = config.catalog.get("mobl-2023-safety-alert-contract");
+      const incrementalSafetyCommand = incrementalSafetyContract?.argv.join("\n") ?? "";
+      const incrementalSafetyContext = incrementalSafetyContract?.implementation_context ?? [];
+      const incrementalSafetyQueries = incrementalSafetyContext.flatMap((entry) =>
+        entry.kind === "SEARCH" ? [entry.query] : [],
+      );
+      const incrementalSafetyPaths = incrementalSafetyContext.map((entry) => entry.relative_path);
+      if (
+        incrementalSafetyContract?.gate_schedule !== "EACH_SLICE" ||
+        incrementalSafetyContract.gate_tier !== "FAST" ||
+        incrementalSafetyContract.execution_order !== 20 ||
+        incrementalSafetyContract.required_test_paths.join("\n") !==
+          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/SafetyAlertTests.swift" ||
+        incrementalSafetyContract.required_mutation_paths.join("\n") !==
+          [
+            "SonderClient/SonderClientLibrary/Sources/Shared/AgentAI/SafetyAlert.swift",
+            "SonderClient/SonderClientLibrary/Sources/Shared/Resources/en.lproj/Localizable.strings",
+          ].join("\n") ||
+        incrementalSafetyContract.implementation_guidance === undefined ||
+        !incrementalSafetyContract.implementation_guidance.includes(
+          "Comparing only String(localized:) to the same production localization key is vacuous",
+        ) ||
+        incrementalSafetyContract.implementation_context === undefined ||
+        !incrementalSafetyCommand.includes("Tests/SharedTests/AgentAI/SafetyAlertTests.swift") ||
+        !incrementalSafetyCommand.includes(
+          "SafetyAlertTests must assert the exact UI copy: This message was shared for safety reasons",
+        ) ||
+        !incrementalSafetyCommand.includes(
+          "production emergency-resources action model in SafetyAlert.swift",
+        ) ||
+        !incrementalSafetyCommand.includes(
+          "SafetyAlertTests must invoke both ButtonModel tapAction closures",
+        ) ||
+        !incrementalSafetyCommand.includes(
+          "SafetyAlertTests must assert application URL and analytics",
+        ) ||
+        !incrementalSafetyCommand.includes("(?:openURLCalls|openUrlCalls)") ||
+        !incrementalSafetyContract.implementation_guidance.includes(
+          "same claiming slice must wire the production SafetyAlert.swift",
+        ) ||
+        !incrementalSafetyContract.implementation_guidance.includes(
+          "invoke both ButtonModel tapAction() closures",
+        ) ||
+        !incrementalSafetyQueries.includes("final class TestApplication") ||
+        !incrementalSafetyPaths.includes(
+          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift",
+        ) ||
+        finalSafetyContract?.gate_schedule !== "LAST_SLICE" ||
+        finalSafetyContract.gate_tier !== "FAST" ||
+        finalSafetyContract.execution_order !== 25 ||
+        finalSafetyContract.implementation_guidance !== undefined ||
+        finalSafetyContract.implementation_context !== undefined
+      ) {
+        throw new Error(
+          "live safety-alert ownership must fail the claiming slice and retain independent final evidence",
+        );
+      }
+      if (liveGateSchedules.get("mobl-2023-flow-integration") !== "LAST_SLICE") {
+        throw new Error("live task-wide flow integration must run only on the last slice");
+      }
+      const flowIntegration = config.catalog.get("mobl-2023-flow-integration");
+      const flowCommand = flowIntegration?.argv.join("\n") ?? "";
+      const flowContextQueries = (flowIntegration?.implementation_context ?? []).flatMap((entry) =>
+        entry.kind === "SEARCH" ? [entry.query] : [],
+      );
+      const flowContextSearches = (flowIntegration?.implementation_context ?? []).flatMap(
+        (entry) => (entry.kind === "SEARCH" ? [`${entry.relative_path}:${entry.query}`] : []),
+      );
+      if (
+        flowIntegration?.implementation_guidance === undefined ||
+        !flowIntegration.implementation_guidance.includes(
+          "touching the four paths is not completion",
+        ) ||
+        !flowCommand.includes("single-agent typed safety state/router") ||
+        !flowCommand.includes("single-agent emergencyResources event route") ||
+        !flowCommand.includes("multi-agent typed safety state/router") ||
+        !flowCommand.includes("multi-agent emergencyResources event route") ||
+        flowContextQueries.filter(
+          (query) => query === "private var emergencyResources: EmergencyResources?",
+        ).length !== 2 ||
+        !flowContextSearches.includes(
+          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift:emergencyResources",
+        ) ||
+        !flowContextSearches.includes(
+          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentChatViewModelTests.swift:emergencyResources",
+        )
+      ) {
+        throw new Error(
+          "live flow correction must prefetch exact declaration, session routing, and session-test boundaries",
+        );
+      }
+      const lastSliceGateIds = config.catalog.definitions
+        .filter(
+          (definition) =>
+            definition.required &&
+            (definition.gate_schedule === "EACH_SLICE" ||
+              definition.gate_schedule === "LAST_SLICE"),
+        )
+        .map((definition) => definition.gate_id);
+      const lastSliceContext = engineeringImplementationContext(config.catalog, lastSliceGateIds);
+      if (lastSliceContext.length > 18) {
+        throw new Error(
+          `live last-slice speculative context exceeds the bounded budget: ${lastSliceContext.length}`,
+        );
+      }
+      const expectedTestPaths = [
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentChatViewModelTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentFlowTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentSessionTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/EmergencyResourcesRouterTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/SafetyAlertTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/Chat/AgentAIStreamingEngineTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/Chat/EmergencyResourcesTextFlowAdapterTests.swift",
+      ] as const;
+      if (config.testPathAllowlist.join("\n") !== expectedTestPaths.join("\n")) {
+        throw new Error("live test path authority must remain exact and file-bounded");
+      }
+      const requiredSelectorTestPaths = [
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentChatViewModelTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/EmergencyResourcesRouterTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/SafetyAlertTests.swift",
+        "SonderClient/SonderClientLibrary/Tests/SharedTests/Chat/EmergencyResourcesTextFlowAdapterTests.swift",
+      ] as const;
+      const selectorGate = config.catalog.get("mobl-2023-non-vacuous-xcode-selectors");
+      const selectorCommand = selectorGate?.argv.join("\n") ?? "";
+      const selectorContextReads = (selectorGate?.implementation_context ?? []).flatMap((entry) =>
+        entry.kind === "READ" ? [entry.relative_path] : [],
+      );
+      if (
+        selectorGate?.required_test_paths.join("\n") !== requiredSelectorTestPaths.join("\n") ||
+        selectorGate.implementation_guidance === undefined ||
+        !selectorGate.implementation_guidance.includes(
+          "Carry the exact EmergencyResources event into the full-screen alert",
+        ) ||
+        !selectorGate.implementation_guidance.includes("execute tapAction()") ||
+        !selectorGate.implementation_guidance.includes(
+          "Patch the existing AgentAIFlowTests.swift and AIMultiAgentChatViewModelTests.swift",
+        ) ||
+        !selectorGate.implementation_guidance.includes(
+          "`let forwardedEvent = event` is an identity assertion",
+        ) ||
+        !selectorContextReads.includes(
+          "SonderClient/SonderClientLibrary/Sources/Shared/AgentAI/SafetyAlert.swift",
+        ) ||
+        !selectorCommand.includes("production emergency-resources action model") ||
+        !selectorCommand.includes("production Text 988/Emergency resources action invocation") ||
+        !selectorCommand.includes("exact emergencyResources event forwarding") ||
+        !selectorCommand.includes("production action execution assertions") ||
+        !selectorCommand.includes("not assign event to itself") ||
+        !selectorCommand.includes("not a private test-only adapter") ||
+        !selectorCommand.includes(
+          "existing AgentAIFlowTests.swift and AIMultiAgentChatViewModelTests.swift must observe emergency-resources routing into safetyAlert",
+        ) ||
+        !selectorCommand.includes('error?.code==="ENOENT"') ||
+        !selectorCommand.includes(
+          "inline-card prevention assertion in AgentAIFlowTests.swift, AIMultiAgentChatViewModelTests.swift, or EmergencyResourcesTextFlowAdapterTests.swift",
+        )
+      ) {
+        throw new Error(
+          "live selector gate must bind exact task-owned tests to production action execution",
+        );
+      }
+      const targetedFast = config.catalog.definitions.find(
+        (definition) => definition.gate_id === "ios-safety-alert-tests",
+      );
+      const targetedFull = config.catalog.definitions.find(
+        (definition) => definition.gate_id === "ios-safety-alert-tests-final",
+      );
+      const compilePreflight = config.catalog.get("mobl-2023-ios-compile");
+      if (
+        targetedFast !== undefined ||
+        compilePreflight !== undefined ||
+        targetedFull?.gate_schedule !== "LAST_SLICE" ||
+        targetedFull.gate_tier !== "FULL" ||
+        targetedFull.execution_order !== 100 ||
+        targetedFull.argv.includes("-quiet") ||
+        targetedFull.argv.filter((argument) => argument === "ENABLE_TESTABILITY=YES").length !== 1
+      ) {
+        throw new Error(
+          "live targeted iOS tests must have one exact verbose LAST_SLICE FULL gate without redundant compile",
+        );
+      }
+      const assetGenerator = config.generatorCatalog?.definitions.find(
+        (definition) => definition.generator_id === "mobl-2023-shared-assets",
+      );
+      if (
+        assetGenerator === undefined ||
+        assetGenerator.trigger_paths.join("\n") !==
+          "SonderClient/SonderClientLibrary/Sources/Shared/AgentAI" ||
+        assetGenerator.output_paths.join("\n") !==
+          "SonderClient/SonderClientLibrary/Sources/Shared/Resources/Assets+Generated.swift"
+      ) {
+        throw new Error("live shared asset accessor must use the exact code-owned generator");
+      }
       const modelRouting = await engineeringModelRoutingFromEnv();
       if (modelRouting === null) {
         throw new Error("RA_ENGINEERING_MODEL_CONFIG_PATH is required for live iOS smoke");
@@ -100,6 +319,18 @@ live(
       );
       const sourceRepository = config.workspaceConfig.repositories[config.repositoryId];
       if (sourceRepository === undefined) throw new Error("configured repository is unavailable");
+      await runExecutable(
+        incrementalSafetyContract.executable,
+        [...incrementalSafetyContract.argv],
+        {
+          cwd: join(sourceRepository.sourcePath, incrementalSafetyContract.relative_cwd),
+        },
+      );
+      await expect(
+        runExecutable(finalSafetyContract.executable, [...finalSafetyContract.argv], {
+          cwd: join(sourceRepository.sourcePath, finalSafetyContract.relative_cwd),
+        }),
+      ).rejects.toMatchObject({ code: 1 });
       const sourceHead = await import("node:child_process").then(({ execFileSync }) =>
         execFileSync("git", ["-C", sourceRepository.sourcePath, "rev-parse", "HEAD"], {
           encoding: "utf8",
@@ -172,7 +403,7 @@ live(
       const jobs = new JobStore(runtime);
       const lease = await jobs.claim(db, {
         owner: `${suffix}-worker`,
-        leaseMs: 2 * 60 * 60_000,
+        leaseMs: ENGINEERING_LIVE_EXECUTION_BUDGET_MS,
       });
       if (lease === null || lease.jobId !== granted.jobId) {
         throw new Error("direct engineering job was not the exact claimed lease");
@@ -223,7 +454,7 @@ live(
           reviewModelInvocation: roleModels.reviewer.invocation,
           modelPreflight: roleModels.modelPreflight,
           platformAdapter,
-          workflowDeadlineMs: 2 * 60 * 60_000,
+          workflowDeadlineMs: ENGINEERING_LIVE_EXECUTION_BUDGET_MS,
           metrics,
           policy: {
             riskFacts: {
@@ -252,6 +483,8 @@ live(
                     event: "STAGE_ERROR",
                     stage: input.binding.stage,
                     error_name: error instanceof Error ? error.name : "UnknownError",
+                    error_code: engineeringDebugErrorCode(error),
+                    error_detail_code: engineeringDebugErrorDetailCode(error),
                     error_digest: engineeringDebugErrorDigest(error),
                   });
                   throw error;
@@ -277,12 +510,17 @@ live(
           artifact_kind: string;
           stage: string;
           stage_attempt: number;
+          payload: unknown;
           reason: string | null;
           detail: string | null;
+          review_decision: string | null;
+          verification_decision: string | null;
         }>(
-          `SELECT artifact_kind,stage,stage_attempt,
+          `SELECT artifact_kind,stage,stage_attempt,payload,
                   CASE WHEN artifact_kind='TerminalReason' THEN payload->>'reason' ELSE NULL END AS reason,
-                  CASE WHEN artifact_kind='TerminalReason' THEN payload->>'detail' ELSE NULL END AS detail
+                  CASE WHEN artifact_kind='TerminalReason' THEN payload->>'detail' ELSE NULL END AS detail,
+                  CASE WHEN artifact_kind='ReviewDecision' THEN payload->>'decision' ELSE NULL END AS review_decision,
+                  CASE WHEN artifact_kind='VerificationDecision' THEN payload->>'decision' ELSE NULL END AS verification_decision
              FROM engineering_artifact_revisions
             WHERE run_id=$1 ORDER BY revision`,
           [granted.runId],
@@ -331,6 +569,22 @@ live(
             ORDER BY c.recorded_at,c.completion_id`,
           [lease.jobId],
         );
+        const compilerDiagnostics = engineeringCompilerDiagnosticJournalRows(
+          diagnosticArtifacts.rows
+            .filter((artifact) => artifact.artifact_kind === "GateFailure")
+            .map((artifact) => ({
+              stage_attempt: artifact.stage_attempt,
+              payload: artifact.payload,
+            })),
+        );
+        const testDiagnostics = engineeringXcodeTestDiagnosticJournalRows(
+          diagnosticArtifacts.rows
+            .filter((artifact) => artifact.artifact_kind === "GateFailure")
+            .map((artifact) => ({
+              stage_attempt: artifact.stage_attempt,
+              payload: artifact.payload,
+            })),
+        );
         process.stdout.write(
           `RA045_DIAGNOSTIC=${JSON.stringify({
             error_digest: error === null ? null : engineeringDebugErrorDigest(error),
@@ -339,6 +593,8 @@ live(
               stage: artifact.stage,
               stage_attempt: artifact.stage_attempt,
               reason: artifact.reason,
+              review_decision: artifact.review_decision,
+              verification_decision: artifact.verification_decision,
               detail_digest:
                 artifact.detail === null
                   ? null
@@ -354,7 +610,21 @@ live(
             artifact_kind: artifact.artifact_kind,
             stage: artifact.stage,
             stage_attempt: artifact.stage_attempt,
+            review_decision:
+              artifact.review_decision === "PASS" ||
+              artifact.review_decision === "CHANGES_REQUIRED" ||
+              artifact.review_decision === "BLOCKED"
+                ? artifact.review_decision
+                : null,
+            verification_decision:
+              artifact.verification_decision === "VERIFIED" ||
+              artifact.verification_decision === "FAILED" ||
+              artifact.verification_decision === "INCONCLUSIVE"
+                ? artifact.verification_decision
+                : null,
           })),
+          compiler_diagnostics: compilerDiagnostics,
+          test_diagnostics: testDiagnostics,
           operations: diagnosticOperations.rows,
           gate_receipts: diagnosticGates.rows,
           error_digest: error === null ? null : engineeringDebugErrorDigest(error),
@@ -450,5 +720,5 @@ live(
       await created.drop();
     }
   },
-  2 * 60 * 60_000,
+  ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS,
 );

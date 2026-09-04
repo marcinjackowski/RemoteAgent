@@ -98,6 +98,14 @@ export type VerticalSliceImplementerContext = Readonly<{
 
 export type VerticalSliceImplementerReport = Readonly<{ changed_files: readonly string[] }>;
 
+/** Tiers that were actually scheduled for this slice, in stable execution order. */
+export function scheduledEngineeringGateTiers(
+  definitions: readonly Readonly<{ gate_tier: "FAST" | "FULL" }>[],
+): readonly ("FAST" | "FULL")[] {
+  const scheduled = new Set(definitions.map((definition) => definition.gate_tier));
+  return Object.freeze((["FAST", "FULL"] as const).filter((tier) => scheduled.has(tier)));
+}
+
 function parseImplementerReport(input: unknown): VerticalSliceImplementerReport {
   if (
     typeof input !== "object" ||
@@ -118,6 +126,7 @@ function normalizeImplementerReport(input: {
   report: VerticalSliceImplementerReport;
   operationResults: readonly ImplementationToolResult[];
   actualChangedPaths: readonly string[];
+  priorAgentPaths: readonly string[];
 }): VerticalSliceImplementerReport {
   const receiptPaths = new Set(
     input.operationResults
@@ -130,9 +139,14 @@ function normalizeImplementerReport(input: {
   );
   const reportedPaths = new Set(input.report.changed_files);
   const actualPaths = new Set(input.actualChangedPaths);
+  const priorPaths = new Set(input.priorAgentPaths);
 
   if (
-    input.report.changed_files.some((path) => !actualPaths.has(path)) ||
+    // A fresh correction session may conservatively repeat a path from the
+    // exact durable prior receipt. It still cannot invent a new path: any
+    // over-report must already be server-owned prior slice state, and the
+    // normalized receipt below contains only the fresh actual delta.
+    input.report.changed_files.some((path) => !actualPaths.has(path) && !priorPaths.has(path)) ||
     input.actualChangedPaths.some((path) => !receiptPaths.has(path) && !reportedPaths.has(path))
   ) {
     throw new Error(
@@ -167,6 +181,12 @@ export type ExecuteVerticalSliceInput = Readonly<{
   discoveryCallLimit?: number;
   /** Prior server-observed agent paths, never model supplied. */
   priorAgentPaths?: readonly string[];
+  /** Prior durable attempt already satisfied the code-owned test-first mutation chronology. */
+  testFirstAlreadySatisfied?: boolean;
+  /** Exact blocking-correction paths that cannot be satisfied by whitespace-only edits. */
+  requiredSubstantiveMutationPaths?: readonly string[];
+  /** Exact behavioral-test correction paths that cannot be satisfied by import/comment edits. */
+  requiredBehavioralMutationPaths?: readonly string[];
   baselineStore?: BaselineWorkspaceStore;
   generatorCatalog?: CodeOwnedGeneratorCatalog;
   generatorArtifactRoot?: string;
@@ -195,7 +215,7 @@ export type EngineeringDiffPolicy = Readonly<{
 /** Code-owned ceiling applied to the exact staged Git diff before it becomes evidence. */
 export const ENGINEERING_DIFF_POLICY: EngineeringDiffPolicy = Object.freeze({
   schema_version: 1,
-  max_files_changed: 16,
+  max_files_changed: 32,
   max_total_changes: 2_000,
   max_deletions: 800,
   destructive_deletion_ratio: 0.8,
@@ -366,6 +386,8 @@ export type ExecuteVerticalSliceReviewInput = Readonly<{
   actual: VerticalSliceActualEvidence;
   evidenceBundle: EngineeringEvidenceBundle;
   evidenceBundleDigest: string;
+  /** Exact current-patch paths whose bytes came from the code-owned generator boundary. */
+  codeOwnedGeneratorPaths?: readonly string[];
   /** Present only for a runtime-owned correction, derived from prior durable review evidence. */
   previousBlockingRawPatchDigest?: string;
   taskBrief: string;
@@ -683,13 +705,17 @@ async function actualEvidence(input: {
     ) {
       throw new Error("implementer changed_files claim does not match actual slice delta");
     }
-    const cumulative = [...new Set([...input.priorAgentPaths, ...delta.changed_paths])].sort();
+    // The declared surface must include both durable prior paths and this
+    // attempt's exact delta so Git can classify every touched path. It is not,
+    // however, the final cumulative diff: a correction may legitimately
+    // restore a previously modified path to HEAD.
+    const declared = [...new Set([...input.priorAgentPaths, ...delta.changed_paths])].sort();
     const git = new GitLifecycle({
       worktreePath: input.workspacePath,
       mirrorPath: input.mirrorPath,
       scope: { case_id: input.caseId, workspace_id: input.workspaceId },
       repositoryId: input.repositoryId,
-      declaredPaths: cumulative,
+      declaredPaths: declared,
     });
     const before = await git.status();
     if (before.state === GitWorkingTreeState.DIRTY_FOREIGN) {
@@ -715,7 +741,7 @@ async function actualEvidence(input: {
     });
     return Object.freeze({
       changedFiles: Object.freeze([...delta.changed_paths]),
-      cumulativeAgentPaths: Object.freeze(cumulative),
+      cumulativeAgentPaths: Object.freeze([...after.agentPaths]),
       treeDigest: delta.current_tree_digest,
       diffDigest,
       patch: diff.patch,
@@ -821,6 +847,15 @@ export async function executeVerticalSlice(
   const baseline = await durableBaselineStore.prepare(binding, mapping.target);
 
   const operationResults: ImplementationToolResult[] = [];
+  const reservedGeneratorOutputs = Object.freeze(
+    [
+      ...new Set(
+        (input.generatorCatalog?.selectedForScope(slice.allowed_paths) ?? []).flatMap(
+          (definition) => definition.output_paths,
+        ),
+      ),
+    ].sort(),
+  );
   const tools = await createBoundedImplementationToolset({
     root: mapping.target,
     identity: { case_id: input.caseId, workspace_id: workspaceId },
@@ -828,6 +863,14 @@ export async function executeVerticalSlice(
     runTransaction: (fn) => input.db.withTransaction(fn),
     allowedPaths: slice.allowed_paths,
     firstMutationPaths: slice.test_paths,
+    reservedMutationPaths: reservedGeneratorOutputs,
+    ...(input.requiredSubstantiveMutationPaths === undefined
+      ? {}
+      : { requiredSubstantiveMutationPaths: input.requiredSubstantiveMutationPaths }),
+    ...(input.requiredBehavioralMutationPaths === undefined
+      ? {}
+      : { requiredBehavioralMutationPaths: input.requiredBehavioralMutationPaths }),
+    ...(input.testFirstAlreadySatisfied === true ? { firstMutationAlreadySatisfied: true } : {}),
     ...(input.discoveryCallLimit === undefined
       ? {}
       : { maxDiscoveryCalls: input.discoveryCallLimit }),
@@ -870,6 +913,7 @@ export async function executeVerticalSlice(
     report,
     operationResults,
     actualChangedPaths: implementationDelta.changed_paths,
+    priorAgentPaths: input.priorAgentPaths ?? [],
   });
   let generatedPaths: readonly string[] = [];
   if (input.generatorCatalog !== undefined && input.generatorCatalog.definitions.length > 0) {
@@ -1324,8 +1368,9 @@ export async function executeVerticalSliceGates(
       actual: input.actual,
     };
   }
-  void recordEngineeringDebugGateProgress({ tier: "FAST", status: "PASSED" });
-  void recordEngineeringDebugGateProgress({ tier: "FULL", status: "PASSED" });
+  for (const tier of scheduledEngineeringGateTiers(selectedCatalog.definitions)) {
+    void recordEngineeringDebugGateProgress({ tier, status: "PASSED" });
+  }
   return {
     status: "PASS",
     aggregate: result.aggregate,
@@ -1423,6 +1468,18 @@ export async function executeVerticalSliceReview(
       attempt: input.attempt,
     },
     taskBrief: input.taskBrief,
+    sliceScope: {
+      slice_id: slice.slice_id,
+      objective: slice.objective,
+      observable_result: slice.observable_result,
+      allowed_paths: slice.allowed_paths,
+      test_paths: "test_paths" in slice ? slice.test_paths : [],
+      code_owned_generator_paths: Object.freeze(
+        [...new Set(input.codeOwnedGeneratorPaths ?? [])].sort(),
+      ),
+      inspection_method: slice.inspection_method,
+      stop_condition: slice.stop_condition,
+    },
     actual: {
       patch: input.actual.patch,
       diffDigest: input.actual.diffDigest,

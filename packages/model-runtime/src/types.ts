@@ -25,10 +25,26 @@ export interface ToolLoopPolicy {
   readonly mutationToolNames: readonly string[];
   /** Tool-execution rounds protected until the first mutation attempt. */
   readonly mutationIterationsReserved: number;
+  /** Maximum executed read-only rounds before the first mutation attempt. */
+  readonly maxReadonlyIterationsBeforeMutation?: number;
   /** Number of newest complete assistant/tool pairs retained verbatim. */
   readonly retainRecentToolPairs: number;
+  /** Replace the initial prompt with a code-owned handoff after this many complete pairs. */
+  readonly contextEpochPairLimit?: number;
   /** Refuse a final report immediately after a failed mutation until a later mutation succeeds. */
   readonly requireSuccessfulMutationAfterFailure?: boolean;
+  /** Refuse a final report until this session has recorded at least one successful mutation. */
+  readonly requireSuccessfulMutationBeforeFinal?: boolean;
+  /**
+   * Refuse a final report until a successful mutation changed at least one exact code-owned path.
+   * This is a progress constraint only; filesystem authority remains in the tool executor.
+   */
+  readonly requiredSuccessfulMutationPaths?: readonly string[];
+  /**
+   * Refuse a final report until successful mutations changed every exact code-owned path.
+   * This is a progress constraint only; filesystem authority remains in the tool executor.
+   */
+  readonly requiredSuccessfulMutationPathsAll?: readonly string[];
 }
 
 export interface RuntimeConfig {

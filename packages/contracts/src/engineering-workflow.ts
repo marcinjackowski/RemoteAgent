@@ -728,12 +728,73 @@ export const engineeringEvidenceBundle = versionedContract({
     .max(256),
 });
 
+const engineeringCompilerDiagnostic = valueObject({
+  path: relativeRepositoryPath,
+  line: z.int().positive(),
+  column: z.int().positive(),
+  message: z.string().trim().min(1).max(2048),
+  excerpt: z.string().trim().min(1).max(4096),
+  digest: sha256Digest,
+}).superRefine((diagnostic, ctx) => {
+  const expected = canonicalDigest({
+    path: diagnostic.path,
+    line: diagnostic.line,
+    column: diagnostic.column,
+    message: diagnostic.message,
+    excerpt: diagnostic.excerpt,
+  });
+  if (diagnostic.digest !== expected) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["digest"],
+      message: "compiler diagnostic digest mismatch",
+    });
+  }
+});
+
+export type EngineeringCompilerDiagnostic = z.infer<typeof engineeringCompilerDiagnostic>;
+
+const engineeringXcodeTestDiagnostic = valueObject({
+  test_name: z.string().trim().min(1).max(1024),
+  message: z.string().trim().min(1).max(4096),
+  path: relativeRepositoryPath.nullable(),
+  line: z.int().positive().nullable(),
+  digest: sha256Digest,
+}).superRefine((diagnostic, ctx) => {
+  if ((diagnostic.path === null) !== (diagnostic.line === null)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["path"],
+      message: "Xcode test diagnostic path and line must be present together",
+    });
+  }
+  const expected = canonicalDigest({
+    test_name: diagnostic.test_name,
+    message: diagnostic.message,
+    path: diagnostic.path,
+    line: diagnostic.line,
+  });
+  if (diagnostic.digest !== expected) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["digest"],
+      message: "Xcode test diagnostic digest mismatch",
+    });
+  }
+});
+
+export type EngineeringXcodeTestDiagnostic = z.infer<typeof engineeringXcodeTestDiagnostic>;
+
 const engineeringGateFailureDiagnostic = valueObject({
   gate_id: idString,
   outcome: z.enum(["FAILED", "TIMED_OUT", "INFRASTRUCTURE"]),
   log_digest: sha256Digest.nullable(),
   trust: z.literal(TrustLevel.UNTRUSTED_DATA),
   excerpt: z.string().trim().min(1).max(16_384),
+  /** Present on newly-created compiler failures; absent only on legacy durable artifacts. */
+  compiler_diagnostics: z.array(engineeringCompilerDiagnostic).max(32).optional(),
+  /** Present on newly-created Xcode test failures; absent only on legacy durable artifacts. */
+  test_diagnostics: z.array(engineeringXcodeTestDiagnostic).max(32).optional(),
 });
 
 /** Durable, bounded feedback for a retryable required-gate assertion failure. */
@@ -839,13 +900,10 @@ export const engineeringSliceImplementationReceipt = versionedContract({
       path: ["cumulative_paths"],
       message: "must be unique and sorted",
     });
-  const cumulative = new Set(receipt.cumulative_paths);
-  if (receipt.changed_paths.some((path) => !cumulative.has(path)))
-    ctx.addIssue({
-      code: "custom",
-      path: ["changed_paths"],
-      message: "changed paths must be included in cumulative paths",
-    });
+  // `changed_paths` is the exact delta from the per-attempt baseline while
+  // `cumulative_paths` is the current Git diff from HEAD. A correction may
+  // restore a path changed by the preceding attempt, so the former is not
+  // necessarily a subset of the latter.
   if (receipt.files_changed !== receipt.cumulative_paths.length)
     ctx.addIssue({
       code: "custom",

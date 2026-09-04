@@ -60,14 +60,55 @@ const builtInToolKinds = new Set([
 export type CodexTurnOutcome =
   "SUCCEEDED" | "QUOTA_OR_PROVIDER_FAILED" | "MALFORMED_OUTPUT" | "TOOL_BOUNDARY_VIOLATION";
 
+export type CodexTranscriptFailureDetail =
+  | "UNCLASSIFIED"
+  | "JSON_VALUE_BOUNDS"
+  | "FINAL_JSON_PARSE"
+  | "FINAL_NOT_OBJECT"
+  | "FINAL_ENVELOPE"
+  | "TOOL_ENVELOPE"
+  | "TOOL_IDENTITY"
+  | "TOOL_NOT_ALLOWED"
+  | "FINAL_KIND"
+  | "FINAL_TEXT"
+  | "TRANSCRIPT_BOUNDS"
+  | "EVENT_JSON"
+  | "EVENT_ENVELOPE"
+  | "THREAD_ORDER_OR_SHAPE"
+  | "TURN_STARTED_ORDER_OR_SHAPE"
+  | "PROVIDER_ERROR"
+  | "TURN_COMPLETED_ORDER"
+  | "TURN_COMPLETED_SHAPE"
+  | "ITEM_ORDER_OR_SHAPE"
+  | "BUILTIN_TOOL"
+  | "ITEM_DUPLICATE"
+  | "FINAL_DUPLICATE"
+  | "EVENT_UNKNOWN"
+  | "TRANSCRIPT_INCOMPLETE";
+
 export class CodexCliTranscriptError extends TransportError {
   readonly providerCode = "CODEX_CLI_TRANSCRIPT_INVALID";
   readonly outcome: Exclude<CodexTurnOutcome, "SUCCEEDED">;
+  readonly usage: RuntimeUsage | undefined;
+  readonly detailCode: CodexTranscriptFailureDetail;
 
-  constructor(outcome: Exclude<CodexTurnOutcome, "SUCCEEDED">) {
-    super("Codex CLI transcript failed the strict provider boundary", "FATAL");
+  constructor(
+    outcome: Exclude<CodexTurnOutcome, "SUCCEEDED">,
+    usage?: RuntimeUsage,
+    detailCode: CodexTranscriptFailureDetail = outcome === "QUOTA_OR_PROVIDER_FAILED"
+      ? "PROVIDER_ERROR"
+      : outcome === "TOOL_BOUNDARY_VIOLATION"
+        ? "TOOL_NOT_ALLOWED"
+        : "UNCLASSIFIED",
+  ) {
+    super(
+      "Codex CLI transcript failed the strict provider boundary",
+      outcome === "MALFORMED_OUTPUT" ? "TRANSIENT" : "FATAL",
+    );
     this.name = "CodexCliTranscriptError";
     this.outcome = outcome;
+    this.usage = usage === undefined ? undefined : Object.freeze({ ...usage });
+    this.detailCode = detailCode;
   }
 }
 
@@ -115,7 +156,7 @@ function asJsonValue(
 ): RuntimeJsonValue {
   state.nodes += 1;
   if (state.nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
-    throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+    throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "JSON_VALUE_BOUNDS");
   }
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -129,7 +170,63 @@ function asJsonValue(
       ),
     );
   }
-  throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+  throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "JSON_VALUE_BOUNDS");
+}
+
+function schemaAllowsNull(schema: unknown): boolean {
+  if (!isRecord(schema)) return false;
+  const type = schema["type"];
+  if (type === "null" || (Array.isArray(type) && type.includes("null"))) return true;
+  const anyOf = schema["anyOf"];
+  return Array.isArray(anyOf) && anyOf.some(schemaAllowsNull);
+}
+
+function objectSchemaForValue(schema: unknown, value: Record<string, RuntimeJsonValue>) {
+  if (!isRecord(schema)) return null;
+  if (schema["type"] === "object" || isRecord(schema["properties"])) return schema;
+  const anyOf = schema["anyOf"];
+  if (!Array.isArray(anyOf)) return null;
+  const candidates = anyOf.filter(
+    (candidate): candidate is Record<string, unknown> =>
+      isRecord(candidate) && (candidate["type"] === "object" || isRecord(candidate["properties"])),
+  );
+  return (
+    candidates.find((candidate) => {
+      const properties = candidate["properties"];
+      return (
+        isRecord(properties) &&
+        Object.keys(value).every(
+          (key) => key in properties || candidate["additionalProperties"] !== false,
+        )
+      );
+    }) ?? null
+  );
+}
+
+/** Undo only the null placeholders introduced by the Codex response schema. */
+function decodeCodexOptionalToolInput(value: RuntimeJsonValue, schema: unknown): RuntimeJsonValue {
+  if (Array.isArray(value)) {
+    const items = isRecord(schema) ? schema["items"] : undefined;
+    return value.map((entry) => decodeCodexOptionalToolInput(entry, items));
+  }
+  if (!isRecord(value)) return value;
+  const objectSchema = objectSchemaForValue(schema, value);
+  if (objectSchema === null) return value;
+  const properties = objectSchema["properties"];
+  if (!isRecord(properties)) return value;
+  const required = new Set(
+    Array.isArray(objectSchema["required"])
+      ? objectSchema["required"].filter((entry): entry is string => typeof entry === "string")
+      : [],
+  );
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => {
+      const propertySchema = properties[key];
+      if (propertySchema === undefined) return [[key, entry] as const];
+      if (entry === null && !required.has(key) && !schemaAllowsNull(propertySchema)) return [];
+      return [[key, decodeCodexOptionalToolInput(entry, propertySchema)] as const];
+    }),
+  );
 }
 
 function parseFinalContent(
@@ -140,20 +237,22 @@ function parseFinalContent(
   try {
     value = JSON.parse(text);
   } catch {
-    throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+    throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "FINAL_JSON_PARSE");
   }
-  if (!isRecord(value)) throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+  if (!isRecord(value)) {
+    throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "FINAL_NOT_OBJECT");
+  }
   const keys = Object.keys(value).sort();
   if (
     value["schema_version"] !== 1 ||
     value["schema_digest"] !== contract.schemaDigest ||
     keys.join(",") !== "final,kind,schema_digest,schema_version,tool_call"
   ) {
-    throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+    throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "FINAL_ENVELOPE");
   }
   if (value["kind"] === "tool_use") {
     if (value["final"] !== null || !isRecord(value["tool_call"])) {
-      throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+      throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "TOOL_ENVELOPE");
     }
     const toolCall = value["tool_call"];
     if (
@@ -163,26 +262,31 @@ function parseFinalContent(
       typeof toolCall["name"] !== "string" ||
       !("input" in toolCall)
     ) {
-      throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+      throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "TOOL_IDENTITY");
     }
     if (!contract.toolNames.includes(toolCall["name"])) {
-      throw new CodexCliTranscriptError("TOOL_BOUNDARY_VIOLATION");
+      throw new CodexCliTranscriptError("TOOL_BOUNDARY_VIOLATION", undefined, "TOOL_NOT_ALLOWED");
     }
+    const definition = contract.tools.find((tool) => tool.name === toolCall["name"]);
+    if (definition === undefined) {
+      throw new CodexCliTranscriptError("TOOL_BOUNDARY_VIOLATION", undefined, "TOOL_NOT_ALLOWED");
+    }
+    const encodedInput = asJsonValue(toolCall["input"]);
     return Object.freeze([
       {
         type: "tool-use",
         id: toolCall["id"],
         name: toolCall["name"],
-        input: asJsonValue(toolCall["input"]),
+        input: decodeCodexOptionalToolInput(encodedInput, definition.inputSchema),
       },
     ]);
   }
   if (value["kind"] !== contract.finalKind || value["tool_call"] !== null) {
-    throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+    throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "FINAL_KIND");
   }
   if (contract.finalKind === "text") {
     if (typeof value["final"] !== "string") {
-      throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+      throw new CodexCliTranscriptError("MALFORMED_OUTPUT", undefined, "FINAL_TEXT");
     }
     return Object.freeze([{ type: "text", text: value["final"] }]);
   }
@@ -207,22 +311,22 @@ export function parseCodexJsonlTranscript(input: {
   const rawLines = input.stdout.split("\n");
   if (rawLines.at(-1) === "") rawLines.pop();
 
-  const malformed = (): never => {
+  const malformed = (detailCode: CodexTranscriptFailureDetail): never => {
     emitTurn({
       emit: input.onEvent,
       sequence: nextSequence,
       sessionId,
       outcome: "MALFORMED_OUTPUT",
-      usage: null,
+      usage,
     });
-    throw new CodexCliTranscriptError("MALFORMED_OUTPUT");
+    throw new CodexCliTranscriptError("MALFORMED_OUTPUT", usage ?? undefined, detailCode);
   };
   if (
     rawLines.length === 0 ||
     rawLines.length > MAX_EVENTS ||
     rawLines.some((line) => line.length === 0)
   ) {
-    return malformed();
+    return malformed("TRANSCRIPT_BOUNDS");
   }
 
   for (const [index, line] of rawLines.entries()) {
@@ -230,15 +334,17 @@ export function parseCodexJsonlTranscript(input: {
     try {
       value = JSON.parse(line);
     } catch {
-      return malformed();
+      return malformed("EVENT_JSON");
     }
-    if (!isRecord(value) || typeof value["type"] !== "string" || terminal) return malformed();
+    if (!isRecord(value) || typeof value["type"] !== "string" || terminal) {
+      return malformed("EVENT_ENVELOPE");
+    }
     const type = value["type"];
 
     if (type === "thread.started") {
-      if (index !== 0 || sessionId !== null) return malformed();
+      if (index !== 0 || sessionId !== null) return malformed("THREAD_ORDER_OR_SHAPE");
       const event = threadStarted.safeParse(value);
-      if (!event.success) return malformed();
+      if (!event.success) return malformed("THREAD_ORDER_OR_SHAPE");
       sessionId = event.data.thread_id;
       input.onEvent?.(
         normalizedSubscriptionModelEvent.parse({
@@ -252,7 +358,7 @@ export function parseCodexJsonlTranscript(input: {
     }
     if (type === "turn.started") {
       if (sessionId === null || started || !turnStarted.safeParse(value).success)
-        return malformed();
+        return malformed("TURN_STARTED_ORDER_OR_SHAPE");
       started = true;
       continue;
     }
@@ -267,11 +373,13 @@ export function parseCodexJsonlTranscript(input: {
       throw new CodexCliTranscriptError("QUOTA_OR_PROVIDER_FAILED");
     }
     if (type === "turn.completed") {
-      if (sessionId === null || !started || finalMessage === null) return malformed();
+      if (sessionId === null || !started || finalMessage === null) {
+        return malformed("TURN_COMPLETED_ORDER");
+      }
       const event = turnCompleted.safeParse(value);
-      if (!event.success) return malformed();
+      if (!event.success) return malformed("TURN_COMPLETED_SHAPE");
       const totalTokens = event.data.usage.input_tokens + event.data.usage.output_tokens;
-      if (!Number.isSafeInteger(totalTokens)) return malformed();
+      if (!Number.isSafeInteger(totalTokens)) return malformed("TURN_COMPLETED_SHAPE");
       terminal = true;
       usage = Object.freeze({
         inputTokens: event.data.usage.input_tokens,
@@ -282,7 +390,9 @@ export function parseCodexJsonlTranscript(input: {
     }
     if (type === "item.started" || type === "item.updated" || type === "item.completed") {
       const rawItem = value["item"];
-      if (!isRecord(rawItem) || typeof rawItem["type"] !== "string") return malformed();
+      if (!isRecord(rawItem) || typeof rawItem["type"] !== "string") {
+        return malformed("ITEM_ORDER_OR_SHAPE");
+      }
       if (builtInToolKinds.has(rawItem["type"])) {
         emitTurn({
           emit: input.onEvent,
@@ -291,7 +401,7 @@ export function parseCodexJsonlTranscript(input: {
           outcome: "TOOL_BOUNDARY_VIOLATION",
           usage: null,
         });
-        throw new CodexCliTranscriptError("TOOL_BOUNDARY_VIOLATION");
+        throw new CodexCliTranscriptError("TOOL_BOUNDARY_VIOLATION", undefined, "BUILTIN_TOOL");
       }
       if (rawItem["type"] === "error") {
         emitTurn({
@@ -304,34 +414,44 @@ export function parseCodexJsonlTranscript(input: {
         throw new CodexCliTranscriptError("QUOTA_OR_PROVIDER_FAILED");
       }
       const event = itemEvent.safeParse(value);
-      if (!event.success || sessionId === null || !started) return malformed();
+      if (!event.success || sessionId === null || !started) {
+        return malformed("ITEM_ORDER_OR_SHAPE");
+      }
       if (event.data.type === "item.completed") {
-        if (completedItems.has(event.data.item.id)) return malformed();
+        if (completedItems.has(event.data.item.id)) return malformed("ITEM_DUPLICATE");
         completedItems.add(event.data.item.id);
         if (event.data.item.type === "agent_message") {
-          if (finalMessage !== null) return malformed();
+          // Codex may emit bounded progress prose as completed agent messages before the
+          // response-schema envelope. Only the last completed message at turn completion is the
+          // provider result. Same-item replay remains rejected by `completedItems`, and no
+          // intermediate text is retained or emitted across this boundary.
           finalMessage = event.data.item.text;
         }
       }
       continue;
     }
-    return malformed();
+    return malformed("EVENT_UNKNOWN");
   }
 
   if (!terminal || sessionId === null || usage === null || finalMessage === null)
-    return malformed();
+    return malformed("TRANSCRIPT_INCOMPLETE");
   let content: readonly RuntimeContent[];
   try {
     content = parseFinalContent(finalMessage, input.contract);
   } catch (error) {
+    const outcome = error instanceof CodexCliTranscriptError ? error.outcome : "MALFORMED_OUTPUT";
     emitTurn({
       emit: input.onEvent,
       sequence: nextSequence,
       sessionId,
-      outcome: error instanceof CodexCliTranscriptError ? error.outcome : "MALFORMED_OUTPUT",
-      usage: null,
+      outcome,
+      usage,
     });
-    throw error;
+    throw new CodexCliTranscriptError(
+      outcome,
+      usage,
+      error instanceof CodexCliTranscriptError ? error.detailCode : "UNCLASSIFIED",
+    );
   }
   emitTurn({ emit: input.onEvent, sequence: nextSequence, sessionId, outcome: "SUCCEEDED", usage });
   return Object.freeze({ sessionId, content, usage });
