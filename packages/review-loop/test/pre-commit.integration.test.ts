@@ -5,6 +5,7 @@ import {
   type EngineeringEvidenceBundle,
 } from "@remoteagent/contracts";
 import { describe, expect, it } from "vitest";
+import * as z from "zod";
 
 import {
   PRE_COMMIT_REVIEW_NOT_EXECUTED,
@@ -80,8 +81,13 @@ function session(
     linesExamined?: number;
     summary?: string;
     evidence?: string;
+    extraSummary?: string;
+    extraRequiredFix?: string;
+    extraRequiredFixPaths?: readonly string[];
+    extraFirst?: boolean;
     relativePath?: string;
     line?: number;
+    requiredFixPaths?: readonly string[];
   } = {},
 ): PreCommitReviewSession {
   return Object.freeze({
@@ -106,24 +112,41 @@ function session(
           { relative_path: "src/auth.ts", start_line: 1, end_line: 1 },
         ]);
       }
+      const primaryFinding = {
+        severity: input.severity,
+        summary: input.summary ?? "Authorization was widened by this exact line.",
+        location: {
+          relative_path: input.relativePath ?? "src/auth.ts",
+          line: input.line ?? 1,
+        },
+        evidence: input.evidence ?? "export const allowed = true;",
+        required_fix: "Restore the denied authorization default.",
+        required_fix_paths: input.requiredFixPaths ?? [input.relativePath ?? "src/auth.ts"],
+      };
+      const extraFinding =
+        input.extraSummary === undefined
+          ? undefined
+          : {
+              severity: input.severity,
+              summary: input.extraSummary,
+              location: {
+                relative_path: input.relativePath ?? "src/auth.ts",
+                line: input.line ?? 1,
+              },
+              evidence: input.evidence ?? "export const allowed = true;",
+              required_fix: input.extraRequiredFix ?? "Apply the independent authorization fix.",
+              required_fix_paths: input.extraRequiredFixPaths ??
+                input.requiredFixPaths ?? [input.relativePath ?? "src/auth.ts"],
+            };
       return {
         output: preCommitReviewOutput.parse({
           schema_version: 1,
           findings:
             input.severity === undefined || input.severity === null
               ? []
-              : [
-                  {
-                    severity: input.severity,
-                    summary: input.summary ?? "Authorization was widened by this exact line.",
-                    location: {
-                      relative_path: input.relativePath ?? "src/auth.ts",
-                      line: input.line ?? 1,
-                    },
-                    evidence: input.evidence ?? "export const allowed = true;",
-                    required_fix: "Restore the denied authorization default.",
-                  },
-                ],
+              : input.extraFirst && extraFinding !== undefined
+                ? [extraFinding, primaryFinding]
+                : [primaryFinding, ...(extraFinding === undefined ? [] : [extraFinding])],
           lines_examined: input.linesExamined ?? 6,
         }),
         modelCalls: input.modelCalls ?? 1,
@@ -140,6 +163,8 @@ async function execute(
     evidence?: EngineeringEvidenceBundle;
     expectedEvidenceDigest?: string;
     previousBlockingRawPatchDigest?: string;
+    sliceAllowedPaths?: readonly string[];
+    generatorPaths?: readonly string[];
   } = {},
 ) {
   const reviewer = options.reviewer ?? session();
@@ -153,9 +178,9 @@ async function execute(
       slice_id: binding.sliceId,
       objective: "keep the current authorization helper closed by default",
       observable_result: "the focused denial test passes",
-      allowed_paths: ["src"],
+      allowed_paths: options.sliceAllowedPaths ?? ["src/auth.test.ts", "src/auth.ts"],
       test_paths: ["src/auth.test.ts"],
-      code_owned_generator_paths: [],
+      code_owned_generator_paths: options.generatorPaths ?? [],
       inspection_method: "focused test",
       stop_condition: "review finds no current-slice defect",
     },
@@ -171,6 +196,18 @@ async function execute(
 }
 
 describe("fresh pre-commit review boundary", () => {
+  it("requires typed correction paths in the provider schema without a default", () => {
+    const schema = z.toJSONSchema(preCommitReviewOutput, { io: "input" }) as unknown as {
+      properties: {
+        findings: { items: { properties: Record<string, unknown>; required: string[] } };
+      };
+    };
+    expect(schema.properties.findings.items.required).toContain("required_fix_paths");
+    expect(schema.properties.findings.items.properties.required_fix_paths).not.toHaveProperty(
+      "default",
+    );
+  });
+
   it("does not turn a code-owned generator output into model correction authority", async () => {
     const patch = `diff --git a/src/generated.ts b/src/generated.ts
 --- a/src/generated.ts
@@ -312,17 +349,43 @@ describe("fresh pre-commit review boundary", () => {
   });
 
   it("blocks BLOCKER, HIGH and MEDIUM with server-derived stable location ids", async () => {
-    let stableId = "";
+    const ids = new Set<string>();
     for (const severity of [ReviewSeverity.BLOCKER, ReviewSeverity.HIGH, ReviewSeverity.MEDIUM]) {
       const result = await execute({
         reviewer: session({ severity, summary: `Finding ${severity} is real.` }),
       });
       expect(result.readiness).toBe(ReviewReadiness.CHANGES_REQUIRED);
       expect(result.blockingFindingIds).toHaveLength(1);
-      stableId ||= result.blockingFindingIds[0]!;
-      expect(result.blockingFindingIds[0]).toBe(stableId);
+      ids.add(result.blockingFindingIds[0]!);
       expect(result.blockingFindingIds[0]).not.toMatch(/blocker|high|medium|real/iu);
     }
+    expect(ids).toHaveLength(3);
+  });
+
+  it("keeps independent same-line fixes separate and exact duplicates stable", async () => {
+    const findings = {
+      severity: ReviewSeverity.HIGH,
+      summary: "The authorization default is too permissive.",
+      extraSummary: "The changed branch skips the required audit event.",
+      extraRequiredFix: "Restore the audit event on this branch.",
+    } as const;
+    const result = await execute({ reviewer: session(findings) });
+    const reversed = await execute({ reviewer: session({ ...findings, extraFirst: true }) });
+    expect(result.findings).toHaveLength(2);
+    expect(new Set(result.findings.map((finding) => finding.finding_id))).toHaveLength(2);
+    expect(reversed.findings.map((finding) => finding.finding_id)).toEqual(
+      result.findings.map((finding) => finding.finding_id),
+    );
+
+    const duplicate = await execute({
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        summary: "The authorization default is too permissive.",
+        extraSummary: "The authorization default is too permissive.",
+        extraRequiredFix: "Restore the denied authorization default.",
+      }),
+    });
+    expect(duplicate.findings).toHaveLength(1);
   });
 
   it("server-anchors an absence finding to its exact changed line", async () => {
@@ -425,6 +488,7 @@ new file mode 100644
         line: 2,
         evidence: "The closing brace omits the required action wiring.",
       }),
+      sliceAllowedPaths: ["src/view.swift"],
     });
 
     expect(result.readiness).toBe(ReviewReadiness.CHANGES_REQUIRED);
@@ -577,5 +641,70 @@ new file mode 100644
     expect(second.readiness).toBe(ReviewReadiness.READY);
     expect(second.rawPatchDigest).not.toBe(first.rawPatchDigest);
     expect(second.sessionId).not.toBe(first.sessionId);
+  });
+
+  it("returns only server-validated in-scope required mutation paths", async () => {
+    const valid = await execute({
+      reviewer: session({ severity: ReviewSeverity.HIGH, relativePath: "src/auth.ts" }),
+      sliceAllowedPaths: ["src/auth.test.ts", "src/auth.ts"],
+    });
+    expect(valid.requiredMutationPaths).toEqual(["src/auth.ts"]);
+
+    const merged = await execute({
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        summary: "Same blocking finding summary.",
+        extraSummary: "Same blocking finding summary.",
+        evidence: "export const allowed = true;",
+        extraRequiredFix: "Restore the denied authorization default.",
+        requiredFixPaths: ["src/auth.ts"],
+        extraRequiredFixPaths: ["src/auth.test.ts"],
+      }),
+    });
+    expect(merged.requiredMutationPaths).toEqual(["src/auth.test.ts", "src/auth.ts"]);
+  });
+
+  it("downgrades a blocking finding with a foreign or generated target", async () => {
+    const result = await execute({
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        relativePath: "src/auth.ts",
+        requiredFixPaths: ["src/generated.ts", "foreign.ts"],
+      }),
+      sliceAllowedPaths: ["foreign.ts", "src/generated.ts", "src/auth.ts"],
+      generatorPaths: ["src/generated.ts"],
+    });
+    expect(result.readiness).toBe(ReviewReadiness.READY);
+    expect(result.requiredMutationPaths).toEqual([]);
+  });
+
+  it("rejects directory targets while accepting exact unchanged leaf paths", async () => {
+    const exact = await execute({
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        requiredFixPaths: ["src/auth.ts", "src/auth.ts", "src/auth.test.ts"],
+      }),
+      sliceAllowedPaths: ["src/auth.test.ts", "src/auth.ts"],
+    });
+    expect(exact.requiredMutationPaths).toEqual(["src/auth.test.ts", "src/auth.ts"]);
+
+    const directory = await execute({
+      reviewer: session({ severity: ReviewSeverity.HIGH, requiredFixPaths: ["src"] }),
+      sliceAllowedPaths: ["src", "src/auth.ts"],
+    });
+    expect(directory.readiness).toBe(ReviewReadiness.READY);
+    expect(directory.requiredMutationPaths).toEqual([]);
+  });
+
+  it("downgrades a foreign target outside the slice allowlist", async () => {
+    const result = await execute({
+      reviewer: session({
+        severity: ReviewSeverity.HIGH,
+        requiredFixPaths: ["foreign/WhatToTest.txt"],
+      }),
+      sliceAllowedPaths: ["src/auth.ts"],
+    });
+    expect(result.readiness).toBe(ReviewReadiness.READY);
+    expect(result.requiredMutationPaths).toEqual([]);
   });
 });

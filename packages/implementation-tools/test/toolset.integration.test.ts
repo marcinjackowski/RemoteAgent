@@ -53,6 +53,8 @@ import {
   TOOLSET_PATH_PROTECTED,
   TEST_FIRST_MUTATION_REQUIRED,
   TEST_SOURCE_INTROSPECTION_REFUSED,
+  SERVER_PREFETCH_NOT_SEALED,
+  SERVER_PREFETCH_ALREADY_SEALED,
   ToolKind,
   ToolOutcome,
   createBoundedImplementationToolset,
@@ -921,6 +923,39 @@ describeIntegration(
         );
       });
 
+      it("requires one exact substantive candidate, then permits unrelated authorized mutations", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/candidate-a.ts"],
+          firstMutationAlreadySatisfied: true,
+          requiredSubstantiveMutationPathsAny: ["src/candidate-a.ts", "src/candidate-b.ts"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `candidate-any-${tool}-${String(sequence)}`,
+        });
+
+        const unrelated = await bounded.write({
+          relative_path: "src/notes.ts",
+          content: "export const note = true;\n",
+        });
+        expect(failureOf(unrelated)).toBe(CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED);
+        expect(await exists(join(root, "src", "notes.ts"))).toBe(false);
+
+        const candidate = await bounded.patch({
+          files: [{ relative_path: "src/candidate-a.ts", content: "export const a = 1;\n" }],
+        });
+        expect(candidate.outcome).toBe(ToolOutcome.SUCCEEDED);
+
+        const ancillary = await bounded.write({
+          relative_path: "src/notes.ts",
+          content: "export const note = true;\n",
+        });
+        expect(ancillary.outcome).toBe(ToolOutcome.SUCCEEDED);
+      });
+
       it("refuses import-only progress on an exact behavioral correction path", async () => {
         await writeFile(
           join(root, "src", "FlowTests.swift"),
@@ -964,6 +999,60 @@ describeIntegration(
                 {
                   old_content: "func testFlow() { XCTAssertTrue(true) }",
                   new_content: "func testFlow() { XCTAssertEqual(flowResult(), .presented) }",
+                },
+              ],
+            },
+          ],
+        });
+        expect(behavioral.outcome).toBe(ToolOutcome.SUCCEEDED);
+      });
+
+      it("refuses import-only progress on an ANY behavioral candidate", async () => {
+        await writeFile(
+          join(root, "src", "AnyFlowTests.swift"),
+          "import XCTest\n\nfinal class AnyFlowTests: XCTestCase {}\n",
+        );
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src/AnyFlowTests.swift"],
+          firstMutationAlreadySatisfied: true,
+          requiredSubstantiveMutationPathsAny: [
+            "src/AnyFlowTests.swift",
+            "src/OtherFlowTests.swift",
+          ],
+          requiredBehavioralMutationPaths: ["src/AnyFlowTests.swift", "src/OtherFlowTests.swift"],
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `behavioral-any-${tool}-${String(sequence)}`,
+        });
+
+        const importOnly = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/AnyFlowTests.swift",
+              replacements: [
+                { old_content: "import XCTest", new_content: "import XCTest\nimport Dependencies" },
+              ],
+            },
+          ],
+        });
+        expect(failureOf(importOnly)).toBe(CORRECTION_BEHAVIORAL_MUTATION_REQUIRED);
+        expect(await readFile(join(root, "src", "AnyFlowTests.swift"), "utf8")).not.toContain(
+          "Dependencies",
+        );
+
+        const behavioral = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/AnyFlowTests.swift",
+              replacements: [
+                {
+                  old_content: "final class AnyFlowTests: XCTestCase {}",
+                  new_content:
+                    "final class AnyFlowTests: XCTestCase { func testFlow() { XCTAssertTrue(true) } }",
                 },
               ],
             },
@@ -1092,17 +1181,97 @@ describeIntegration(
           runTransaction: inTx,
           allowedPaths: ["src"],
           firstMutationPaths: ["src"],
-          maxDiscoveryCalls: 13,
+          maxDiscoveryCalls: 26,
+          serverPrefetch: true,
           beforeMutation: async () => undefined,
           operationIdFor: (tool, sequence) => `prefetch-${tool}-${String(sequence)}`,
         });
 
-        for (let index = 0; index < 13; index += 1) {
+        for (let index = 0; index < 26; index += 1) {
           const result = await bounded.search({ query: `server-plan-${String(index)}` });
           expect(result.outcome, `prefetch call ${String(index + 1)}`).toBe(ToolOutcome.SUCCEEDED);
         }
         const exhausted = await bounded.search({ query: "outside-server-plan" });
         expect(failureOf(exhausted)).toBe(BOUNDED_DISCOVERY_BUDGET_EXHAUSTED);
+      });
+
+      it("keeps server-only diagnostic excerpts behind path and shared budget guards", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src"],
+          maxDiscoveryCalls: 1,
+          serverPrefetch: true,
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `excerpt-${tool}-${String(sequence)}`,
+        });
+        const denied = await bounded.readExcerpt!({
+          relative_path: ".env",
+          start_line: 1,
+          end_line: 1,
+        });
+        expect(failureOf(denied)).toBe(TOOLSET_PATH_PROTECTED);
+        expect(body(denied).content).toBeUndefined();
+        const ok = await bounded.readExcerpt!({
+          relative_path: "src/app.ts",
+          start_line: 1,
+          end_line: 1,
+        });
+        expect(ok.outcome).toBe(ToolOutcome.SUCCEEDED);
+        const exhausted = await bounded.readExcerpt!({
+          relative_path: "src/app.ts",
+          start_line: 1,
+          end_line: 1,
+        });
+        expect(failureOf(exhausted)).toBe(BOUNDED_DISCOVERY_BUDGET_EXHAUSTED);
+      });
+
+      it("seals a server prefetch phase before mutation and rejects discovery after sealing", async () => {
+        const bounded = await createBoundedImplementationToolset({
+          root,
+          identity,
+          ledger,
+          runTransaction: inTx,
+          allowedPaths: ["src"],
+          firstMutationPaths: ["src"],
+          maxDiscoveryCalls: 26,
+          serverPrefetch: true,
+          beforeMutation: async () => undefined,
+          operationIdFor: (tool, sequence) => `sealed-${tool}-${String(sequence)}`,
+        });
+        for (let index = 0; index < 25; index += 1) {
+          const result = await bounded.search({ query: `prefetch-${String(index)}` });
+          expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+        }
+        const refused = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [
+                { old_content: "export const a = 1;", new_content: "export const a = 2;" },
+              ],
+            },
+          ],
+        });
+        expect(failureOf(refused)).toBe(SERVER_PREFETCH_NOT_SEALED);
+        expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+        bounded.sealDiscovery();
+        const mutation = await bounded.patch({
+          replacement_files: [
+            {
+              relative_path: "src/app.ts",
+              replacements: [
+                { old_content: "export const a = 1;", new_content: "export const a = 2;" },
+              ],
+            },
+          ],
+        });
+        expect(mutation.outcome).toBe(ToolOutcome.SUCCEEDED);
+        const afterSeal = await bounded.search({ query: "after-seal" });
+        expect(failureOf(afterSeal)).toBe(SERVER_PREFETCH_ALREADY_SEALED);
       });
 
       it("rejects a caller-supplied discovery ceiling outside the code-owned range", async () => {

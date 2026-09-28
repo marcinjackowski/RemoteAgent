@@ -8,6 +8,7 @@ import {
   CaseRepository,
   ConnectionRepository,
   DiscordBindingRepository,
+  EngineeringControlPlaneRepository,
   EngineeringApprovalIngressRepository,
   JobStore,
   OwnerRepository,
@@ -22,6 +23,8 @@ import { createEngineeringRoleContextReader } from "../src/context.js";
 import {
   createEngineeringDebugTransport,
   EngineeringDebugJournal,
+  closeExportAndDropEngineeringRun,
+  exportEngineeringEvidence,
   engineeringCompilerDiagnosticJournalRows,
   engineeringXcodeTestDiagnosticJournalRows,
   engineeringDebugErrorCode,
@@ -33,16 +36,20 @@ import {
   createEngineeringRoleModelComposition,
   loadEngineeringExecutionConfig,
   createProductionEngineeringRuntimePort,
-  engineeringImplementationContext,
+  engineeringExecutionConfigWithGateFailureMapping,
 } from "../src/engineering-execution.js";
 import {
-  assertEngineeringLiveQualificationAuthority,
   ENGINEERING_LIVE_EXECUTION_BUDGET_MS,
   ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS,
+  createAfterEngineeringLivePreflight,
+  type EngineeringLiveQualificationAuthority,
+  engineeringLiveBenchmarkPathsFromEnv,
   engineeringLiveQualificationSelectionFromEnv,
+  projectEngineeringLiveTerminal,
 } from "../src/engineering-live-qualification.js";
 import { engineeringModelRoutingFromEnv } from "../src/engineering-model-routing.js";
 import { createWorkerHandlers } from "../src/handlers.js";
+import type { RuntimePumpResult } from "@remoteagent/agent-orchestrator";
 import { WorkerPersistence } from "../src/persistence.js";
 import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
 import {
@@ -50,10 +57,48 @@ import {
   xcodeDestinationFromGateCatalog,
 } from "../src/xcode-gate-adapter.js";
 import { createTestDatabase } from "../../../packages/database/test/harness.js";
+import { observeEngineeringLiveCommit } from "./engineering-live-commit-observation.js";
+import {
+  projectAcceptedLocalCommit,
+  selectLocalCommitOperationId,
+  type AcceptedLocalCommitProjection,
+} from "./engineering-live-accepted-commit.js";
+import { projectAcceptedSliceGates } from "./engineering-live-accepted-slice-gates.js";
+import { createAfterMobl2023LiveProfileContract } from "./engineering-live-full-flow-profile-contract.js";
 
 const enabled = process.env.RA_RUN_LIVE_IOS_ENGINEERING === "1";
 const live = enabled ? it : it.skip;
 const runExecutable = promisify(execFile);
+
+function runtimePumpResult(value: unknown): RuntimePumpResult | null {
+  if (value === null || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const terminalReasonCodes = new Set([
+    "COMPLETED",
+    "CANCELLED",
+    "DEADLINE_EXCEEDED",
+    "STAGE_LIMIT_EXHAUSTED",
+    "CALL_LIMIT_EXHAUSTED",
+    "NO_PROGRESS",
+    "OSCILLATION",
+    "APPROVAL_BLOCKED",
+    "SLICE_BLOCKED",
+    "GATE_CORRECTION_LIMIT_EXHAUSTED",
+  ]);
+  return typeof candidate.progressed !== "number" ||
+    !Array.isArray(candidate.ambiguous) ||
+    !candidate.ambiguous.every((entry) => typeof entry === "string") ||
+    !Array.isArray(candidate.blocked) ||
+    !candidate.blocked.every((entry) => typeof entry === "string") ||
+    !Array.isArray(candidate.waiting) ||
+    !candidate.waiting.every((entry) => typeof entry === "string") ||
+    !Array.isArray(candidate.merges) ||
+    (candidate.terminalReasonCode !== undefined &&
+      (typeof candidate.terminalReasonCode !== "string" ||
+        !terminalReasonCodes.has(candidate.terminalReasonCode)))
+    ? null
+    : (value as RuntimePumpResult);
+}
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -86,226 +131,88 @@ live(
       grantInteractionId: `${suffix}-grant`,
     } as const;
     let debugJournal: EngineeringDebugJournal | undefined;
+    let evidenceRoot: string | undefined;
+    let evidenceRunId: string | undefined;
+    let evidenceJobId: string | undefined;
+    let liveAuthority: EngineeringLiveQualificationAuthority | undefined;
 
     try {
       const config = await loadEngineeringExecutionConfig(configPath);
-      const liveGateSchedules = new Map(
-        config.catalog.definitions.map((definition) => [
-          definition.gate_id,
-          definition.gate_schedule,
-        ]),
+      const sourceRepository = config.workspaceConfig.repositories[config.repositoryId];
+      if (sourceRepository === undefined) throw new Error("configured repository is unavailable");
+      const generator = config.generatorCatalog?.definitions.find(
+        (entry) => entry.generator_id === "mobl-2023-shared-assets",
       );
-      if (liveGateSchedules.get("mobl-2023-safety-alert-contract") !== "LAST_SLICE") {
-        throw new Error("live task-wide safety-alert contract must run only on the last slice");
-      }
-      const incrementalSafetyContract = config.catalog.get(
-        "mobl-2023-safety-alert-contract-incremental",
+      if (generator === undefined)
+        throw new Error("configured shared-assets generator is unavailable");
+      const nodeExecutable = await realpath(process.execPath);
+      const swiftgenExecutable = await realpath(
+        join(sourceRepository.sourcePath, "swiftgen/bin/swiftgen"),
       );
-      const finalSafetyContract = config.catalog.get("mobl-2023-safety-alert-contract");
-      const incrementalSafetyCommand = incrementalSafetyContract?.argv.join("\n") ?? "";
-      const incrementalSafetyContext = incrementalSafetyContract?.implementation_context ?? [];
-      const incrementalSafetyQueries = incrementalSafetyContext.flatMap((entry) =>
-        entry.kind === "SEARCH" ? [entry.query] : [],
-      );
-      const incrementalSafetyPaths = incrementalSafetyContext.map((entry) => entry.relative_path);
-      if (
-        incrementalSafetyContract?.gate_schedule !== "EACH_SLICE" ||
-        incrementalSafetyContract.gate_tier !== "FAST" ||
-        incrementalSafetyContract.execution_order !== 20 ||
-        incrementalSafetyContract.required_test_paths.join("\n") !==
-          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/SafetyAlertTests.swift" ||
-        incrementalSafetyContract.required_mutation_paths.join("\n") !==
-          [
-            "SonderClient/SonderClientLibrary/Sources/Shared/AgentAI/SafetyAlert.swift",
-            "SonderClient/SonderClientLibrary/Sources/Shared/Resources/en.lproj/Localizable.strings",
-          ].join("\n") ||
-        incrementalSafetyContract.implementation_guidance === undefined ||
-        !incrementalSafetyContract.implementation_guidance.includes(
-          "Comparing only String(localized:) to the same production localization key is vacuous",
-        ) ||
-        incrementalSafetyContract.implementation_context === undefined ||
-        !incrementalSafetyCommand.includes("Tests/SharedTests/AgentAI/SafetyAlertTests.swift") ||
-        !incrementalSafetyCommand.includes(
-          "SafetyAlertTests must assert the exact UI copy: This message was shared for safety reasons",
-        ) ||
-        !incrementalSafetyCommand.includes(
-          "production emergency-resources action model in SafetyAlert.swift",
-        ) ||
-        !incrementalSafetyCommand.includes(
-          "SafetyAlertTests must invoke both ButtonModel tapAction closures",
-        ) ||
-        !incrementalSafetyCommand.includes(
-          "SafetyAlertTests must assert application URL and analytics",
-        ) ||
-        !incrementalSafetyCommand.includes("(?:openURLCalls|openUrlCalls)") ||
-        !incrementalSafetyContract.implementation_guidance.includes(
-          "same claiming slice must wire the production SafetyAlert.swift",
-        ) ||
-        !incrementalSafetyContract.implementation_guidance.includes(
-          "invoke both ButtonModel tapAction() closures",
-        ) ||
-        !incrementalSafetyQueries.includes("final class TestApplication") ||
-        !incrementalSafetyPaths.includes(
-          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift",
-        ) ||
-        finalSafetyContract?.gate_schedule !== "LAST_SLICE" ||
-        finalSafetyContract.gate_tier !== "FAST" ||
-        finalSafetyContract.execution_order !== 25 ||
-        finalSafetyContract.implementation_guidance !== undefined ||
-        finalSafetyContract.implementation_context !== undefined
-      ) {
-        throw new Error(
-          "live safety-alert ownership must fail the claiming slice and retain independent final evidence",
-        );
-      }
-      if (liveGateSchedules.get("mobl-2023-flow-integration") !== "LAST_SLICE") {
-        throw new Error("live task-wide flow integration must run only on the last slice");
-      }
-      const flowIntegration = config.catalog.get("mobl-2023-flow-integration");
-      const flowCommand = flowIntegration?.argv.join("\n") ?? "";
-      const flowContextQueries = (flowIntegration?.implementation_context ?? []).flatMap((entry) =>
-        entry.kind === "SEARCH" ? [entry.query] : [],
-      );
-      const flowContextSearches = (flowIntegration?.implementation_context ?? []).flatMap(
-        (entry) => (entry.kind === "SEARCH" ? [`${entry.relative_path}:${entry.query}`] : []),
-      );
-      if (
-        flowIntegration?.implementation_guidance === undefined ||
-        !flowIntegration.implementation_guidance.includes(
-          "touching the four paths is not completion",
-        ) ||
-        !flowCommand.includes("single-agent typed safety state/router") ||
-        !flowCommand.includes("single-agent emergencyResources event route") ||
-        !flowCommand.includes("multi-agent typed safety state/router") ||
-        !flowCommand.includes("multi-agent emergencyResources event route") ||
-        flowContextQueries.filter(
-          (query) => query === "private var emergencyResources: EmergencyResources?",
-        ).length !== 2 ||
-        !flowContextSearches.includes(
-          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift:emergencyResources",
-        ) ||
-        !flowContextSearches.includes(
-          "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentChatViewModelTests.swift:emergencyResources",
-        )
-      ) {
-        throw new Error(
-          "live flow correction must prefetch exact declaration, session routing, and session-test boundaries",
-        );
-      }
-      const lastSliceGateIds = config.catalog.definitions
-        .filter(
-          (definition) =>
-            definition.required &&
-            (definition.gate_schedule === "EACH_SLICE" ||
-              definition.gate_schedule === "LAST_SLICE"),
-        )
-        .map((definition) => definition.gate_id);
-      const lastSliceContext = engineeringImplementationContext(config.catalog, lastSliceGateIds);
-      if (lastSliceContext.length > 18) {
-        throw new Error(
-          `live last-slice speculative context exceeds the bounded budget: ${lastSliceContext.length}`,
-        );
-      }
-      const expectedTestPaths = [
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentChatViewModelTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentFlowTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentSessionTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/EmergencyResourcesRouterTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/SafetyAlertTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/Chat/AgentAIStreamingEngineTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/Chat/EmergencyResourcesTextFlowAdapterTests.swift",
-      ] as const;
-      if (config.testPathAllowlist.join("\n") !== expectedTestPaths.join("\n")) {
-        throw new Error("live test path authority must remain exact and file-bounded");
-      }
-      const requiredSelectorTestPaths = [
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AIMultiAgentChatViewModelTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/AgentAIFlowTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/EmergencyResourcesRouterTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/AgentAI/SafetyAlertTests.swift",
-        "SonderClient/SonderClientLibrary/Tests/SharedTests/Chat/EmergencyResourcesTextFlowAdapterTests.swift",
-      ] as const;
-      const selectorGate = config.catalog.get("mobl-2023-non-vacuous-xcode-selectors");
-      const selectorCommand = selectorGate?.argv.join("\n") ?? "";
-      const selectorContextReads = (selectorGate?.implementation_context ?? []).flatMap((entry) =>
-        entry.kind === "READ" ? [entry.relative_path] : [],
-      );
-      if (
-        selectorGate?.required_test_paths.join("\n") !== requiredSelectorTestPaths.join("\n") ||
-        selectorGate.implementation_guidance === undefined ||
-        !selectorGate.implementation_guidance.includes(
-          "Carry the exact EmergencyResources event into the full-screen alert",
-        ) ||
-        !selectorGate.implementation_guidance.includes("execute tapAction()") ||
-        !selectorGate.implementation_guidance.includes(
-          "Patch the existing AgentAIFlowTests.swift and AIMultiAgentChatViewModelTests.swift",
-        ) ||
-        !selectorGate.implementation_guidance.includes(
-          "`let forwardedEvent = event` is an identity assertion",
-        ) ||
-        !selectorContextReads.includes(
-          "SonderClient/SonderClientLibrary/Sources/Shared/AgentAI/SafetyAlert.swift",
-        ) ||
-        !selectorCommand.includes("production emergency-resources action model") ||
-        !selectorCommand.includes("production Text 988/Emergency resources action invocation") ||
-        !selectorCommand.includes("exact emergencyResources event forwarding") ||
-        !selectorCommand.includes("production action execution assertions") ||
-        !selectorCommand.includes("not assign event to itself") ||
-        !selectorCommand.includes("not a private test-only adapter") ||
-        !selectorCommand.includes(
-          "existing AgentAIFlowTests.swift and AIMultiAgentChatViewModelTests.swift must observe emergency-resources routing into safetyAlert",
-        ) ||
-        !selectorCommand.includes('error?.code==="ENOENT"') ||
-        !selectorCommand.includes(
-          "inline-card prevention assertion in AgentAIFlowTests.swift, AIMultiAgentChatViewModelTests.swift, or EmergencyResourcesTextFlowAdapterTests.swift",
-        )
-      ) {
-        throw new Error(
-          "live selector gate must bind exact task-owned tests to production action execution",
-        );
-      }
-      const targetedFast = config.catalog.definitions.find(
-        (definition) => definition.gate_id === "ios-safety-alert-tests",
-      );
-      const targetedFull = config.catalog.definitions.find(
-        (definition) => definition.gate_id === "ios-safety-alert-tests-final",
-      );
-      const compilePreflight = config.catalog.get("mobl-2023-ios-compile");
-      if (
-        targetedFast !== undefined ||
-        compilePreflight !== undefined ||
-        targetedFull?.gate_schedule !== "LAST_SLICE" ||
-        targetedFull.gate_tier !== "FULL" ||
-        targetedFull.execution_order !== 100 ||
-        targetedFull.argv.includes("-quiet") ||
-        targetedFull.argv.filter((argument) => argument === "ENABLE_TESTABILITY=YES").length !== 1
-      ) {
-        throw new Error(
-          "live targeted iOS tests must have one exact verbose LAST_SLICE FULL gate without redundant compile",
-        );
-      }
-      const assetGenerator = config.generatorCatalog?.definitions.find(
-        (definition) => definition.generator_id === "mobl-2023-shared-assets",
-      );
-      if (
-        assetGenerator === undefined ||
-        assetGenerator.trigger_paths.join("\n") !==
-          "SonderClient/SonderClientLibrary/Sources/Shared/AgentAI" ||
-        assetGenerator.output_paths.join("\n") !==
-          "SonderClient/SonderClientLibrary/Sources/Shared/Resources/Assets+Generated.swift"
-      ) {
-        throw new Error("live shared asset accessor must use the exact code-owned generator");
-      }
       const modelRouting = await engineeringModelRoutingFromEnv();
       if (modelRouting === null) {
         throw new Error("RA_ENGINEERING_MODEL_CONFIG_PATH is required for live iOS smoke");
       }
-      const liveAuthority = assertEngineeringLiveQualificationAuthority({
-        selection: liveSelection,
-        routing: modelRouting,
-        executionConfig: config,
-      });
+      const benchmarkPaths = engineeringLiveBenchmarkPathsFromEnv();
+      if (benchmarkPaths === null) {
+        throw new Error("live Engineering benchmark manifest and overlay paths are required");
+      }
+      let mappedConfig = config;
+      const preflightResult = await createAfterEngineeringLivePreflight(
+        {
+          paths: benchmarkPaths,
+          executionConfigPath: configPath,
+          selection: liveSelection,
+          executionConfig: config,
+          routing: modelRouting,
+          hostProbes: {
+            xcodebuildPath,
+            rootPath: config.artifactRoot,
+            probePostgres: async () => {
+              const result = await db.query<{ value: number }>("SELECT 1 AS value");
+              return result.rows[0]?.value;
+            },
+          },
+          requireHostEvidence: true,
+        },
+        (preflight) => {
+          mappedConfig = engineeringExecutionConfigWithGateFailureMapping(
+            config,
+            preflight.mapping,
+          );
+          return createAfterMobl2023LiveProfileContract(
+            {
+              manifest: preflight.resolved.manifest.manifest,
+              executionConfig: mappedConfig,
+              nodeExecutable,
+              swiftgenExecutable,
+              xcodebuildPath,
+            },
+            () =>
+              createEngineeringRoleModelComposition({
+                routing: modelRouting,
+                executionConfig: mappedConfig,
+                decorateTransport: (binding) =>
+                  createEngineeringDebugTransport(binding.transport, {
+                    role: binding.role,
+                    invocation: binding.invocation,
+                  }),
+              }),
+          );
+        },
+      );
+      const profileContract = preflightResult.value.contract;
+      const incrementalSafetyContract = profileContract.positiveSourceProbe;
+      const finalSafetyContract = profileContract.negativeSourceProbe;
+      liveAuthority = preflightResult.preflight.authority;
+      process.stdout.write(
+        `RA045_PREFLIGHT=${JSON.stringify(preflightResult.preflight.evidence ?? null)}\n`,
+      );
+      const roleModels = preflightResult.value.value;
+      expect(mappedConfig.gateFailureMapping).toEqual(preflightResult.preflight.mapping);
+      expect(mappedConfig.gateFailureMapping?.mapping_digest).toBe(
+        preflightResult.preflight.mapping.mapping_digest,
+      );
       const destination = xcodeDestinationFromGateCatalog(
         config.catalog.definitions,
         xcodebuildPath,
@@ -317,8 +224,7 @@ live(
       process.stdout.write(
         `RA045_DEBUG_LOG=${JSON.stringify({ file_name: debugJournal.fileName })}\n`,
       );
-      const sourceRepository = config.workspaceConfig.repositories[config.repositoryId];
-      if (sourceRepository === undefined) throw new Error("configured repository is unavailable");
+      evidenceRoot = config.artifactRoot;
       await runExecutable(
         incrementalSafetyContract.executable,
         [...incrementalSafetyContract.argv],
@@ -399,6 +305,8 @@ live(
       if (granted.status !== "granted") {
         throw new Error(`direct engineering proposal was not granted: ${granted.status}`);
       }
+      evidenceRunId = granted.runId;
+      evidenceJobId = granted.jobId;
 
       const jobs = new JobStore(runtime);
       const lease = await jobs.claim(db, {
@@ -415,15 +323,6 @@ live(
         model: "role-routed-subscription",
         base_sha: sourceHead,
         config_digest: config.configDigest,
-      });
-      const roleModels = createEngineeringRoleModelComposition({
-        routing: modelRouting,
-        executionConfig: config,
-        decorateTransport: (binding) =>
-          createEngineeringDebugTransport(binding.transport, {
-            role: binding.role,
-            invocation: binding.invocation,
-          }),
       });
       const knownSecrets: string[] = [];
       const metrics = new MetricRegistry(knownSecrets);
@@ -444,7 +343,7 @@ live(
           db,
           jobs,
           lease,
-          config,
+          config: mappedConfig,
           transport: roleModels.implementation.transport,
           modelConfig: roleModels.implementation.config,
           readContext,
@@ -496,7 +395,8 @@ live(
           },
         });
       };
-      const handler = createWorkerHandlers({
+      const pumpResultHolder: { value: unknown } = { value: null };
+      const handlers = createWorkerHandlers({
         persistence,
         roles: {},
         logger: new StructuredLogger({ knownSecrets, sink: { log: () => undefined } }),
@@ -504,7 +404,14 @@ live(
         jobs,
         heartbeatIntervalMs: 60_000,
         engineering: makePort,
-      })["agent.implementer"]!;
+        engineeringInvocation: {
+          async run(_lease, work) {
+            const result = await work();
+            pumpResultHolder.value = result;
+            return result;
+          },
+        },
+      });
       const recordDiagnostic = async (error: unknown | null): Promise<string[]> => {
         const diagnosticArtifacts = await db.query<{
           artifact_kind: string;
@@ -623,8 +530,8 @@ live(
                 ? artifact.verification_decision
                 : null,
           })),
-          compiler_diagnostics: compilerDiagnostics,
-          test_diagnostics: testDiagnostics,
+          compiler_diagnostics: [...compilerDiagnostics],
+          test_diagnostics: [...testDiagnostics],
           operations: diagnosticOperations.rows,
           gate_receipts: diagnosticGates.rows,
           error_digest: error === null ? null : engineeringDebugErrorDigest(error),
@@ -632,16 +539,26 @@ live(
         return diagnosticArtifacts.rows.map((artifact) => artifact.artifact_kind);
       };
       try {
-        await runWithEngineeringDebugJournal(debugJournal, () =>
-          handler(lease, async () => undefined),
-        );
+        await runWithEngineeringDebugJournal(debugJournal, async () => {
+          await handlers["agent.implementer"]!(lease, async () => undefined);
+          return pumpResultHolder.value;
+        });
       } catch (error) {
         const artifactKinds = await recordDiagnostic(error);
         await debugJournal?.append({
           event: "RUN_COMPLETED",
+          schema_version: 2,
           status: "FAILED",
           commit_sha: null,
           artifact_kinds: artifactKinds,
+          handler_outcome: "FAILED",
+          engineering_outcome: "FAILED",
+          diagnostic_completeness: "COMPLETE",
+          terminal_reason_code: "FAILED",
+          next_safe_step: "INVESTIGATE",
+          reconciliation_required: false,
+          elapsed_ms: debugJournal?.elapsedMs() ?? 0,
+          last_event_at: debugJournal?.clockNow().toISOString() ?? new Date().toISOString(),
         });
         throw error;
       }
@@ -655,12 +572,28 @@ live(
       const evidenceRows = artifacts.rows.filter((row) => row.artifact_kind === "EvidenceBundle");
       if (commitRows.length !== 1 || evidenceRows.length === 0) {
         const error = new Error("live Engineering ended without exact commit/evidence artifacts");
+        const pumpResult = runtimePumpResult(pumpResultHolder.value);
+        const terminalCode = pumpResult?.terminalReasonCode;
+        const terminalProjection = projectEngineeringLiveTerminal({
+          ...(terminalCode === undefined ? {} : { terminalReasonCode: terminalCode }),
+          hasDurableCommit: false,
+          hasDurableEvidence: evidenceRows.length > 0,
+        });
         await recordDiagnostic(error);
         await debugJournal.append({
           event: "RUN_COMPLETED",
+          schema_version: 2,
           status: "FAILED",
           commit_sha: null,
           artifact_kinds: artifacts.rows.map((row) => row.artifact_kind),
+          handler_outcome: "SUCCEEDED",
+          engineering_outcome: terminalProjection.engineering_outcome,
+          diagnostic_completeness: "COMPLETE",
+          terminal_reason_code: terminalProjection.terminal_reason_code,
+          next_safe_step: terminalProjection.next_safe_step,
+          reconciliation_required: terminalProjection.reconciliation_required,
+          elapsed_ms: debugJournal?.elapsedMs() ?? 0,
+          last_event_at: debugJournal?.clockNow().toISOString() ?? new Date().toISOString(),
         });
         throw error;
       }
@@ -676,6 +609,70 @@ live(
         }).trim(),
       );
       expect(finalSourceHead).toBe(sourceHead);
+      if (workspace === null) throw new Error("engineering workspace mapping disappeared");
+      const control = new EngineeringControlPlaneRepository(runtime);
+      let acceptedCommit: AcceptedLocalCommitProjection | null = null;
+      let acceptedSliceGates: Awaited<ReturnType<typeof projectAcceptedSliceGates>> | null = null;
+      try {
+        await observeEngineeringLiveCommit(
+          join(config.workspaceConfig.workspaceRoot, workspace.case_id, workspace.workspace_id),
+          sourceHead,
+          commit,
+        );
+        const durableArtifacts = await control.listRunArtifactRevisions(db, {
+          runId: granted.runId,
+        });
+        const operationId = selectLocalCommitOperationId(durableArtifacts, {
+          caseId: ids.caseId,
+          runId: granted.runId,
+          jobId: lease.jobId,
+        });
+        const completion = await control.readOperationCompletion(db, { operationId });
+        acceptedCommit = projectAcceptedLocalCommit({
+          rows: durableArtifacts,
+          completion,
+          scope: { caseId: ids.caseId, runId: granted.runId, jobId: lease.jobId },
+        });
+        acceptedSliceGates = await projectAcceptedSliceGates({
+          rows: durableArtifacts,
+          acceptedCommit,
+          catalog: config.catalog,
+          scope: {
+            caseId: ids.caseId,
+            runId: granted.runId,
+            jobId: lease.jobId,
+            workspaceId: workspace.workspace_id,
+            repositoryId: config.repositoryId,
+          },
+          readOperationCompletion: (operationId) =>
+            control.readOperationCompletion(db, { operationId }),
+        });
+      } catch (error) {
+        try {
+          const artifactKinds = await recordDiagnostic(error);
+          await debugJournal.append({
+            event: "RUN_COMPLETED",
+            schema_version: 2,
+            status: "FAILED",
+            commit_sha: typeof commit.commit_sha === "string" ? commit.commit_sha : null,
+            artifact_kinds: artifactKinds,
+            handler_outcome: "SUCCEEDED",
+            engineering_outcome: "INCOMPLETE",
+            diagnostic_completeness: "COMPLETE",
+            terminal_reason_code: "INCOMPLETE",
+            next_safe_step: "RECONCILE",
+            reconciliation_required: true,
+            elapsed_ms: debugJournal?.elapsedMs() ?? 0,
+            last_event_at: debugJournal?.clockNow().toISOString() ?? new Date().toISOString(),
+          });
+        } finally {
+          throw error;
+        }
+      }
+      if (acceptedCommit === null) throw new Error("accepted local commit projection is missing");
+      if (acceptedSliceGates === null || acceptedSliceGates.length === 0) {
+        throw new Error("accepted slice gate projection is missing");
+      }
       const gateRows = await db.query<{ receipt: Record<string, unknown> }>(
         `SELECT c.receipt
            FROM job_completions c
@@ -686,6 +683,7 @@ live(
       );
       expect(gateRows.rowCount).toBeGreaterThan(0);
       const result = {
+        preflight: preflightResult.preflight.evidence ?? null,
         invocation_id: liveAuthority.invocation_id,
         implementer_invocation_digest: liveAuthority.implementer_invocation_digest,
         reviewer_invocation_digest: liveAuthority.reviewer_invocation_digest,
@@ -698,6 +696,36 @@ live(
         commit_sha: commit.commit_sha,
         parent_sha: commit.parent_sha,
         branch: commit.branch,
+        accepted_local_commit: {
+          operation_id: acceptedCommit.operationId,
+          completion_id: acceptedCommit.completionId,
+          command_receipt_ids: acceptedCommit.commandReceiptIds,
+          accepted: acceptedCommit.accepted.map((pair) => ({
+            slice_id: pair.sliceId,
+            attempt: pair.attempt,
+            evidence_digest: pair.evidenceDigest,
+            review_digest: pair.reviewDigest,
+            command_receipt_ids: pair.commandReceiptIds,
+          })),
+        },
+        accepted_gate_projections: acceptedSliceGates.map((projection) => ({
+          slice_id: projection.sliceId,
+          attempt: projection.attempt,
+          evidence_digest: projection.evidenceDigest,
+          implementation_receipt_digest: projection.implementationReceiptDigest,
+          command_receipt_ids: projection.commandReceiptIds,
+          aggregate: {
+            status: projection.gates.aggregate.status,
+            config_digest: projection.gates.aggregate.config_digest,
+            current_tree_digest: projection.gates.aggregate.current_tree_digest,
+            baseline_tree_digest: projection.gates.aggregate.baseline_tree_digest,
+            receipt_ids: projection.gates.aggregate.receipt_ids,
+            blocking_gate_ids: projection.gates.aggregate.blocking_gate_ids,
+          },
+          operation_bindings: projection.gates.operationBindings,
+          completion_ids: projection.gates.completionIds,
+          test_first_completion_ids: projection.gates.testFirstCompletionIds,
+        })),
         artifact_kinds: artifacts.rows.map((row) => row.artifact_kind),
         gate_receipts: gateRows.rows.map(({ receipt }) => ({
           gate_id: receipt.gate_id,
@@ -710,14 +738,46 @@ live(
       await recordDiagnostic(null);
       await debugJournal.append({
         event: "RUN_COMPLETED",
+        schema_version: 2,
         status: "SUCCEEDED",
         commit_sha: typeof commit.commit_sha === "string" ? commit.commit_sha : null,
         artifact_kinds: artifacts.rows.map((row) => row.artifact_kind),
+        handler_outcome: "SUCCEEDED",
+        engineering_outcome: "COMPLETED",
+        diagnostic_completeness: "COMPLETE",
+        terminal_reason_code: "COMPLETED",
+        next_safe_step: "STOP",
+        reconciliation_required: false,
+        elapsed_ms: debugJournal?.elapsedMs() ?? 0,
+        last_event_at: debugJournal?.clockNow().toISOString() ?? new Date().toISOString(),
       });
       process.stdout.write(`RA045_RESULT=${JSON.stringify(result)}\n`);
     } finally {
-      await debugJournal?.close();
-      await created.drop();
+      await closeExportAndDropEngineeringRun({
+        close: async () => {
+          await debugJournal?.close();
+        },
+        export: async () => {
+          if (
+            debugJournal !== undefined &&
+            evidenceRoot !== undefined &&
+            evidenceRunId !== undefined &&
+            evidenceJobId !== undefined &&
+            liveAuthority !== undefined
+          )
+            await exportEngineeringEvidence({
+              artifactRoot: evidenceRoot,
+              caseId: ids.caseId,
+              runId: evidenceRunId,
+              jobId: evidenceJobId,
+              invocationId: liveAuthority.invocation_id,
+              db,
+            });
+        },
+        drop: async () => {
+          await created.drop();
+        },
+      });
     }
   },
   ENGINEERING_LIVE_QUALIFICATION_TIMEOUT_MS,

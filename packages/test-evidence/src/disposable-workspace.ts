@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { cp, lstat, mkdtemp, open, readlink, realpath, readdir, rm } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readlink,
+  realpath,
+  readdir,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -10,6 +21,11 @@ import {
   createWorkspacePathPolicy,
   validateWorkspaceRoot,
 } from "@remoteagent/workspace-runner";
+import {
+  type TrustedEvaluatorInputs,
+  type TrustedEvaluatorInputsSnapshot,
+  validateTrustedEvaluatorInputs,
+} from "./trusted-evaluator-inputs.js";
 
 export const DisposableWorkspaceErrorCode = {
   INVALID_MUTABLE_OUTPUT: "INVALID_MUTABLE_OUTPUT",
@@ -18,6 +34,7 @@ export const DisposableWorkspaceErrorCode = {
   AUTHORITATIVE_TREE_CHANGED: "AUTHORITATIVE_TREE_CHANGED",
   PROTECTED_TREE_CHANGED: "PROTECTED_TREE_CHANGED",
   CLEANUP_FAILED: "CLEANUP_FAILED",
+  INVALID_TRUSTED_EVALUATOR_INPUT: "INVALID_TRUSTED_EVALUATOR_INPUT",
 } as const;
 
 export type DisposableWorkspaceErrorCode =
@@ -42,6 +59,7 @@ export class DisposableWorkspaceError extends Error {
 export type DisposableWorkspaceOptions = Readonly<{
   authoritativeRoot: string;
   mutableOutputs: readonly string[];
+  trustedEvaluatorInputs?: TrustedEvaluatorInputs;
 }>;
 
 export type DisposableWorkspaceEvidence = Readonly<{
@@ -51,6 +69,13 @@ export type DisposableWorkspaceEvidence = Readonly<{
   disposableTreeDigestAfter: string;
   protectedTreeDigestBefore: string;
   protectedTreeDigestAfter: string;
+  evaluatorInputsDigest?: string;
+}>;
+
+export type DisposableWorkspaceCallbackContext = Readonly<{
+  authoritativeTreeDigest: string;
+  disposableTreeDigest: string;
+  evaluatorInputsDigest?: string;
 }>;
 
 export type DisposableWorkspaceRunResult<T> = Readonly<{
@@ -74,6 +99,10 @@ function contained(root: string, target: string): boolean {
 
 function slash(path: string): string {
   return path.split(sep).join("/");
+}
+
+function sha256File(content: Buffer): string {
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 /** Internal copy-boundary primitive shared by durable pre-slice baselines. */
@@ -323,6 +352,82 @@ async function assertMutableBoundary(
   }
 }
 
+async function installTrustedEvaluatorInputs(
+  root: string,
+  mutableRoots: ReadonlySet<string>,
+  input: TrustedEvaluatorInputsSnapshot,
+): Promise<void> {
+  const policy = await createWorkspacePathPolicy(root);
+  for (const file of input.files) {
+    if (isMutablePath(file.relative_path, mutableRoots)) {
+      throw new DisposableWorkspaceError(
+        DisposableWorkspaceErrorCode.INVALID_TRUSTED_EVALUATOR_INPUT,
+        "Trusted evaluator input intersects mutable output",
+      );
+    }
+    const target = join(root, ...file.relative_path.split("/"));
+    const parentParts = file.relative_path.split("/").slice(0, -1);
+    let parent = root;
+    for (const part of parentParts) {
+      parent = join(parent, part);
+      const existing = await lstat(parent).catch((error: unknown) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          return undefined;
+        throw error;
+      });
+      if (existing?.isSymbolicLink() || (existing !== undefined && !existing.isDirectory())) {
+        throw new DisposableWorkspaceError(
+          DisposableWorkspaceErrorCode.INVALID_TRUSTED_EVALUATOR_INPUT,
+          "Trusted evaluator input parent is not a directory",
+        );
+      }
+      if (existing === undefined) await mkdir(parent);
+    }
+    const existing = await lstat(target).catch((error: unknown) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+        return undefined;
+      throw error;
+    });
+    if (existing !== undefined) {
+      throw new DisposableWorkspaceError(
+        DisposableWorkspaceErrorCode.INVALID_TRUSTED_EVALUATOR_INPUT,
+        "Trusted evaluator input collides with an existing path",
+      );
+    }
+    try {
+      if ((await policy.validateCreateTarget(file.relative_path)) !== target)
+        throw new Error("Non-canonical evaluator target");
+      const handle = await open(
+        target,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o644,
+      );
+      try {
+        await handle.writeFile(file.content, "utf8");
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      throw new DisposableWorkspaceError(
+        DisposableWorkspaceErrorCode.INVALID_TRUSTED_EVALUATOR_INPUT,
+        "Unable to install trusted evaluator input safely",
+      );
+    }
+    const actual = await lstat(target);
+    if (!actual.isFile() || sha256File(await readFile(target)) !== file.content_digest) {
+      throw new DisposableWorkspaceError(
+        DisposableWorkspaceErrorCode.INVALID_TRUSTED_EVALUATOR_INPUT,
+        "Trusted evaluator input changed during installation",
+      );
+    }
+  }
+}
+
 /** Remove an ephemeral verification tree without an unbounded shutdown wait. */
 export async function cleanupVerificationTree(parent: string): Promise<void> {
   const deletion = rm(parent, { recursive: true, force: true });
@@ -358,8 +463,12 @@ export async function cleanupVerificationTree(parent: string): Promise<void> {
  */
 export async function runInDisposableWorkspace<T>(
   options: DisposableWorkspaceOptions,
-  run: (disposableRoot: string) => Promise<T>,
+  run: (disposableRoot: string, context: DisposableWorkspaceCallbackContext) => Promise<T>,
 ): Promise<DisposableWorkspaceRunResult<T>> {
+  const trustedInputSnapshot =
+    options.trustedEvaluatorInputs === undefined
+      ? undefined
+      : validateTrustedEvaluatorInputs(options.trustedEvaluatorInputs);
   const authoritativeRoot = await validateWorkspaceRoot(options.authoritativeRoot);
   await assertSafeVerificationTree(authoritativeRoot);
   const authoritativeTreeDigestBefore = await computeTreeDigest(authoritativeRoot);
@@ -382,10 +491,10 @@ export async function runInDisposableWorkspace<T>(
     await assertSafeVerificationTree(authoritativeRoot);
     await assertVerificationTreeHasNoGitEdges(verifiedDisposableRoot);
     await assertSafeVerificationTree(verifiedDisposableRoot);
-    const disposableTreeDigestBefore = await computeTreeDigest(verifiedDisposableRoot);
+    const disposableTreeDigestBeforeCopy = await computeTreeDigest(verifiedDisposableRoot);
     const authorityAfterCopy = await computeTreeDigest(authoritativeRoot);
     if (
-      disposableTreeDigestBefore !== authoritativeTreeDigestBefore ||
+      disposableTreeDigestBeforeCopy !== authoritativeTreeDigestBefore ||
       authorityAfterCopy !== authoritativeTreeDigestBefore
     ) {
       throw new DisposableWorkspaceError(
@@ -399,6 +508,25 @@ export async function runInDisposableWorkspace<T>(
       options.mutableOutputs,
     );
     await assertMutableBoundary(verifiedDisposableRoot, mutableRoots);
+    if (trustedInputSnapshot !== undefined) {
+      try {
+        await installTrustedEvaluatorInputs(
+          verifiedDisposableRoot,
+          mutableRoots,
+          trustedInputSnapshot,
+        );
+      } catch (error) {
+        if (error instanceof DisposableWorkspaceError) throw error;
+        throw new DisposableWorkspaceError(
+          DisposableWorkspaceErrorCode.INVALID_TRUSTED_EVALUATOR_INPUT,
+          "Trusted evaluator input installation failed",
+        );
+      }
+    }
+    const augmentedDisposableTreeDigestBefore =
+      trustedInputSnapshot === undefined
+        ? disposableTreeDigestBeforeCopy
+        : await computeTreeDigest(verifiedDisposableRoot);
     const protectedInventoryBefore = await collectProtectedInventory(
       verifiedDisposableRoot,
       mutableRoots,
@@ -409,7 +537,16 @@ export async function runInDisposableWorkspace<T>(
     );
     let value: T;
     try {
-      value = await run(verifiedDisposableRoot);
+      value = await run(
+        verifiedDisposableRoot,
+        Object.freeze({
+          authoritativeTreeDigest: authoritativeTreeDigestBefore,
+          disposableTreeDigest: augmentedDisposableTreeDigestBefore,
+          ...(trustedInputSnapshot === undefined
+            ? {}
+            : { evaluatorInputsDigest: trustedInputSnapshot.digest }),
+        }),
+      );
     } catch (error) {
       operationFailed = true;
       operationError = error;
@@ -451,10 +588,13 @@ export async function runInDisposableWorkspace<T>(
       evidence: {
         authoritativeTreeDigestBefore,
         authoritativeTreeDigestAfter,
-        disposableTreeDigestBefore,
+        disposableTreeDigestBefore: augmentedDisposableTreeDigestBefore,
         disposableTreeDigestAfter,
         protectedTreeDigestBefore,
         protectedTreeDigestAfter,
+        ...(trustedInputSnapshot === undefined
+          ? {}
+          : { evaluatorInputsDigest: trustedInputSnapshot.digest }),
       },
     };
   } finally {

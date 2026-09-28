@@ -7,6 +7,7 @@ import {
   prepareCompletion,
   type RuntimeRoles,
   type EngineeringRuntimePort,
+  type RuntimePumpResult,
 } from "@remoteagent/agent-orchestrator";
 import {
   JobType,
@@ -56,6 +57,24 @@ export interface HandlerDependencies {
   readonly maxSteps?: number;
   /** Test seam; production renews every ten seconds, well inside the thirty-second lease. */
   readonly heartbeatIntervalMs?: number;
+}
+
+/**
+ * The runtime reports unresolved work as data, but the job handler must still reject so the
+ * scheduler applies its retry/DLQ policy. Carrying the result on the error preserves the
+ * terminal reason for observability without changing that failure semantics.
+ */
+export class CaseResumeUnresolvedError extends Error {
+  readonly runtimeResult: RuntimePumpResult;
+
+  constructor(runtimeResult: RuntimePumpResult) {
+    super(
+      `case.resume did not complete its work; ambiguous: [${runtimeResult.ambiguous.join(", ")}], ` +
+        `blocked: [${runtimeResult.blocked.join(", ")}]`,
+    );
+    this.name = "CaseResumeUnresolvedError";
+    this.runtimeResult = runtimeResult;
+  }
 }
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -242,7 +261,7 @@ async function persistThroughAuditedPath(
  * removed — but it is a latency guard, not an invariant.
  */
 export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = false) {
-  return async (lease: JobLease, heartbeat: () => Promise<void>): Promise<void> => {
+  return async (lease: JobLease, heartbeat: () => Promise<void>): Promise<RuntimePumpResult> => {
     const heartbeatIntervalMs = deps.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
     if (!Number.isSafeInteger(heartbeatIntervalMs) || heartbeatIntervalMs < 1) {
       throw new Error("heartbeatIntervalMs must be a positive safe integer");
@@ -322,11 +341,9 @@ export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = fa
           });
         }
       }
-      throw new Error(
-        `case.resume did not complete its work; ambiguous: [${result.ambiguous.join(", ")}], ` +
-          `blocked: [${result.blocked.join(", ")}]`,
-      );
+      throw new CaseResumeUnresolvedError(result);
     }
+    return result;
   };
 }
 
@@ -341,7 +358,7 @@ export function createCaseResumeHandler(deps: HandlerDependencies, asWriter = fa
  */
 export function createImplementerHandler(deps: HandlerDependencies) {
   const resume = createCaseResumeHandler(deps, true);
-  return async (lease: JobLease, heartbeat: () => Promise<void>): Promise<void> => {
+  return async (lease: JobLease, heartbeat: () => Promise<void>): Promise<RuntimePumpResult> => {
     // Fail closed on the job type before doing any work: `WriterLeaseGuard` requires the
     // lease to carry `WRITER_JOB_TYPE`, and reaching it with anything else would surface as
     // a confusing scope error rather than the actual problem.
@@ -349,10 +366,9 @@ export function createImplementerHandler(deps: HandlerDependencies) {
       throw new Error(`implementer handler received job_type ${lease.jobType}`);
     }
     if (deps.engineeringInvocation === undefined) {
-      await resume(lease, heartbeat);
-      return;
+      return resume(lease, heartbeat);
     }
-    await deps.engineeringInvocation.run(lease, () => resume(lease, heartbeat));
+    return deps.engineeringInvocation.run(lease, () => resume(lease, heartbeat));
   };
 }
 
@@ -388,9 +404,14 @@ export function createWorkerHandlers(
   deps: HandlerDependencies,
   extra: JobTypeHandlers = {},
 ): JobTypeHandlers {
+  const resume = createCaseResumeHandler(deps);
   return {
-    [JobType.CASE_RESUME]: createCaseResumeHandler(deps),
-    [JobType.AGENT_IMPLEMENTER]: createImplementerHandler(deps),
+    [JobType.CASE_RESUME]: async (lease, heartbeat) => {
+      await resume(lease, heartbeat);
+    },
+    [JobType.AGENT_IMPLEMENTER]: async (lease, heartbeat) => {
+      await createImplementerHandler(deps)(lease, heartbeat);
+    },
     ...extra,
   };
 }

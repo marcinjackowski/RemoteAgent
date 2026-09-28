@@ -103,6 +103,10 @@ export const BOUNDED_TEST_CONTENT_POLICY = Object.freeze({
 
 export const DEFAULT_BOUNDED_DISCOVERY_CALLS = 10;
 export const MAX_BOUNDED_DISCOVERY_CALLS = 24;
+/** Hard ceiling for server-owned prefetch, which never becomes model-facing discovery. */
+export const MAX_SERVER_PREFETCH_DISCOVERY_CALLS = 48;
+export const SERVER_PREFETCH_NOT_SEALED = "SERVER_PREFETCH_NOT_SEALED";
+export const SERVER_PREFETCH_ALREADY_SEALED = "SERVER_PREFETCH_ALREADY_SEALED";
 
 /**
  * Path segments that are protected wherever they appear in the tree.
@@ -233,6 +237,15 @@ export type ImplementationToolset = Readonly<{
   readonly commands: readonly string[];
   read(
     input: Readonly<{ operation_id: string; relative_path: string }>,
+  ): Promise<ImplementationToolResult>;
+  /** Server-only; intentionally absent from model-facing definitions. */
+  readExcerpt(
+    input: Readonly<{
+      operation_id: string;
+      relative_path: string;
+      start_line: number;
+      end_line: number;
+    }>,
   ): Promise<ImplementationToolResult>;
   search(
     input: Readonly<{ operation_id: string; query: string; relative_path?: string }>,
@@ -440,6 +453,15 @@ export async function createImplementationToolset(
       guardPath("read", ToolKind.READ_FILE, input.operation_id, [input.relative_path]) ??
       reads.read({ operation_id: input.operation_id, relative_path: input.relative_path }),
 
+    readExcerpt: async (input) =>
+      guardPath("read_excerpt", ToolKind.READ_FILE, input.operation_id, [input.relative_path]) ??
+      reads.readExcerpt({
+        operation_id: input.operation_id,
+        relative_path: input.relative_path,
+        start_line: input.start_line,
+        end_line: input.end_line,
+      }),
+
     config: async (input) =>
       guardPath("config", ToolKind.READ_FILE, input.operation_id, [input.relative_path]) ??
       reads.config({ operation_id: input.operation_id, relative_path: input.relative_path }),
@@ -531,6 +553,10 @@ export async function createImplementationToolset(
 /** Model-visible implementation surface for one accepted vertical slice. */
 export type BoundedImplementationToolset = Readonly<{
   read(input: Readonly<{ relative_path: string }>): Promise<ImplementationToolResult>;
+  /** Server-only diagnostic range read; never dispatched to the model. */
+  readExcerpt?(
+    input: Readonly<{ relative_path: string; start_line: number; end_line: number }>,
+  ): Promise<ImplementationToolResult>;
   search(
     input: Readonly<{ query: string; relative_path?: string }>,
   ): Promise<ImplementationToolResult>;
@@ -560,10 +586,12 @@ export type BoundedImplementationToolset = Readonly<{
   mkdir(
     input: Readonly<{ relative_path: string; recursive?: boolean }>,
   ): Promise<ImplementationToolResult>;
+  /** Seal server-owned discovery and expose the mutation surface. */
+  sealDiscovery(): void;
 }>;
 
 export type BoundedImplementationToolName =
-  "read" | "search" | "tree" | "config" | "write" | "patch" | "mkdir";
+  "read" | "read_excerpt" | "search" | "tree" | "config" | "write" | "patch" | "mkdir";
 
 export type BoundedImplementationToolsetOptions = Omit<
   ImplementationToolsetOptions,
@@ -577,6 +605,8 @@ export type BoundedImplementationToolsetOptions = Omit<
     reservedMutationPaths?: readonly string[];
     /** Exact blocking-correction paths that require at least one non-whitespace replacement. */
     requiredSubstantiveMutationPaths?: readonly string[];
+    /** Exact blocking-correction candidates where one substantive replacement is sufficient. */
+    requiredSubstantiveMutationPathsAny?: readonly string[];
     /** Exact behavioral-test correction paths that must change executable/assertion code. */
     requiredBehavioralMutationPaths?: readonly string[];
     /** A prior durable attempt already proved the test-first mutation chronology for this slice. */
@@ -586,6 +616,8 @@ export type BoundedImplementationToolsetOptions = Omit<
      * prefetched catalog plan; the model then receives mutation-only tools.
      */
     maxDiscoveryCalls?: number;
+    /** Enables the server-only prefetch phase; mutations are refused until sealed. */
+    serverPrefetch?: boolean;
     /** Required server authority, awaited immediately before every mutation syscall. */
     beforeMutation(): Promise<void>;
     operationIdFor(tool: BoundedImplementationToolName, sequence: number): string;
@@ -593,6 +625,13 @@ export type BoundedImplementationToolsetOptions = Omit<
   }>;
 
 const boundedRead = z.strictObject({ relative_path: workspaceRelativePath });
+const boundedReadExcerpt = z
+  .strictObject({
+    relative_path: workspaceRelativePath,
+    start_line: z.number().int().positive(),
+    end_line: z.number().int().positive(),
+  })
+  .refine((value) => value.end_line >= value.start_line);
 const boundedSearch = z.strictObject({
   query: z.string().max(4096),
   relative_path: workspaceRelativePath.optional(),
@@ -679,12 +718,28 @@ export async function createBoundedImplementationToolset(
       ),
     ].sort(),
   );
+  const requiredSubstantiveMutationPathsAny = Object.freeze(
+    [
+      ...new Set(
+        (options.requiredSubstantiveMutationPathsAny ?? []).map((path) =>
+          workspaceRelativePath.parse(path),
+        ),
+      ),
+    ].sort(),
+  );
   if (
     requiredSubstantiveMutationPaths.some(
       (path) => !allowed.some((root) => path === root || path.startsWith(`${root}/`)),
     )
   ) {
     throw new Error("required substantive mutation paths must be contained by allowed paths");
+  }
+  if (
+    requiredSubstantiveMutationPathsAny.some(
+      (path) => !allowed.some((root) => path === root || path.startsWith(`${root}/`)),
+    )
+  ) {
+    throw new Error("required substantive candidate paths must be contained by allowed paths");
   }
   const requiredBehavioralMutationPaths = Object.freeze(
     [
@@ -696,17 +751,25 @@ export async function createBoundedImplementationToolset(
     ].sort(),
   );
   if (
-    requiredBehavioralMutationPaths.some((path) => !requiredSubstantiveMutationPaths.includes(path))
+    requiredBehavioralMutationPaths.some(
+      (path) =>
+        !requiredSubstantiveMutationPaths.includes(path) &&
+        !requiredSubstantiveMutationPathsAny.includes(path),
+    )
   ) {
     throw new Error("behavioral mutation paths must also require substantive correction");
   }
+  const serverPrefetch = options.serverPrefetch === true;
   const maxDiscoveryCalls = options.maxDiscoveryCalls ?? DEFAULT_BOUNDED_DISCOVERY_CALLS;
   if (
     !Number.isSafeInteger(maxDiscoveryCalls) ||
     maxDiscoveryCalls < 1 ||
-    maxDiscoveryCalls > MAX_BOUNDED_DISCOVERY_CALLS
+    maxDiscoveryCalls >
+      (serverPrefetch ? MAX_SERVER_PREFETCH_DISCOVERY_CALLS : MAX_BOUNDED_DISCOVERY_CALLS)
   ) {
-    throw new Error("maxDiscoveryCalls must be a positive safe integer within the code-owned cap");
+    throw new Error(
+      `maxDiscoveryCalls must be a positive safe integer within the ${serverPrefetch ? "server prefetch" : "code-owned"} cap`,
+    );
   }
 
   const reads = await createImplementationReadTools({
@@ -737,8 +800,10 @@ export async function createBoundedImplementationToolset(
   let sequence = 0;
   let ambiguous = false;
   let discoveryCalls = 0;
+  let discoverySealed = false;
   let firstMutationSucceeded = options.firstMutationAlreadySatisfied === true;
   const satisfiedSubstantiveMutationPaths = new Set<string>();
+  let satisfiedSubstantiveMutationPathAny = false;
 
   const nextId = (tool: BoundedImplementationToolName): string => {
     if (ambiguous) throw new Error("AMBIGUOUS implementation operation requires reconciliation");
@@ -761,7 +826,8 @@ export async function createBoundedImplementationToolset(
   const isReservedMutationPath = (path: string): boolean =>
     reservedMutationPaths.some((root) => path === root || path.startsWith(`${root}/`));
   const requiresSubstantiveMutation = (path: string): boolean =>
-    requiredSubstantiveMutationPaths.includes(path);
+    requiredSubstantiveMutationPaths.includes(path) ||
+    requiredSubstantiveMutationPathsAny.includes(path);
   const requiresBehavioralMutation = (path: string): boolean =>
     requiredBehavioralMutationPaths.includes(path);
   const changesNonWhitespace = (oldContent: string, newContent: string): boolean =>
@@ -793,13 +859,21 @@ export async function createBoundedImplementationToolset(
     const pendingPaths = requiredSubstantiveMutationPaths.filter(
       (path) => !satisfiedSubstantiveMutationPaths.has(path),
     );
-    if (pendingPaths.length === 0) return null;
-    const requestedPendingPaths = pendingPaths.filter((path) => requestedPaths.includes(path));
+    const anyPending =
+      requiredSubstantiveMutationPathsAny.length > 0 && !satisfiedSubstantiveMutationPathAny;
+    if (pendingPaths.length === 0 && !anyPending) return null;
+    const candidatePaths = [
+      ...requiredSubstantiveMutationPaths,
+      ...requiredSubstantiveMutationPathsAny,
+    ];
+    const requestedPendingPaths = candidatePaths.filter((path) => requestedPaths.includes(path));
     const missingQualification = requestedPendingPaths.find(
       (path) => !qualifyingPaths.includes(path),
     );
     if (requestedPendingPaths.length > 0 && missingQualification === undefined) return null;
-    const behavioralRequired = requiresBehavioralMutation(missingQualification ?? pendingPaths[0]!);
+    const behavioralRequired = requiresBehavioralMutation(
+      missingQualification ?? pendingPaths[0] ?? requiredSubstantiveMutationPathsAny[0]!,
+    );
     return refuseMutation(
       tool,
       kind,
@@ -808,8 +882,10 @@ export async function createBoundedImplementationToolset(
         ? CORRECTION_BEHAVIORAL_MUTATION_REQUIRED
         : CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED,
       behavioralRequired
-        ? "Change executable behavior or assertions in every exact behavioral correction path; import, comment, and whitespace-only edits do not count."
-        : "Make a non-whitespace edit to every exact required correction path before unrelated mutations.",
+        ? "Change executable behavior or assertions in an exact behavioral correction candidate; import, comment, and whitespace-only edits do not count."
+        : anyPending && pendingPaths.length === 0
+          ? "Make a non-whitespace edit to at least one exact required correction candidate."
+          : "Make a non-whitespace edit to every exact required correction path before unrelated mutations.",
     );
   };
   const markSubstantiveCorrection = (
@@ -819,6 +895,12 @@ export async function createBoundedImplementationToolset(
     if (result.outcome === ToolOutcome.SUCCEEDED) {
       for (const path of qualifyingPaths) {
         if (result.changed_files.includes(path)) satisfiedSubstantiveMutationPaths.add(path);
+        if (
+          result.changed_files.includes(path) &&
+          requiredSubstantiveMutationPathsAny.includes(path)
+        ) {
+          satisfiedSubstantiveMutationPathAny = true;
+        }
       }
     }
     return result;
@@ -965,6 +1047,31 @@ export async function createBoundedImplementationToolset(
     kind: ToolKind,
     operationId: string,
   ): ImplementationToolResult | null => {
+    if (discoverySealed) {
+      const value = canonicalJsonStringify({
+        tool,
+        refused: true,
+        failure_code: SERVER_PREFETCH_ALREADY_SEALED,
+        next_action: "Use write or patch with the prefetched evidence.",
+      });
+      return implementationToolResult.parse({
+        schema_version: 1,
+        operation_id: operationId,
+        identity: options.identity,
+        kind,
+        outcome: ToolOutcome.FAILED,
+        before_digest: null,
+        after_digest: null,
+        changed_files: [],
+        failure_code: SERVER_PREFETCH_ALREADY_SEALED,
+        output: {
+          trust: TrustLevel.UNTRUSTED_DATA,
+          value,
+          truncated: false,
+          original_byte_length: encoder.encode(value).length,
+        },
+      });
+    }
     if (discoveryCalls < maxDiscoveryCalls) {
       discoveryCalls += 1;
       return null;
@@ -995,6 +1102,10 @@ export async function createBoundedImplementationToolset(
   };
 
   return Object.freeze({
+    sealDiscovery: () => {
+      if (!serverPrefetch) throw new Error("server prefetch mode is required to seal discovery");
+      discoverySealed = true;
+    },
     read: async (raw) => {
       const input = boundedRead.parse(raw);
       const operationId = nextId("read");
@@ -1006,6 +1117,24 @@ export async function createBoundedImplementationToolset(
       if (exhausted !== null) return observe(exhausted);
       return observe(
         await reads.read({ operation_id: operationId, relative_path: input.relative_path }),
+      );
+    },
+    readExcerpt: async (raw) => {
+      const input = boundedReadExcerpt.parse(raw);
+      const operationId = nextId("read_excerpt");
+      const denied = protectedResult("read_excerpt", ToolKind.READ_FILE, operationId, [
+        input.relative_path,
+      ]);
+      if (denied !== null) return observe(denied);
+      const exhausted = refuseDiscoveryBudget("read_excerpt", ToolKind.READ_FILE, operationId);
+      if (exhausted !== null) return observe(exhausted);
+      return observe(
+        await reads.readExcerpt({
+          operation_id: operationId,
+          relative_path: input.relative_path,
+          start_line: input.start_line,
+          end_line: input.end_line,
+        }),
       );
     },
     search: async (raw) => {
@@ -1068,6 +1197,16 @@ export async function createBoundedImplementationToolset(
     write: async (raw) => {
       const input = boundedWrite.parse(raw);
       const operationId = nextId("write");
+      if (serverPrefetch && !discoverySealed)
+        return observe(
+          refuseMutation(
+            "write",
+            ToolKind.WRITE_FILE,
+            operationId,
+            SERVER_PREFETCH_NOT_SEALED,
+            "Complete server-owned prefetch and seal discovery before mutating.",
+          ),
+        );
       if (!isAllowed(input.relative_path)) {
         return observe(refuseOutside("write", ToolKind.WRITE_FILE, operationId));
       }
@@ -1134,6 +1273,16 @@ export async function createBoundedImplementationToolset(
     patch: async (raw) => {
       const input = boundedPatch.parse(raw);
       const operationId = nextId("patch");
+      if (serverPrefetch && !discoverySealed)
+        return observe(
+          refuseMutation(
+            "patch",
+            ToolKind.APPLY_PATCH,
+            operationId,
+            SERVER_PREFETCH_NOT_SEALED,
+            "Complete server-owned prefetch and seal discovery before mutating.",
+          ),
+        );
       const paths = ("files" in input ? input.files : input.replacement_files).map(
         (file) => file.relative_path,
       );
@@ -1233,6 +1382,16 @@ export async function createBoundedImplementationToolset(
     mkdir: async (raw) => {
       const input = boundedMkdir.parse(raw);
       const operationId = nextId("mkdir");
+      if (serverPrefetch && !discoverySealed)
+        return observe(
+          refuseMutation(
+            "mkdir",
+            ToolKind.WRITE_FILE,
+            operationId,
+            SERVER_PREFETCH_NOT_SEALED,
+            "Complete server-owned prefetch and seal discovery before mutating.",
+          ),
+        );
       if (!isAllowed(input.relative_path)) {
         return observe(refuseOutside("mkdir", ToolKind.WRITE_FILE, operationId));
       }

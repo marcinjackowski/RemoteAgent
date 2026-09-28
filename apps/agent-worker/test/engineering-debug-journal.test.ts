@@ -1,9 +1,17 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import {
+  appendFile as appendToFile,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, it } from "vitest";
-import { canonicalDigest } from "@remoteagent/contracts";
+import { canonicalDigest, canonicalJsonStringify } from "@remoteagent/contracts";
 import type { Database, JobLease } from "@remoteagent/database";
 import {
   createRuntimeConfig,
@@ -16,6 +24,7 @@ import {
   type RuntimeTransport,
 } from "@remoteagent/model-runtime";
 import { StructuredLogger } from "@remoteagent/observability";
+import { VerificationGateReceipt } from "@remoteagent/test-evidence";
 import * as z from "zod";
 
 import {
@@ -29,6 +38,10 @@ import {
   ENGINEERING_VERIFIER_MODEL_CALL_TOKEN_RESERVE,
   ENGINEERING_MODEL_WARNING_TOKEN_LIMIT,
   EngineeringDebugJournal,
+  closeExportAndDropEngineeringRun,
+  exportEngineeringEvidence,
+  reconstructEngineeringDebugJournal,
+  writeReconstructedEngineeringDebugSummary,
   engineeringCompilerDiagnosticJournalRows,
   engineeringXcodeTestDiagnosticJournalRows,
   createEngineeringDebugTransport,
@@ -47,11 +60,83 @@ import {
   runWithEngineeringDebugSlice,
   runWithEngineeringDebugStage,
 } from "../src/engineering-debug-journal.js";
+import { CaseResumeUnresolvedError } from "../src/handlers.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+it("records deterministic stage lifecycle durations with the injected clock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-clock-stage-"));
+  roots.push(root);
+  let now = 0;
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "clock-stage",
+    now: () => new Date(now),
+  });
+  await runWithEngineeringDebugJournal(journal, async () => {
+    await runWithEngineeringDebugStage("SYSTEM_DESIGN", async () => {
+      now = 37;
+    });
+    await expect(
+      runWithEngineeringDebugStage("PROGRAM_DESIGN", async () => {
+        now = 91;
+        throw new Error("bounded");
+      }),
+    ).rejects.toThrow("bounded");
+  });
+  await journal.close();
+  const events = (await readFile(journal.filePath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((event) => event.event === "DECISION");
+  expect(events.filter((event) => event.decision_code === "STAGE_COMPLETED")[0].duration_ms).toBe(
+    37,
+  );
+  expect(events.filter((event) => event.decision_code === "STAGE_FAILED")[0].duration_ms).toBe(54);
+});
+
+it("records deterministic model response durations for success and error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-clock-model-"));
+  roots.push(root);
+  let now = 0;
+  const config = {
+    model: { provider: "test", model_id: "model" },
+    timeoutMs: 1000,
+    toolLimits: { maxIterations: 1, maxCalls: 1 },
+  } as const;
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "clock-model",
+    now: () => new Date(now),
+  });
+  let call = 0;
+  const transport = createEngineeringDebugTransport({
+    converse: async (_request, cfg) => {
+      now += call++ === 0 ? 12 : 19;
+      if (call === 2) throw new Error("bounded");
+      return {
+        model: cfg.model,
+        content: [],
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+    },
+  });
+  await runWithEngineeringDebugJournal(journal, async () => {
+    await transport.converse({ messages: [] }, config);
+    await expect(transport.converse({ messages: [] }, config)).rejects.toThrow("bounded");
+  });
+  await journal.close();
+  const events = (await readFile(journal.filePath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((event) => event.event === "MODEL_USAGE");
+  expect(events.map((event) => event.response_duration_ms)).toEqual([12, 19]);
 });
 
 it("uses the threefold diagnostic token budget selected for extended Codex runs", () => {
@@ -60,8 +145,8 @@ it("uses the threefold diagnostic token budget selected for extended Codex runs"
   expect(ENGINEERING_MODEL_WARNING_TOKEN_LIMIT).toBe(1_200_000);
   expect(ENGINEERING_MODEL_HARD_TOKEN_LIMIT).toBe(1_800_000);
   expect(ENGINEERING_MODEL_CALL_TOKEN_RESERVE).toBe(105_000);
-  expect(ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE).toBe(64_000);
-  expect(ENGINEERING_CORRECTION_TAIL_MODEL_CALL_TOKEN_RESERVE).toBe(32_000);
+  expect(ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE).toBe(128_000);
+  expect(ENGINEERING_CORRECTION_TAIL_MODEL_CALL_TOKEN_RESERVE).toBe(128_000);
   expect(ENGINEERING_REVIEWER_MODEL_CALL_TOKEN_RESERVE).toBe(32_000);
   expect(ENGINEERING_VERIFIER_MODEL_CALL_TOKEN_RESERVE).toBe(32_000);
 });
@@ -256,7 +341,7 @@ it("writes one ordered content-free JSONL file per Engineering invocation", asyn
   expect((await stat(first.summaryFilePath)).mode & 0o777).toBe(0o600);
 });
 
-it("uses the last global cumulative provider usage across routed roles", async () => {
+it("aggregates provider-reported response deltas across routed roles", async () => {
   const root = await mkdtemp(join(tmpdir(), "engineering-debug-"));
   roots.push(root);
   const journal = await EngineeringDebugJournal.create({
@@ -277,6 +362,7 @@ it("uses the last global cumulative provider usage across routed roles", async (
       input_tokens: usage.total,
       output_tokens: 0,
       total_tokens: usage.total,
+      response_total_tokens: usage.total === 350 ? 250 : usage.total,
       responses_without_usage: 0,
       responses_with_partial_usage: 0,
       comparison: "TARGET",
@@ -285,8 +371,8 @@ it("uses the last global cumulative provider usage across routed roles", async (
   await journal.close();
 
   const summary = await readFile(journal.summaryFilePath, "utf8");
-  expect(summary).toContain("Provider-reported tokens: 350 / target");
-  expect(summary).not.toContain("Provider-reported tokens: 650 / target");
+  expect(summary).toContain("Provider-reported tokens: 650 / target");
+  expect(summary).not.toContain("Provider-reported tokens: 350 / target");
 });
 
 it("rejects raw narrative fields and writes nothing after close", async () => {
@@ -316,6 +402,40 @@ it("rejects raw narrative fields and writes nothing after close", async () => {
       artifact_kinds: [],
     }),
   ).rejects.toThrow(/closed/);
+});
+
+it("enforces complete v2 outcome projections while accepting legacy v1", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-schema-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "schema-versioned",
+  });
+  expect(() =>
+    journal.append({
+      event: "RUN_COMPLETED",
+      schema_version: 2,
+      status: "FAILED",
+      commit_sha: null,
+      artifact_kinds: [],
+    } as never),
+  ).toThrow();
+  expect(() =>
+    journal.append({
+      event: "RUN_COMPLETED",
+      status: "FAILED",
+      commit_sha: null,
+      artifact_kinds: [],
+      handler_outcome: "FAILED",
+    } as never),
+  ).toThrow();
+  await journal.append({
+    event: "RUN_COMPLETED",
+    status: "FAILED",
+    commit_sha: null,
+    artifact_kinds: ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"],
+  });
+  await journal.close();
 });
 
 it("records slice checklist, round and token budgets with code-owned decision codes", async () => {
@@ -962,9 +1082,9 @@ it("creates a distinct terminal journal for every production handler invocation"
   await runner.run(lease, async () => undefined);
   await expect(
     runner.run(lease, async () => {
-      throw new Error("private failure at /Users/private/source.swift");
+      throw new ToolLimitError("private budget message", "TOOL_CALL_LIMIT_EXCEEDED");
     }),
-  ).rejects.toThrow(/private failure/);
+  ).rejects.toBeInstanceOf(ToolLimitError);
 
   const directory = join(root, "engineering-debug");
   const files = (await readdir(directory)).sort();
@@ -976,21 +1096,23 @@ it("creates a distinct terminal journal for every production handler invocation"
   const records = await Promise.all(
     journals.map((file) => readFile(join(directory, file), "utf8")),
   );
-  expect(records.some((text) => text.includes('"status":"SUCCEEDED"'))).toBe(true);
-  expect(records.some((text) => text.includes('"status":"FAILED"'))).toBe(true);
+  expect(records.every((text) => text.includes('"status":"FAILED"'))).toBe(true);
+  expect(records.every((text) => text.includes('"lease_deadline_at":"'))).toBe(true);
   expect(records.every((text) => text.includes('"commit_sha":"aaaaaaaa'))).toBe(true);
   expect(records.every((text) => text.includes('"gate_id":"unit"'))).toBe(true);
   expect(records.every((text) => text.includes('"outcome":"FAILED"'))).toBe(true);
   expect(records.every((text) => text.includes('"verification_decision":"FAILED"'))).toBe(true);
   expect(records.every((text) => text.includes(testDiagnostic.test_name))).toBe(true);
   expect(records.every((text) => !text.includes(testMessage))).toBe(true);
-  expect(records.every((text) => !text.includes("private failure"))).toBe(true);
+  expect(
+    records.some((text) => text.includes('"error_detail_code":"TOOL_CALL_LIMIT_EXCEEDED"')),
+  ).toBe(true);
+  expect(records.every((text) => !text.includes("private budget message"))).toBe(true);
   expect(records.every((text) => !text.includes("/Users/private"))).toBe(true);
   const summaryRecords = await Promise.all(
     summaries.map((file) => readFile(join(directory, file), "utf8")),
   );
-  expect(summaryRecords.some((text) => text.includes("Result: **SUCCEEDED**"))).toBe(true);
-  expect(summaryRecords.some((text) => text.includes("Result: **FAILED**"))).toBe(true);
+  expect(summaryRecords.every((text) => text.includes("Result: **FAILED**"))).toBe(true);
   expect(
     summaryRecords.every((text) => text.includes("| unit | CURRENT | FAILED | 1 | 123 |")),
   ).toBe(true);
@@ -1027,6 +1149,205 @@ it("creates a distinct terminal journal for every production handler invocation"
     ),
   ).toBe(true);
   expect(diagnosticQueries.every((sql) => !sql.includes("jsonb_array_elements"))).toBe(true);
+});
+
+it("separates durable Engineering outcome from handler completion", async () => {
+  const runScenario = async (input: {
+    name: string;
+    artifacts: readonly Record<string, unknown>[];
+    work?: () => Promise<unknown>;
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), `engineering-debug-${input.name}-`));
+    roots.push(root);
+    const database = {
+      query: async (sql: string) => {
+        if (sql.includes("artifact_kind = 'GateFailure'")) return { rows: [] };
+        if (sql.includes("engineering_artifact_revisions")) return { rows: input.artifacts };
+        return { rows: [] };
+      },
+    } as unknown as Database;
+    const runner = createEngineeringInvocationJournalRunner({
+      artifactRoot: root,
+      db: database,
+      model: "model",
+      configDigest: canonicalDigest({ config: input.name }),
+      logger: new StructuredLogger({ sink: { log: () => undefined } }),
+    });
+    const lease: JobLease = {
+      jobId: `job-${input.name}`,
+      caseId: `case-${input.name}`,
+      jobType: "agent.implementer",
+      payload: { caseId: `case-${input.name}`, runId: `run-${input.name}`, workUnitId: "unit" },
+      provider: null,
+      serializationKey: `case-${input.name}`,
+      attempts: 1,
+      maxAttempts: 3,
+      fencingToken: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+      leaseOwner: "worker-1",
+    };
+    let thrown: unknown;
+    try {
+      await runner.run(lease, input.work ?? (async () => "completed"));
+    } catch (error) {
+      thrown = error;
+    }
+    const journalFile = (await readdir(join(root, "engineering-debug"))).find((file) =>
+      file.endsWith(".jsonl"),
+    );
+    if (journalFile === undefined) throw new Error("missing debug journal");
+    return {
+      thrown,
+      text: await readFile(join(root, "engineering-debug", journalFile), "utf8"),
+    };
+  };
+  const artifact = (artifactKind: string, commitSha: string | null = null) => ({
+    artifact_kind: artifactKind,
+    stage: "ENGINEERING",
+    stage_attempt: 1,
+    commit_sha: commitSha,
+    review_decision: null,
+    verification_decision: null,
+    terminal_reason: null,
+  });
+
+  const blocked = await runScenario({
+    name: "blocked",
+    artifacts: [{ ...artifact("TerminalReason"), terminal_reason: "BLOCKED" }],
+  });
+  expect(blocked.thrown).toBeUndefined();
+  expect(blocked.text).toContain('"status":"FAILED"');
+  expect(blocked.text).toContain('"engineering_outcome":"BLOCKED"');
+  expect(blocked.text).toContain('"handler_outcome":"SUCCEEDED"');
+
+  const supervisorBlocked = await runScenario({
+    name: "supervisor-gate-cap",
+    artifacts: Array.from({ length: 8 }, () => artifact("GateFailure")),
+    work: async () => ({ terminalReasonCode: "GATE_CORRECTION_LIMIT_EXHAUSTED" }),
+  });
+  expect(supervisorBlocked.thrown).toBeUndefined();
+  expect(supervisorBlocked.text).toContain('"engineering_outcome":"BLOCKED"');
+  expect(supervisorBlocked.text).toContain(
+    '"terminal_reason_code":"GATE_CORRECTION_LIMIT_EXHAUSTED"',
+  );
+  expect(supervisorBlocked.text).toContain('"next_safe_step":"RETRY"');
+  expect(supervisorBlocked.text).toContain('"reconciliation_required":false');
+
+  const thrownSupervisorBlocked = await runScenario({
+    name: "supervisor-gate-cap-thrown",
+    artifacts: Array.from({ length: 8 }, () => artifact("GateFailure")),
+    work: async () => {
+      throw new CaseResumeUnresolvedError({
+        progressed: 0,
+        ambiguous: [],
+        blocked: ["unit-gate-cap"],
+        waiting: [],
+        merges: [],
+        terminalReasonCode: "GATE_CORRECTION_LIMIT_EXHAUSTED",
+      });
+    },
+  });
+  expect(thrownSupervisorBlocked.thrown).toBeInstanceOf(CaseResumeUnresolvedError);
+  expect(thrownSupervisorBlocked.text).toContain('"handler_outcome":"FAILED"');
+  expect(thrownSupervisorBlocked.text).toContain('"engineering_outcome":"BLOCKED"');
+  expect(thrownSupervisorBlocked.text).toContain(
+    '"terminal_reason_code":"GATE_CORRECTION_LIMIT_EXHAUSTED"',
+  );
+  expect(thrownSupervisorBlocked.text).toContain('"next_safe_step":"RETRY"');
+  expect(thrownSupervisorBlocked.text).toContain('"reconciliation_required":false');
+
+  const cancelled = await runScenario({
+    name: "cancelled",
+    artifacts: [{ ...artifact("TerminalReason"), terminal_reason: "CANCELLED" }],
+  });
+  expect(cancelled.text).toContain('"status":"FAILED"');
+  expect(cancelled.text).toContain('"engineering_outcome":"CANCELLED"');
+  expect(cancelled.text).toContain('"terminal_reason_code":"CANCELLED"');
+  expect(cancelled.text).toContain('"next_safe_step":"WAIT"');
+  expect(cancelled.text).toContain('"reconciliation_required":false');
+
+  const ambiguous = await runScenario({
+    name: "ambiguous",
+    artifacts: [{ ...artifact("TerminalReason"), terminal_reason: "AMBIGUOUS" }],
+  });
+  expect(ambiguous.text).toContain('"terminal_reason_code":"AMBIGUOUS"');
+  expect(ambiguous.text).toContain('"next_safe_step":"RECONCILE"');
+  expect(ambiguous.text).toContain('"reconciliation_required":true');
+
+  const waiting = await runScenario({
+    name: "needs-clarification",
+    artifacts: [{ ...artifact("TerminalReason"), terminal_reason: "NEEDS_CLARIFICATION" }],
+  });
+  expect(waiting.text).toContain('"status":"FAILED"');
+  expect(waiting.text).toContain('"engineering_outcome":"WAITING"');
+
+  const incomplete = await runScenario({ name: "empty", artifacts: [] });
+  expect(incomplete.text).toContain('"engineering_outcome":"INCOMPLETE"');
+
+  const committed = await runScenario({
+    name: "committed",
+    artifacts: [
+      { ...artifact("ReviewDecision"), review_decision: "PASS" },
+      { ...artifact("VerificationDecision"), verification_decision: "VERIFIED" },
+      { ...artifact("LocalCommitReceipt", "a".repeat(40)), review_decision: null },
+    ],
+  });
+  expect(committed.text).toContain('"engineering_outcome":"COMPLETED"');
+
+  const supervisorCompleted = await runScenario({
+    name: "supervisor-completed",
+    artifacts: [
+      { ...artifact("ReviewDecision"), review_decision: "PASS" },
+      { ...artifact("VerificationDecision"), verification_decision: "VERIFIED" },
+      { ...artifact("LocalCommitReceipt", "a".repeat(40)) },
+    ],
+    work: async () => ({ terminalReasonCode: "COMPLETED" }),
+  });
+  expect(supervisorCompleted.thrown).toBeUndefined();
+  expect(supervisorCompleted.text).toContain('"engineering_outcome":"COMPLETED"');
+  expect(supervisorCompleted.text).toContain('"terminal_reason_code":"COMPLETED"');
+  expect(supervisorCompleted.text).toContain('"next_safe_step":"STOP"');
+
+  const supervisorCompletedWithoutEvidence = await runScenario({
+    name: "supervisor-completed-without-evidence",
+    artifacts: [],
+    work: async () => ({ terminalReasonCode: "COMPLETED" }),
+  });
+  expect(supervisorCompletedWithoutEvidence.text).toContain('"engineering_outcome":"INCOMPLETE"');
+  expect(committed.text).toContain('"commit_sha":"aaaaaaaa');
+
+  const missingCommit = await runScenario({
+    name: "missing-commit",
+    artifacts: [
+      { ...artifact("ReviewDecision"), review_decision: "PASS" },
+      { ...artifact("VerificationDecision"), verification_decision: "VERIFIED" },
+    ],
+  });
+  expect(missingCommit.text).toContain('"status":"FAILED"');
+  expect(missingCommit.text).toContain('"engineering_outcome":"INCOMPLETE"');
+  expect(missingCommit.text).toContain('"commit_sha":null');
+
+  const inconsistent = await runScenario({
+    name: "inconsistent-commit",
+    artifacts: [
+      { ...artifact("ReviewDecision"), review_decision: "PASS" },
+      { ...artifact("VerificationDecision"), verification_decision: "FAILED" },
+      { ...artifact("LocalCommitReceipt", "b".repeat(40)), review_decision: null },
+    ],
+  });
+  expect(inconsistent.text).toContain('"status":"FAILED"');
+  expect(inconsistent.text).toContain('"engineering_outcome":"FAILED"');
+
+  const thrown = await runScenario({
+    name: "thrown",
+    artifacts: [],
+    work: async () => {
+      throw new Error("callback failed");
+    },
+  });
+  expect(thrown.thrown).toBeInstanceOf(Error);
+  expect(thrown.text).toContain('"handler_outcome":"FAILED"');
+  expect(thrown.text).toContain('"engineering_outcome":"FAILED"');
 });
 
 it("shares the durable compiler diagnostic projection with the live invocation journal", () => {
@@ -1228,7 +1549,7 @@ it("refuses the next provider call before the remaining hard-limit reserve can b
   expect(text).toContain('"decision_code":"MODEL_CALL_REFUSED_BUDGET"');
 });
 
-it("uses the bounded correction initial reserve and compact tail without weakening ordinary calls", async () => {
+it("uses the conservative correction reserve without weakening ordinary calls", async () => {
   const root = await mkdtemp(join(tmpdir(), "engineering-debug-correction-reserve-"));
   roots.push(root);
   const journal = await EngineeringDebugJournal.create({
@@ -1238,8 +1559,9 @@ it("uses the bounded correction initial reserve and compact tail without weakeni
   let calls = 0;
   const totals = [
     ENGINEERING_MODEL_HARD_TOKEN_LIMIT - ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE,
-    31_000,
-    1_000,
+    0,
+    0,
+    0,
   ];
   const transport = createEngineeringDebugTransport({
     async converse(_request, config) {
@@ -1261,18 +1583,54 @@ it("uses the bounded correction initial reserve and compact tail without weakeni
 
   await runWithEngineeringDebugJournal(journal, async () => {
     await transport.converse({ messages: [] }, config);
-    await expect(transport.converse({ messages: [] }, config)).rejects.toThrow(
-      /105000-token reserve/u,
-    );
+    await transport.converse({ messages: [] }, config);
     await runWithEngineeringCorrectionModelCallBudget(async () => {
       await transport.converse({ messages: [] }, config);
       await transport.converse({ messages: [] }, config);
     });
   });
-  expect(calls).toBe(3);
+  expect(calls).toBe(4);
   await journal.close();
-  const text = await readFile(journal.filePath, "utf8");
-  expect(text).toContain('"decision_code":"MODEL_CALL_REFUSED_BUDGET"');
+});
+
+it("refuses a correction at the live-accounted hard-limit boundary before delegate dispatch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-correction-admission-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "correction-admission-boundary",
+  });
+  let delegateCalls = 0;
+  const transport = createEngineeringDebugTransport({
+    async converse() {
+      delegateCalls += 1;
+      return { model: { provider: "qualification_fake", model_id: "model" }, content: [] };
+    },
+  });
+  const config = {
+    model: { provider: "qualification_fake", model_id: "model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 1, maxCalls: 1 },
+    retryPolicy: { maxAttempts: 1, baseDelayMs: 1 },
+  } as const;
+  await expect(
+    runWithEngineeringDebugJournal(
+      journal,
+      () =>
+        runWithEngineeringCorrectionModelCallBudget(() =>
+          transport.converse({ messages: [] }, config),
+        ),
+      {
+        priorJournalCount: 1,
+        providerReportedTokens: 1_721_856,
+        estimatedTokens: 0,
+        accountedTokens: 1_721_856,
+        completeness: "COMPLETE",
+      },
+    ),
+  ).rejects.toThrow(/128000-token reserve/u);
+  expect(delegateCalls).toBe(0);
+  await journal.close();
 });
 
 it.each(["REVIEWER", "VERIFIER"] as const)(
@@ -1424,10 +1782,465 @@ it("keeps a completed Engineering result when only diagnostic persistence fails"
   const text = await readFile(join(directory, journalFile), "utf8");
   expect(text).toContain('"stage":"RUN_DIAGNOSTIC"');
   expect(text).toContain('"event":"RUN_COMPLETED"');
-  expect(text).toContain('"status":"SUCCEEDED"');
+  expect(text).toContain('"status":"FAILED"');
+  expect(text).toContain('"engineering_outcome":"UNKNOWN"');
+  expect(text).toContain('"diagnostic_completeness":"INCOMPLETE"');
   expect(text).not.toContain("private database detail");
   expect(text).not.toContain("/Users/private");
   expect(JSON.stringify(warnings)).not.toContain("private database detail");
+});
+
+it("reconstructs chained journals and fails closed for truncation, legacy, and tampering", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-reconstruct-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "reconstruct",
+  });
+  await journal.append({
+    event: "RUN_STARTED",
+    case_id: "case-reconstruct",
+    run_id: "run-reconstruct",
+    model: "model",
+    base_sha: "a".repeat(40),
+    config_digest: canonicalDigest({ config: 1 }),
+  });
+  await journal.append({
+    event: "RUN_COMPLETED",
+    schema_version: 2,
+    status: "SUCCEEDED",
+    commit_sha: "b".repeat(40),
+    artifact_kinds: ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"],
+    handler_outcome: "SUCCEEDED",
+    engineering_outcome: "COMPLETED",
+    diagnostic_completeness: "COMPLETE",
+    terminal_reason_code: "COMPLETED",
+    next_safe_step: "STOP",
+    reconciliation_required: false,
+    elapsed_ms: 10,
+    last_event_at: new Date().toISOString(),
+  });
+  await journal.close();
+  const recovered = await reconstructEngineeringDebugJournal(journal.filePath);
+  expect(recovered.diagnostic_completeness).toBe("COMPLETE");
+  expect(recovered.events).toHaveLength(2);
+  const recoveredSummary = join(root, "engineering-debug", "recovered.summary.md");
+  await writeReconstructedEngineeringDebugSummary(recovered, recoveredSummary);
+  await expect(
+    writeReconstructedEngineeringDebugSummary(recovered, recoveredSummary),
+  ).rejects.toThrow();
+
+  const truncated = join(root, "engineering-debug", "truncated.jsonl");
+  const raw = await readFile(journal.filePath, "utf8");
+  await writeFile(truncated, raw.slice(0, raw.lastIndexOf("\n")), { mode: 0o600 });
+  const truncatedResult = await reconstructEngineeringDebugJournal(truncated);
+  expect(truncatedResult.truncated_final_line).toBe(true);
+  expect(truncatedResult.diagnostic_completeness).toBe("INCOMPLETE");
+  expect(truncatedResult.events).toHaveLength(1);
+});
+
+it("rejects record/event tampering, sequence gaps, and missing terminal evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-integrity-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "integrity",
+  });
+  await journal.append({
+    event: "RUN_STARTED",
+    case_id: "case",
+    run_id: "run",
+    model: "model",
+    base_sha: null,
+    config_digest: canonicalDigest(1),
+  });
+  await journal.append({
+    event: "RUN_COMPLETED",
+    schema_version: 2,
+    status: "SUCCEEDED",
+    commit_sha: "a".repeat(40),
+    artifact_kinds: ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"],
+    handler_outcome: "SUCCEEDED",
+    engineering_outcome: "COMPLETED",
+    diagnostic_completeness: "COMPLETE",
+    terminal_reason_code: "COMPLETED",
+    next_safe_step: "STOP",
+    reconciliation_required: false,
+    elapsed_ms: 10,
+    last_event_at: new Date().toISOString(),
+  });
+  await journal.close();
+  const raw = await readFile(journal.filePath, "utf8");
+  const lines = raw
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const tamperDigest = join(root, "tamper-digest.jsonl");
+  const integrity = lines[0]!.integrity as Record<string, unknown>;
+  await writeFile(
+    tamperDigest,
+    `${JSON.stringify({ ...lines[0], integrity: { ...integrity, record_digest: canonicalDigest("wrong") } })}\n${JSON.stringify(lines[1])}\n`,
+  );
+  await expect(reconstructEngineeringDebugJournal(tamperDigest)).rejects.toThrow(/integrity/);
+  const tamperEvent = join(root, "tamper-event.jsonl");
+  await writeFile(
+    tamperEvent,
+    `${JSON.stringify({ ...lines[0], model: "other" })}\n${JSON.stringify(lines[1])}\n`,
+  );
+  await expect(reconstructEngineeringDebugJournal(tamperEvent)).rejects.toThrow(/integrity/);
+  const sequence = join(root, "sequence.jsonl");
+  await writeFile(sequence, `${JSON.stringify({ ...lines[0], sequence: 4 })}\n`);
+  await expect(reconstructEngineeringDebugJournal(sequence)).rejects.toThrow(/sequence/);
+  const legacy = join(root, "legacy.jsonl");
+  await writeFile(
+    legacy,
+    `${JSON.stringify({ sequence: 0, recorded_at: new Date().toISOString(), schema_version: 1, event: "RUN_STARTED", case_id: "case", run_id: "run", model: "model", base_sha: null, config_digest: canonicalDigest(1) })}\n`,
+  );
+  const legacyResult = await reconstructEngineeringDebugJournal(legacy);
+  expect(legacyResult.legacy_records).toBe(true);
+  expect(legacyResult.diagnostic_completeness).toBe("INCOMPLETE");
+  const legacyComplete = join(root, "legacy-complete.jsonl");
+  await writeFile(
+    legacyComplete,
+    `${JSON.stringify({ sequence: 0, recorded_at: new Date().toISOString(), schema_version: 1, event: "RUN_STARTED", case_id: "case", run_id: "run", model: "model", base_sha: null, config_digest: canonicalDigest(1) })}\n${JSON.stringify({ sequence: 1, recorded_at: new Date().toISOString(), schema_version: 1, event: "RUN_COMPLETED", status: "SUCCEEDED", commit_sha: "a".repeat(40), artifact_kinds: [] })}\n`,
+  );
+  const legacyCompleteResult = await reconstructEngineeringDebugJournal(legacyComplete);
+  expect(legacyCompleteResult.terminal_present).toBe(true);
+  expect(legacyCompleteResult.legacy_records).toBe(true);
+  expect(legacyCompleteResult.integrity_valid).toBe(false);
+  expect(legacyCompleteResult.diagnostic_completeness).toBe("INCOMPLETE");
+  const noTerminal = join(root, "no-terminal.jsonl");
+  await writeFile(noTerminal, `${JSON.stringify(lines[0])}\n`);
+  expect((await reconstructEngineeringDebugJournal(noTerminal)).diagnostic_completeness).toBe(
+    "INCOMPLETE",
+  );
+  const terminalOnlyRoot = await mkdtemp(join(tmpdir(), "engineering-debug-terminal-only-"));
+  roots.push(terminalOnlyRoot);
+  const terminalOnly = await EngineeringDebugJournal.create({
+    artifactRoot: terminalOnlyRoot,
+    invocationId: "terminal-only",
+  });
+  await terminalOnly.append({
+    event: "RUN_COMPLETED",
+    schema_version: 2,
+    status: "SUCCEEDED",
+    commit_sha: "c".repeat(40),
+    artifact_kinds: ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"],
+    handler_outcome: "SUCCEEDED",
+    engineering_outcome: "COMPLETED",
+    diagnostic_completeness: "COMPLETE",
+    terminal_reason_code: "COMPLETED",
+    next_safe_step: "STOP",
+    reconciliation_required: false,
+    elapsed_ms: 10,
+    last_event_at: new Date().toISOString(),
+  });
+  await terminalOnly.close();
+  expect(
+    (await reconstructEngineeringDebugJournal(terminalOnly.filePath)).diagnostic_completeness,
+  ).toBe("INCOMPLETE");
+  const afterTerminal = join(root, "after-terminal.jsonl");
+  await writeFile(afterTerminal, `${raw}${JSON.stringify({ ...lines[1], sequence: 2 })}\n`);
+  await expect(reconstructEngineeringDebugJournal(afterTerminal)).rejects.toThrow();
+});
+
+it("rejects semantically inconsistent RUN_COMPLETED v2 events", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-v2-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({ artifactRoot: root, invocationId: "v2" });
+  expect(() =>
+    journal.append({
+      event: "RUN_COMPLETED",
+      schema_version: 2,
+      status: "FAILED",
+      commit_sha: null,
+      artifact_kinds: [],
+      handler_outcome: "SUCCEEDED",
+      engineering_outcome: "COMPLETED",
+      diagnostic_completeness: "COMPLETE",
+    }),
+  ).toThrow();
+  expect(() =>
+    journal.append({
+      event: "RUN_COMPLETED",
+      schema_version: 2,
+      status: "SUCCEEDED",
+      commit_sha: null,
+      artifact_kinds: [],
+      handler_outcome: "SUCCEEDED",
+      engineering_outcome: "BLOCKED",
+      diagnostic_completeness: "COMPLETE",
+    }),
+  ).toThrow();
+  expect(() =>
+    journal.append({
+      event: "RUN_COMPLETED",
+      schema_version: 2,
+      status: "FAILED",
+      commit_sha: null,
+      artifact_kinds: [],
+      handler_outcome: "FAILED",
+      engineering_outcome: "UNKNOWN",
+      diagnostic_completeness: "COMPLETE",
+    }),
+  ).toThrow();
+  await journal.close();
+});
+
+it("recovers after one append write failure without a sequence gap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-append-recovery-"));
+  roots.push(root);
+  let writes = 0;
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "append-recovery",
+    appendFile: async (data) => {
+      writes += 1;
+      if (writes === 2) throw new Error("injected append failure");
+      await appendToFile(journal.filePath, data, "utf8");
+    },
+  });
+  await journal.append({
+    event: "RUN_STARTED",
+    case_id: "case",
+    run_id: "run",
+    model: "model",
+    base_sha: null,
+    config_digest: canonicalDigest(1),
+  });
+  await expect(
+    journal.append({
+      event: "TOOL_INPUT_REFUSAL",
+      stage: null,
+      slice_id: null,
+      attempt: null,
+      tool_name: "tool",
+      failure_code: "TOOL_INPUT_INVALID",
+      issues: [{ code: "invalid", path: ["input"] }],
+    }),
+  ).rejects.toThrow();
+  await journal.append({
+    event: "RUN_COMPLETED",
+    schema_version: 2,
+    status: "SUCCEEDED",
+    commit_sha: "a".repeat(40),
+    artifact_kinds: ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"],
+    handler_outcome: "SUCCEEDED",
+    engineering_outcome: "COMPLETED",
+    diagnostic_completeness: "COMPLETE",
+    terminal_reason_code: "COMPLETED",
+    next_safe_step: "STOP",
+    reconciliation_required: false,
+    elapsed_ms: 10,
+    last_event_at: new Date().toISOString(),
+  });
+  await journal.close();
+  const result = await reconstructEngineeringDebugJournal(journal.filePath);
+  expect(result.events.map((event) => event.sequence)).toEqual([0, 1]);
+  expect(result.diagnostic_completeness).toBe("COMPLETE");
+});
+
+it("guarantees export teardown ordering and drop after failures", async () => {
+  const calls: string[] = [];
+  await expect(
+    closeExportAndDropEngineeringRun({
+      close: async () => {
+        calls.push("close");
+        throw new Error("close");
+      },
+      export: async () => {
+        calls.push("export");
+        throw new Error("export");
+      },
+      drop: async () => {
+        calls.push("drop");
+      },
+    }),
+  ).rejects.toThrow("close");
+  expect(calls).toEqual(["close", "export", "drop"]);
+});
+
+it("exports private canonical artifacts and gate receipts exclusively", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-private-export-"));
+  roots.push(root);
+  const artifact = {
+    schema_version: 1,
+    artifact_kind: "TerminalReason",
+    case_id: "case",
+    run_id: "run",
+    revision: 0,
+    reason: "COMPLETED",
+    detail: "completed",
+  };
+  const receipt = VerificationGateReceipt.parse({
+    schema_version: 1,
+    receipt_id: "receipt-1",
+    case_id: "case",
+    workspace_id: "workspace",
+    run_id: "run",
+    operation_id: "operation",
+    gate_id: "gate",
+    target: "CURRENT",
+    tree_digest: canonicalDigest("tree"),
+    config_digest: canonicalDigest("config"),
+    command_digest: canonicalDigest("command"),
+    outcome: "PASSED",
+    exit_code: 0,
+    signal: null,
+    duration_ms: 1,
+    log_artifact: {
+      artifact_id: "log-1",
+      digest: canonicalDigest("log"),
+      scope: { case_id: "case", workspace_id: "workspace" },
+      relative_path: "log.txt",
+      byte_length: 3,
+      complete: true,
+      original_byte_length: 3,
+    },
+    log_digest: canonicalDigest("log"),
+  });
+  const queries: Array<{ sql: string; params: readonly unknown[] | undefined }> = [];
+  const db = {
+    query: async (sql: string, params?: readonly unknown[]) => {
+      queries.push({ sql, params });
+      if (sql.includes("engineering_artifact_revisions"))
+        return {
+          rows: [
+            {
+              revision: 0,
+              artifact_kind: "TerminalReason",
+              payload: artifact,
+              payload_digest: canonicalDigest(artifact),
+            },
+          ],
+        };
+      return { rows: [{ receipt }] };
+    },
+  } as unknown as Database;
+  const exported = await exportEngineeringEvidence({
+    artifactRoot: root,
+    caseId: "case",
+    runId: "run",
+    jobId: "job",
+    invocationId: "invocation",
+    db,
+  });
+  expect(exported.export.artifacts).toHaveLength(1);
+  expect(exported.export.gate_receipts).toHaveLength(1);
+  expect((await stat(exported.filePath)).mode & 0o777).toBe(0o600);
+  expect((await stat(join(root, "engineering-private-evidence"))).mode & 0o777).toBe(0o700);
+  expect(exported.filePath).not.toContain("engineering-debug");
+  expect(queries[1]?.params).toEqual(["job", "run"]);
+  const before = await readFile(exported.filePath, "utf8");
+  expect(before).toBe(canonicalJsonStringify(exported.export));
+  const roundTrip = JSON.parse(before) as typeof exported.export;
+  expect(roundTrip).toEqual(exported.export);
+  const artifactRecord = { ...exported.export.artifacts[0], record_digest: undefined };
+  delete (artifactRecord as { record_digest?: unknown }).record_digest;
+  expect(exported.export.artifacts[0]?.record_digest).toBe(canonicalDigest(artifactRecord));
+  const receiptRecord = { ...exported.export.gate_receipts[0], record_digest: undefined };
+  delete (receiptRecord as { record_digest?: unknown }).record_digest;
+  expect(exported.export.gate_receipts[0]?.record_digest).toBe(canonicalDigest(receiptRecord));
+  const unsignedExport = { ...exported.export };
+  delete (unsignedExport as { export_digest?: unknown }).export_digest;
+  expect(exported.export.export_digest).toBe(canonicalDigest(unsignedExport));
+  await expect(
+    exportEngineeringEvidence({
+      artifactRoot: root,
+      caseId: "case",
+      runId: "run",
+      jobId: "job",
+      invocationId: "invocation",
+      db,
+    }),
+  ).rejects.toThrow();
+  expect(await readFile(exported.filePath, "utf8")).toBe(before);
+  await expect(
+    exportEngineeringEvidence({
+      artifactRoot: root,
+      caseId: "case",
+      runId: "run",
+      jobId: "",
+      invocationId: "bad-job",
+      db,
+    }),
+  ).rejects.toThrow();
+  const badArtifactDb = {
+    query: async (sql: string) =>
+      sql.includes("engineering_artifact_revisions")
+        ? {
+            rows: [
+              {
+                revision: 0,
+                artifact_kind: "TerminalReason",
+                payload: artifact,
+                payload_digest: canonicalDigest("wrong"),
+              },
+            ],
+          }
+        : { rows: [{ receipt }] },
+  } as unknown as Database;
+  await expect(
+    exportEngineeringEvidence({
+      artifactRoot: root,
+      caseId: "case",
+      runId: "run",
+      jobId: "job",
+      invocationId: "invocation-2",
+      db: badArtifactDb,
+    }),
+  ).rejects.toThrow(/digest/);
+  const badReceiptDb = {
+    query: async (sql: string) =>
+      sql.includes("engineering_artifact_revisions")
+        ? {
+            rows: [
+              {
+                revision: 0,
+                artifact_kind: "TerminalReason",
+                payload: artifact,
+                payload_digest: canonicalDigest(artifact),
+              },
+            ],
+          }
+        : { rows: [{ receipt: {} }] },
+  } as unknown as Database;
+  await expect(
+    exportEngineeringEvidence({
+      artifactRoot: root,
+      caseId: "case-3",
+      runId: "run-3",
+      jobId: "job",
+      invocationId: "invocation-3",
+      db: badReceiptDb,
+    }),
+  ).rejects.toThrow();
+  const foreignArtifact = { ...artifact, case_id: "foreign" };
+  const foreignDb = {
+    query: async (sql: string) =>
+      sql.includes("engineering_artifact_revisions")
+        ? {
+            rows: [
+              {
+                revision: 0,
+                artifact_kind: "TerminalReason",
+                payload: foreignArtifact,
+                payload_digest: canonicalDigest(foreignArtifact),
+              },
+            ],
+          }
+        : { rows: [{ receipt }] },
+  } as unknown as Database;
+  await expect(
+    exportEngineeringEvidence({
+      artifactRoot: root,
+      caseId: "case-4",
+      runId: "run",
+      jobId: "job",
+      invocationId: "invocation-4",
+      db: foreignDb,
+    }),
+  ).rejects.toThrow(/identity/);
 });
 
 it("does not discard a provider response when its journal is already unavailable", async () => {
@@ -1461,4 +2274,103 @@ it("does not discard a provider response when its journal is already unavailable
       ),
     ),
   ).resolves.toMatchObject({ usage: { totalTokens: 12 } });
+});
+
+it("renders exact content-free operator aggregates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-aggregates-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "aggregates",
+  });
+  await journal.append({
+    event: "TOOL_BATCH",
+    stage: "SLICE_IMPLEMENTATION",
+    slice_id: "slice",
+    attempt: 1,
+    tools: [
+      {
+        name: "patch",
+        relative_path: "src/Flow.swift",
+        query_digest: null,
+        files: ["src/Flow.swift"],
+        input_keys: ["files"],
+      },
+    ],
+  });
+  await journal.append({
+    event: "TOOL_RESULT",
+    stage: "SLICE_IMPLEMENTATION",
+    slice_id: "slice",
+    attempt: 1,
+    kind: "APPLY_PATCH",
+    outcome: "SUCCEEDED",
+    failure_code: null,
+    changed_files: ["src/Flow.swift"],
+    operation_id_digest: canonicalDigest("op"),
+    output_truncated: false,
+  });
+  await journal.append({
+    event: "MODEL_OUTPUT_SHAPE",
+    keys: [],
+    artifact_kind: null,
+    changed_files: null,
+    decision: null,
+    criterion_statuses: ["PASSED", "FAILED", "INCONCLUSIVE"],
+    review_lines_examined: null,
+    review_findings: [],
+  });
+  await journal.close();
+  const summary = await readFile(journal.summaryFilePath, "utf8");
+  expect(summary).toContain("tools requested 1, succeeded 1");
+  expect(summary).toContain("changed paths 1");
+  expect(summary).toContain("criteria PASSED 1, FAILED 1, INCONCLUSIVE 1");
+});
+
+it("rejects every incomplete v2 success terminal mutation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engineering-debug-terminal-contract-"));
+  roots.push(root);
+  const journal = await EngineeringDebugJournal.create({
+    artifactRoot: root,
+    invocationId: "terminal-contract",
+  });
+  const valid = {
+    event: "RUN_COMPLETED" as const,
+    schema_version: 2 as const,
+    status: "SUCCEEDED" as const,
+    commit_sha: "a".repeat(40),
+    artifact_kinds: ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"],
+    handler_outcome: "SUCCEEDED" as const,
+    engineering_outcome: "COMPLETED" as const,
+    diagnostic_completeness: "COMPLETE" as const,
+    terminal_reason_code: "COMPLETED",
+    next_safe_step: "STOP" as const,
+    reconciliation_required: false,
+    elapsed_ms: 12,
+    last_event_at: new Date().toISOString(),
+  };
+  const mutations = [
+    ["missing diagnostic completeness", { diagnostic_completeness: undefined }],
+    ["missing terminal reason", { terminal_reason_code: undefined }],
+    ["missing next step", { next_safe_step: undefined }],
+    ["missing reconciliation", { reconciliation_required: undefined }],
+    ["missing elapsed", { elapsed_ms: undefined }],
+    ["missing last event", { last_event_at: undefined }],
+    ["incomplete diagnostics", { diagnostic_completeness: "INCOMPLETE" }],
+    ["unknown reason", { terminal_reason_code: "UNKNOWN" }],
+    ["retry next step", { next_safe_step: "RETRY" }],
+    ["requires reconciliation", { reconciliation_required: true }],
+    ...(["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"] as const).map(
+      (kind) =>
+        [
+          `missing ${kind}`,
+          { artifact_kinds: valid.artifact_kinds.filter((item) => item !== kind) },
+        ] as const,
+    ),
+  ] as const;
+  for (const [name, mutation] of mutations) {
+    expect(() => journal.append({ ...valid, ...mutation } as never), name).toThrow();
+  }
+  await journal.append(valid);
+  await journal.close();
 });

@@ -5,7 +5,7 @@ import {
   type SubscriptionModelProfileV1,
 } from "@remoteagent/model-runtime";
 
-export const CODEX_CLI_SUPPORTED_VERSION = "0.147.0";
+export const CODEX_CLI_SUPPORTED_VERSION = "0.153.3";
 export const CODEX_CLI_RESPONSE_SCHEMA_FILENAME = "response.schema.json";
 
 /**

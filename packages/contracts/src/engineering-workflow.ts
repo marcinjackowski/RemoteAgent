@@ -586,7 +586,7 @@ export const engineeringSliceBlueprint = valueObject({
     .min(1)
     .max(4096)
     .refine((value) => value.trim().length > 0, "must not be blank"),
-  allowed_paths: z.array(relativeRepositoryPath).min(1).max(16),
+  allowed_paths: z.array(relativeRepositoryPath).min(1).max(256),
   test_paths: z.array(relativeRepositoryPath).min(1).max(16),
   gate_ids: z.array(gateId).min(1).max(64),
   inspection_method: nonEmptyText.refine(noCommand, "must identify a method, not a raw command"),
@@ -798,7 +798,7 @@ const engineeringGateFailureDiagnostic = valueObject({
 });
 
 /** Durable, bounded feedback for a retryable required-gate assertion failure. */
-export const engineeringGateFailure = versionedContract({
+export const engineeringGateFailureV1 = versionedContract({
   artifact_kind: z.literal("GateFailure"),
   ...artifactBase,
   authority: z.literal("SERVER_OWNED"),
@@ -841,6 +841,143 @@ export const engineeringGateFailure = versionedContract({
     }
   }
 });
+
+/**
+ * Historical GateFailure parser.  Keep this named export as the v1 parser so
+ * durable revisions can continue to be read without being reinterpreted.
+ */
+export const engineeringGateFailureClass = z.enum([
+  "ASSERTION_FAILED",
+  "COMPILE_FAILED",
+  "TEST_DISCOVERY_FAILED",
+  "INFRASTRUCTURE",
+  "UNKNOWN",
+]);
+export type EngineeringGateFailureClass = z.infer<typeof engineeringGateFailureClass>;
+
+export const engineeringGateFailureObservation = z
+  .strictObject({
+    criterion_id: idString,
+    gate_id: idString,
+    failure_class: engineeringGateFailureClass,
+    evidence_ref: idString,
+    related_target_ids: z.array(idString).min(1).max(256).readonly(),
+  })
+  .readonly();
+
+export type EngineeringGateFailureObservation = Readonly<
+  Omit<z.infer<typeof engineeringGateFailureObservation>, "related_target_ids"> & {
+    readonly related_target_ids: readonly string[];
+  }
+>;
+
+const engineeringGateFailureV2Base = z.strictObject({
+  schema_version: z.literal(2),
+  artifact_kind: z.literal("GateFailure"),
+  ...artifactBase,
+  authority: z.literal("SERVER_OWNED"),
+  slice_id: idString,
+  attempt: z.int().positive(),
+  tree_digest: sha256Digest,
+  diff_digest: sha256Digest,
+  context_digest: sha256Digest,
+  config_digest: sha256Digest,
+  mapping_digest: sha256Digest,
+  blocking_gate_ids: z.array(idString).min(1).max(128),
+  receipt_ids: z.array(idString).min(1).max(256),
+  decision_ids: z.array(idString).max(256),
+  diagnostics: z.array(engineeringGateFailureDiagnostic).min(1).max(8),
+  observations: z.array(engineeringGateFailureObservation).min(1).max(512).readonly(),
+});
+
+/** Strict, receipt-backed typed failure emitted for new durable revisions. */
+export const engineeringGateFailureV2 = engineeringGateFailureV2Base
+  .superRefine((failure, ctx) => {
+    for (const [field, values] of [
+      ["blocking_gate_ids", failure.blocking_gate_ids],
+      ["receipt_ids", failure.receipt_ids],
+      ["decision_ids", failure.decision_ids],
+    ] as const) {
+      if (new Set(values).size !== values.length) {
+        ctx.addIssue({ code: "custom", path: [field], message: `${field} must be unique` });
+      }
+    }
+    if (
+      new Set(failure.diagnostics.map((item) => item.gate_id)).size !== failure.diagnostics.length
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["diagnostics"],
+        message: "gate diagnostics must be unique",
+      });
+    }
+    for (const diagnostic of failure.diagnostics) {
+      if (!failure.blocking_gate_ids.includes(diagnostic.gate_id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["diagnostics"],
+          message: "diagnostic gate must be blocking",
+        });
+      }
+    }
+    const observationIdentities = new Set<string>();
+    const coveredBlockingGates = new Set<string>();
+    for (const [index, observation] of failure.observations.entries()) {
+      const identity = `${observation.criterion_id}\u0000${observation.gate_id}\u0000${observation.evidence_ref}`;
+      if (observationIdentities.has(identity)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["observations", index],
+          message: "observation identity must be unique",
+        });
+      }
+      observationIdentities.add(identity);
+      if (!failure.receipt_ids.includes(observation.evidence_ref)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["observations", index, "evidence_ref"],
+          message: "evidence_ref must reference a receipt",
+        });
+      }
+      if (!failure.blocking_gate_ids.includes(observation.gate_id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["observations", index, "gate_id"],
+          message: "observation gate must be blocking",
+        });
+      } else {
+        coveredBlockingGates.add(observation.gate_id);
+      }
+      if (new Set(observation.related_target_ids).size !== observation.related_target_ids.length) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["observations", index, "related_target_ids"],
+          message: "related_target_ids must be unique",
+        });
+      }
+    }
+    for (const gateId of failure.blocking_gate_ids) {
+      if (!coveredBlockingGates.has(gateId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["observations"],
+          message: `blocking gate ${gateId} has no observation`,
+        });
+      }
+    }
+  })
+  .readonly();
+
+export type EngineeringGateFailureV1 = z.infer<typeof engineeringGateFailureV1>;
+export type EngineeringGateFailureV2 = z.output<typeof engineeringGateFailureV2>;
+
+/** Public compatibility union; discriminator is the exact schema_version field. */
+export const engineeringGateFailure = z.discriminatedUnion("schema_version", [
+  engineeringGateFailureV1,
+  engineeringGateFailureV2,
+]);
+export const engineeringGateFailureUnion = engineeringGateFailure;
+export type EngineeringGateFailureUnion = z.infer<typeof engineeringGateFailure>;
 
 const baselineWorkspaceReference = valueObject({
   baseline_id: z.string().regex(/^slice-baseline-[0-9a-f]{64}$/u),
@@ -972,12 +1109,28 @@ export const engineeringReviewDecision = versionedContract({
   rationale: nonEmptyText,
   decision: z.enum(["PASS", "CHANGES_REQUIRED", "BLOCKED"]),
   findings: z.array(nonEmptyText).max(256),
+  /** Server-validated exact files required to resolve blocking review findings. */
+  required_mutation_paths: z.array(relativeRepositoryPath).max(256).default([]),
   reviewed_digest: sha256Digest,
 }).superRefine((v, ctx) => {
+  if (
+    new Set(v.required_mutation_paths).size !== v.required_mutation_paths.length ||
+    v.required_mutation_paths.some(
+      (path, index) => index > 0 && v.required_mutation_paths[index - 1]! >= path,
+    )
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "required mutation paths must be sorted and unique",
+      path: ["required_mutation_paths"],
+    });
+  }
   if (v.decision === "PASS" && v.findings.length)
     ctx.addIssue({ code: "custom", message: "PASS cannot contain findings" });
   if (v.decision === "CHANGES_REQUIRED" && !v.findings.length)
     ctx.addIssue({ code: "custom", message: "CHANGES_REQUIRED requires findings" });
+  if (v.decision === "PASS" && v.required_mutation_paths.length)
+    ctx.addIssue({ code: "custom", message: "PASS cannot contain required mutation paths" });
   if (v.decision === "BLOCKED" && !v.findings.length)
     ctx.addIssue({ code: "custom", message: "BLOCKED requires findings" });
 });

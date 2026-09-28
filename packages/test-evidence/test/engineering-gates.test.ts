@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 
 import { canonicalDigest } from "@remoteagent/contracts";
@@ -13,10 +14,49 @@ import {
   VerificationGateReceipt,
   VerificationGateStatus,
   VerificationGateTarget,
+  assertTrustedEvaluatorReceiptEvidence,
+  validateTrustedEvaluatorInputs,
+  testEvidence,
+  verificationGateReceiptId,
   type VerificationGateAggregateInput,
 } from "../src/index.js";
 
 const digest = (character: string) => `sha256:${character.repeat(64)}`;
+
+const uiHarnessFiles = [
+  {
+    relative_path: "Tests/RemoteAgentUIHarness/App/RemoteAgentUIHarnessApp.swift",
+    content: "import SwiftUI\n",
+  },
+  {
+    relative_path: "Tests/RemoteAgentUIHarness/UITests/RemoteAgentUIHarnessUITests.swift",
+    content: "import XCTest\n",
+  },
+  {
+    relative_path: "Tests/RemoteAgentUIHarness/RemoteAgentUIHarness.xcodeproj/project.pbxproj",
+    content: "// project\n",
+  },
+  {
+    relative_path:
+      "Tests/RemoteAgentUIHarness/RemoteAgentUIHarness.xcodeproj/xcshareddata/xcschemes/RemoteAgentUIHarness.xcscheme",
+    content: "<Scheme/>\n",
+  },
+].map((file) => ({
+  ...file,
+  content_digest: `sha256:${createHash("sha256").update(file.content).digest("hex")}`,
+}));
+const uiHarnessPackageResolved = {
+  relative_path:
+    "Tests/RemoteAgentUIHarness/RemoteAgentUIHarness.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+  content: '{"pins":[]}' + "\n",
+  content_digest: `sha256:${createHash("sha256")
+    .update('{"pins":[]}' + "\n")
+    .digest("hex")}`,
+};
+const uiTestIds = [
+  "RemoteAgentUIHarnessUITests/RemoteAgentUIHarnessUITests/testGeneralHelp",
+  "RemoteAgentUIHarnessUITests/RemoteAgentUIHarnessUITests/testActivitySharing",
+];
 
 async function fixture() {
   const executable = await realpath(process.execPath);
@@ -98,6 +138,495 @@ async function fixture() {
 }
 
 describe("VerificationGate contracts and catalog", () => {
+  it("accepts up to 16 correction mutation paths and rejects 17", async () => {
+    const executable = await realpath(process.execPath);
+    const paths = Array.from({ length: 16 }, (_, index) => `Sources/Repair${index}.swift`).sort();
+    const base = {
+      schema_version: 1,
+      gate_id: "bounded-correction-authority",
+      gate_class: VerificationGateClass.TEST,
+      executable,
+      argv: ["--test"],
+      relative_cwd: "packages/test-evidence",
+      required: true,
+      baseline: false,
+      test_first: false,
+      timeout_ms: 30_000,
+      environment_profile: "HERMETIC",
+      network_profile: "DENY",
+      mutable_outputs: [],
+      required_mutation_paths: paths,
+    } as const;
+    const definition = VerificationGateDefinition.parse(base);
+    const catalog = await VerificationGateCatalog.create({
+      definitions: [definition],
+      executable_allowlist: [executable],
+    });
+    expect(catalog.get(base.gate_id)?.required_mutation_paths).toHaveLength(16);
+    expect(() =>
+      VerificationGateDefinition.parse({
+        ...base,
+        required_mutation_paths: [...paths, "Sources/Repair16.swift"],
+      }),
+    ).toThrow();
+  });
+
+  it("binds the UI harness layout to one exact project and scheme", async () => {
+    const executable = await realpath(process.execPath);
+    const trusted = {
+      files: [...uiHarnessFiles, uiHarnessPackageResolved],
+      required_executed_test_ids: uiTestIds,
+      layout: "XCODE_UI_HARNESS_V1" as const,
+    };
+    const base = {
+      schema_version: 1,
+      gate_id: "ui-harness",
+      gate_class: VerificationGateClass.TEST,
+      executable,
+      argv: [
+        "-project",
+        "RemoteAgentUIHarness.xcodeproj",
+        "-scheme",
+        "RemoteAgentUIHarness",
+        ...uiTestIds.map((id) => `-only-testing:${id}`),
+        "test",
+      ],
+      relative_cwd: "Tests/RemoteAgentUIHarness",
+      required: true,
+      baseline: false,
+      test_first: false,
+      timeout_ms: 30_000,
+      environment_profile: "BUILD_TOOLCHAIN",
+      network_profile: "PLATFORM_MANAGED",
+      mutable_outputs: [],
+      trusted_evaluator_inputs: trusted,
+    };
+    const definition = VerificationGateDefinition.parse(base);
+    expect(definition.trusted_evaluator_inputs?.layout).toBe("XCODE_UI_HARNESS_V1");
+    const catalog = await VerificationGateCatalog.create({
+      definitions: [definition],
+      executable_allowlist: [executable],
+    });
+    expect(catalog.get("ui-harness")?.trusted_evaluator_inputs?.layout).toBe("XCODE_UI_HARNESS_V1");
+    expect(
+      catalog
+        .get("ui-harness")
+        ?.trusted_evaluator_inputs?.files.find(({ relative_path }) =>
+          relative_path.endsWith(
+            "RemoteAgentUIHarness.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+          ),
+        )?.content,
+    ).toBe(uiHarnessPackageResolved.content);
+    for (const argv of [
+      base.argv.filter((arg) => arg !== "-project"),
+      [...base.argv, "-project", "RemoteAgentUIHarness.xcodeproj"],
+      [...base.argv, "-workspace", "Other.xcworkspace"],
+      [...base.argv, "-workspace=Other.xcworkspace"],
+      base.argv.filter((arg) => arg !== "-scheme" && arg !== "RemoteAgentUIHarness"),
+      base.argv.map((arg) => (arg === "RemoteAgentUIHarness" ? "Other" : arg)),
+      base.argv.map((arg) =>
+        arg === "RemoteAgentUIHarness.xcodeproj" ? "../RemoteAgentUIHarness.xcodeproj" : arg,
+      ),
+      base.argv.map((arg) =>
+        arg === "RemoteAgentUIHarness.xcodeproj" ? "/tmp/RemoteAgentUIHarness.xcodeproj" : arg,
+      ),
+      base.argv.map((arg) =>
+        arg === "RemoteAgentUIHarness.xcodeproj" ? "./RemoteAgentUIHarness.xcodeproj" : arg,
+      ),
+      base.argv.map((arg) =>
+        arg === "-project" ? "-project=RemoteAgentUIHarness.xcodeproj" : arg,
+      ),
+      base.argv.map((arg) => (arg === "-scheme" ? "-scheme=RemoteAgentUIHarness" : arg)),
+    ]) {
+      expect(() => VerificationGateDefinition.parse({ ...base, argv })).toThrow(
+        /XCODE_UI_HARNESS_V1/u,
+      );
+    }
+  });
+
+  it("preserves the legacy no-evaluator command identity and absent field", async () => {
+    const { definition, catalog } = await fixture();
+    expect(Object.hasOwn(catalog.get(definition.gate_id)!, "trusted_evaluator_inputs")).toBe(false);
+    expect(catalog.commandDigest(definition.gate_id)).toBe(
+      canonicalDigest({
+        gate_tier: definition.gate_tier,
+        gate_schedule: definition.gate_schedule,
+        executable: definition.executable,
+        argv: definition.argv,
+        relative_cwd: definition.relative_cwd,
+        timeout_ms: definition.timeout_ms,
+        environment_profile: definition.environment_profile,
+        network_profile: definition.network_profile,
+        mutable_outputs: definition.mutable_outputs,
+      }),
+    );
+  });
+  it("rejects aggregate evaluator binding and identity tampering", async () => {
+    const { definition, receipt, input } = await fixture();
+    const content = "import XCTest\n";
+    const overlay = VerificationGateDefinition.parse({
+      ...definition,
+      baseline: false,
+      test_first: false,
+      environment_profile: "BUILD_TOOLCHAIN",
+      network_profile: "PLATFORM_MANAGED",
+      argv: ["-only-testing:T/S/test"],
+      trusted_evaluator_inputs: {
+        files: [
+          {
+            relative_path: "Tests/Probe.swift",
+            content,
+            content_digest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
+          },
+        ],
+        required_executed_test_ids: ["T/S/test"],
+      },
+    });
+    const catalog = await VerificationGateCatalog.create({
+      definitions: [overlay],
+      executable_allowlist: [overlay.executable],
+    });
+    const { schema_version: _version, receipt_id: _id, ...base } = receipt("CURRENT", "PASSED");
+    void _version;
+    void _id;
+    const fields = {
+      ...base,
+      config_digest: catalog.config_digest,
+      command_digest: catalog.commandDigest(overlay.gate_id),
+      trusted_evaluator_binding: {
+        evaluator_inputs_digest: validateTrustedEvaluatorInputs(overlay.trusted_evaluator_inputs!)
+          .digest,
+        evaluated_tree_digest: digest("d"),
+      },
+      test_evidence: testEvidence.parse({
+        kind: "XCODE_TEST_RESULT_V1",
+        tool: "xcresulttool",
+        schema_version: "0.1.0",
+        executed_test_ids: ["T/S/test"],
+        executed_count: 1,
+        failed_test_ids: [],
+        expected_suite_ids: ["T/S"],
+        observed_suite_ids: ["T/S"],
+        result_digest: digest("e"),
+      }),
+    };
+    const valid = VerificationGateReceipt.parse({
+      schema_version: 1,
+      ...fields,
+      receipt_id: verificationGateReceiptId(fields),
+    });
+    const derive = (value: typeof valid) =>
+      VerificationGateDeriveAggregate({
+        ...input([value]),
+        catalog,
+        operation_bindings: [
+          { gate_id: overlay.gate_id, target: "CURRENT", operation_id: "op-current" },
+        ],
+      });
+    expect(() => derive(valid)).not.toThrow();
+    expect(() =>
+      derive({
+        ...valid,
+        trusted_evaluator_binding: {
+          ...fields.trusted_evaluator_binding,
+          evaluated_tree_digest: digest("f"),
+        },
+      }),
+    ).toThrow(/identity/u);
+    for (const changed of [
+      { ...fields, trusted_evaluator_binding: undefined },
+      {
+        ...fields,
+        trusted_evaluator_binding: {
+          ...fields.trusted_evaluator_binding,
+          evaluator_inputs_digest: digest("f"),
+        },
+      },
+      {
+        ...fields,
+        test_evidence: testEvidence.parse({
+          ...fields.test_evidence,
+          executed_test_ids: ["T/S/other"],
+        }),
+      },
+    ]) {
+      const tampered = VerificationGateReceipt.parse({
+        schema_version: 1,
+        ...changed,
+        receipt_id: verificationGateReceiptId(changed),
+      });
+      expect(() => derive(tampered)).toThrow(/trusted evaluator/u);
+    }
+  });
+  it("checks evaluator binding and exact selected-test evidence", async () => {
+    const { definition } = await fixture();
+    const content = "probe\n";
+    const digestValue = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const overlay = VerificationGateDefinition.parse({
+      ...definition,
+      gate_class: VerificationGateClass.TEST,
+      environment_profile: "BUILD_TOOLCHAIN",
+      network_profile: "PLATFORM_MANAGED",
+      argv: [...definition.argv, "-only-testing:T/S/test()"],
+      trusted_evaluator_inputs: {
+        files: [{ relative_path: "Tests/Probe.swift", content, content_digest: digestValue }],
+        required_executed_test_ids: ["T/S/test()"],
+      },
+    });
+    const evaluatorDigest = validateTrustedEvaluatorInputs(
+      overlay.trusted_evaluator_inputs!,
+    ).digest;
+    const binding = {
+      evaluator_inputs_digest: evaluatorDigest,
+      evaluated_tree_digest: digest("b"),
+    };
+    const evidence = testEvidence.parse({
+      kind: "XCODE_TEST_RESULT_V1",
+      tool: "xcresulttool",
+      schema_version: "0.1.0",
+      executed_test_ids: ["T/S/test"],
+      executed_count: 1,
+      failed_test_ids: [],
+      expected_suite_ids: ["T/S"],
+      observed_suite_ids: ["T/S"],
+      result_digest: digest("e"),
+    });
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "PASSED",
+        test_evidence: evidence,
+        trusted_evaluator_binding: binding,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "PASSED",
+        trusted_evaluator_binding: binding,
+        test_evidence: testEvidence.parse({ ...evidence, executed_test_ids: ["S/test()"] }),
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "INFRASTRUCTURE",
+        test_evidence: evidence,
+      }),
+    ).toThrow(/unbound/u);
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "PASSED",
+        trusted_evaluator_binding: binding,
+        test_evidence: testEvidence.parse({ ...evidence, executed_test_ids: ["Other/S/test"] }),
+      }),
+    ).toThrow(/target/u);
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "FAILED",
+        test_evidence: undefined,
+        trusted_evaluator_binding: binding,
+      }),
+    ).not.toThrow();
+    for (const outcome of ["INFRASTRUCTURE", "CANCELLED", "TIMED_OUT"] as const)
+      expect(() =>
+        assertTrustedEvaluatorReceiptEvidence(overlay, {
+          outcome,
+          test_evidence: undefined,
+          trusted_evaluator_binding: undefined,
+        }),
+      ).not.toThrow();
+    for (const receipt of [
+      { outcome: "PASSED" as const, test_evidence: evidence, trusted_evaluator_binding: undefined },
+      { outcome: "FAILED" as const, test_evidence: evidence, trusted_evaluator_binding: undefined },
+      {
+        outcome: "PASSED" as const,
+        test_evidence: evidence,
+        trusted_evaluator_binding: { ...binding, evaluator_inputs_digest: digest("d") },
+      },
+      {
+        outcome: "PASSED" as const,
+        test_evidence: evidence,
+        trusted_evaluator_binding: { ...binding, evaluated_tree_digest: "bad" },
+      },
+    ])
+      expect(() => assertTrustedEvaluatorReceiptEvidence(overlay, receipt)).toThrow();
+    const missing = testEvidence.parse({ ...evidence, executed_test_ids: ["T/S/other"] });
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "PASSED",
+        test_evidence: missing,
+        trusted_evaluator_binding: binding,
+      }),
+    ).toThrow();
+    const ambiguous = testEvidence.parse({
+      ...evidence,
+      expected_suite_ids: ["Other/S", "T/S"],
+      observed_suite_ids: ["Other/S", "T/S"],
+      executed_test_ids: ["S/test"],
+      executed_count: 1,
+    });
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(overlay, {
+        outcome: "PASSED",
+        test_evidence: ambiguous,
+        trusted_evaluator_binding: binding,
+      }),
+    ).toThrow();
+    expect(() =>
+      assertTrustedEvaluatorReceiptEvidence(definition, {
+        outcome: "PASSED",
+        test_evidence: undefined,
+        trusted_evaluator_binding: binding,
+      }),
+    ).toThrow();
+  });
+  it("canonicalizes trusted evaluator gate inputs and binds their identity", async () => {
+    const { definition } = await fixture();
+    const content = "import XCTest\n";
+    const evaluator = {
+      files: [{ relative_path: "Tests/Probe.swift", content, content_digest: digest("0") }],
+      required_executed_test_ids: ["T/S/test()"],
+    };
+    const correct = {
+      ...evaluator,
+      files: [
+        {
+          ...evaluator.files[0],
+          content_digest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
+        },
+      ],
+    };
+    const overlay = VerificationGateDefinition.parse({
+      ...definition,
+      gate_class: VerificationGateClass.TEST,
+      environment_profile: "BUILD_TOOLCHAIN",
+      network_profile: "PLATFORM_MANAGED",
+      argv: [...definition.argv, "-only-testing:T/S/test()"],
+      trusted_evaluator_inputs: correct,
+    });
+    expect(overlay.trusted_evaluator_inputs?.required_executed_test_ids).toEqual(["T/S/test"]);
+    expect(() =>
+      VerificationGateDefinition.parse({ ...overlay, trusted_evaluator_inputs: evaluator }),
+    ).toThrow();
+    expect(() =>
+      VerificationGateDefinition.parse({
+        ...overlay,
+        trusted_evaluator_inputs: { ...correct, required_executed_test_ids: ["T/S/other"] },
+      }),
+    ).toThrow();
+    expect(() =>
+      VerificationGateDefinition.parse({ ...overlay, network_profile: "DENY" }),
+    ).toThrow();
+    for (const conflict of [
+      { mutable_outputs: ["Tests/Probe.swift/out"] },
+      { required_mutation_paths: ["Tests"] },
+      { required_test_paths: ["Tests/Probe.swift"] },
+    ])
+      expect(() => VerificationGateDefinition.parse({ ...overlay, ...conflict })).toThrow(
+        /intersect/u,
+      );
+  });
+
+  it("changes command identity when evaluator content or selected IDs change", async () => {
+    const { definition } = await fixture();
+    const content = "probe\n";
+    const contentDigest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const make = (value: string, id: string) =>
+      VerificationGateDefinition.parse({
+        ...definition,
+        gate_class: VerificationGateClass.TEST,
+        environment_profile: "BUILD_TOOLCHAIN",
+        network_profile: "PLATFORM_MANAGED",
+        argv: [...definition.argv, `-only-testing:T/S/${id}`],
+        trusted_evaluator_inputs: {
+          files: [
+            {
+              relative_path: "Tests/Probe.swift",
+              content: value,
+              content_digest:
+                value === content
+                  ? contentDigest
+                  : `sha256:${createHash("sha256").update(value).digest("hex")}`,
+            },
+          ],
+          required_executed_test_ids: [`T/S/${id}`],
+        },
+      });
+    const catalogA = await VerificationGateCatalog.create({
+      definitions: [make(content, "test")],
+      executable_allowlist: [definition.executable],
+    });
+    const catalogB = await VerificationGateCatalog.create({
+      definitions: [make("other\n", "test")],
+      executable_allowlist: [definition.executable],
+    });
+    expect(catalogA.commandDigest("unit.test-first")).not.toBe(
+      catalogB.commandDigest("unit.test-first"),
+    );
+    // Keep argv identical: otherwise selector argv alone would mask a missing input binding.
+    const bothSelectors = ["-only-testing:T/S/test", "-only-testing:T/S/other"];
+    const selectedCatalogs = await Promise.all(
+      ["test", "other"].map((id) =>
+        VerificationGateCatalog.create({
+          definitions: [{ ...make(content, id), argv: bothSelectors }],
+          executable_allowlist: [definition.executable],
+        }),
+      ),
+    );
+    expect(selectedCatalogs[0]!.commandDigest(definition.gate_id)).not.toBe(
+      selectedCatalogs[1]!.commandDigest(definition.gate_id),
+    );
+  });
+
+  it("rejects durable receipts whose outcome contradicts test evidence", async () => {
+    const { receipt } = await fixture();
+    const evidence = {
+      kind: "XCODE_TEST_RESULT_V1" as const,
+      tool: "xcresulttool" as const,
+      schema_version: "0.1.0" as const,
+      executed_test_ids: ["Suite/test"],
+      executed_count: 1,
+      failed_test_ids: ["Suite/test"],
+      expected_suite_ids: ["Suite"],
+      observed_suite_ids: ["Suite"],
+      result_digest: digest("e"),
+    };
+    expect(() =>
+      VerificationGateReceipt.parse({ ...receipt("CURRENT", "PASSED"), test_evidence: evidence }),
+    ).toThrow(/failed tests/u);
+    expect(() =>
+      VerificationGateReceipt.parse({
+        ...receipt("CURRENT", "FAILED"),
+        test_evidence: { ...evidence, failed_test_ids: [] },
+      }),
+    ).toThrow(/failed test/u);
+  });
+  it("binds durable receipt identity to optional test evidence", async () => {
+    const { catalog, receipt } = await fixture();
+    const base = receipt("CURRENT", "PASSED");
+    const evidence = testEvidence.parse({
+      kind: "XCODE_TEST_RESULT_V1",
+      tool: "xcresulttool",
+      schema_version: "0.1.0",
+      executed_test_ids: ["Suite/test"],
+      executed_count: 1,
+      failed_test_ids: [],
+      expected_suite_ids: ["Suite"],
+      observed_suite_ids: ["Suite"],
+      result_digest: digest("e"),
+    });
+    const fields = {
+      ...base,
+      test_evidence: evidence,
+    };
+    const withoutIdentity = { ...fields };
+    delete (withoutIdentity as { schema_version?: unknown }).schema_version;
+    delete (withoutIdentity as { receipt_id?: unknown }).receipt_id;
+    const withEvidenceId = verificationGateReceiptId(withoutIdentity);
+    const withoutEvidence = { ...withoutIdentity };
+    delete (withoutEvidence as { test_evidence?: unknown }).test_evidence;
+    expect(withEvidenceId).not.toBe(verificationGateReceiptId(withoutEvidence));
+    expect(VerificationGateReceipt.parse(base)).toBeTruthy();
+    expect(catalog.config_digest).toMatch(/^sha256:/u);
+  });
   it("uses strict versioned schemas and requires test-first gates to be required baseline gates", async () => {
     const { definition, receipt } = await fixture();
     expect(() => VerificationGateDefinition.parse({ ...definition, injected: true })).toThrow();

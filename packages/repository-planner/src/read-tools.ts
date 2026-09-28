@@ -3,6 +3,8 @@ import {
   plannerConfigRequest,
   plannerConfigResult,
   plannerReadRequest,
+  plannerReadExcerptRequest,
+  plannerReadExcerptResult,
   plannerReadResult,
   plannerSearchRequest,
   plannerSearchResult,
@@ -19,6 +21,7 @@ import {
   findSafeFilenames,
   listSafeTree,
   readSafeFile,
+  readSafeFileExcerpt,
   searchSafeText,
   verifyDiscoveryRoot,
   type DiscoveryReadSeam,
@@ -116,6 +119,24 @@ async function createPort(
         relative_path: result.relativePath,
         digest: result.digest,
         content: { trust: "UNTRUSTED_DATA", value: result.content },
+      });
+    },
+    async readExcerpt(input) {
+      const request = plannerReadExcerptRequest.parse(input);
+      const result = await readSafeFileExcerpt(
+        verifiedRoot,
+        request.relative_path,
+        request.start_line,
+        request.end_line,
+        seam,
+      ).catch(policyError);
+      return plannerReadExcerptResult.parse({
+        relative_path: result.relativePath,
+        start_line: result.startLine,
+        end_line: result.endLine,
+        full_file_digest: result.digest,
+        end_of_file: result.endOfFile,
+        content: { trust: "UNTRUSTED_DATA" as const, value: result.content },
       });
     },
     async search(input) {

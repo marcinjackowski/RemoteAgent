@@ -92,6 +92,30 @@ describe("sealed read-only discovery tools", () => {
     await expect(port.read({ relative_path: ".environment.ts" })).resolves.toBeDefined();
   });
 
+  it("clamps trailing-newline excerpt coordinates to physical lines", async () => {
+    const root = await fixture();
+    const content = `${Array.from({ length: 256 }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
+    await writeFile(join(root, "src", "SafetyAlert.swift"), content);
+    const port = await createPlannerReadPort(root);
+    await expect(
+      port.readExcerpt({ relative_path: "src/SafetyAlert.swift", start_line: 1, end_line: 1 }),
+    ).resolves.toMatchObject({ end_of_file: false });
+    await expect(
+      port.readExcerpt({ relative_path: "src/SafetyAlert.swift", start_line: 251, end_line: 260 }),
+    ).resolves.toMatchObject({
+      start_line: 251,
+      end_line: 256,
+      end_of_file: true,
+      content: {
+        trust: "UNTRUSTED_DATA",
+        value: "line-251\nline-252\nline-253\nline-254\nline-255\nline-256\n",
+      },
+    });
+    await expect(
+      port.readExcerpt({ relative_path: "src/SafetyAlert.swift", start_line: 257, end_line: 257 }),
+    ).rejects.toMatchObject({ code: "DISCOVERY_FAILED" });
+  });
+
   it("finds canonical existing paths by filename without guessing their contents", async () => {
     const root = await fixture();
     await writeFile(join(root, "src", "Strings+Generated.swift"), "unrepresentable but safe\n");
@@ -236,6 +260,20 @@ describe("sealed read-only discovery tools", () => {
       code: "SYMLINK_NOT_ALLOWED",
     });
     expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("outside\n");
+  });
+
+  it("classifies only an initially absent leaf as FILE_NOT_FOUND", async () => {
+    const root = await fixture();
+    const port = await createPlannerReadPort(root);
+    await expect(port.read({ relative_path: "src/missing.swift" })).rejects.toMatchObject({
+      code: "FILE_NOT_FOUND",
+    });
+    const disappearing = await createPlannerReadPortWithTestSeam(root, async (path) => {
+      if (path === "src/app.ts") await rm(join(root, "src", "app.ts"));
+    });
+    await expect(disappearing.read({ relative_path: "src/app.ts" })).rejects.toMatchObject({
+      code: "DISCOVERY_FAILED",
+    });
   });
 
   it("fails closed when a directory is swapped before descent", async () => {

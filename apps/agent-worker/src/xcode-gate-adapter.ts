@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
   canonicalDigest,
@@ -10,15 +11,21 @@ import {
 } from "@remoteagent/contracts";
 import {
   createTestRunner,
+  testEvidence,
+  testRun,
+  testRunReceiptDigest,
+  testRunWithEvidence,
   testCommandManifest,
   verificationGateManifestDigest,
   verificationGateTestPhase,
   type VerificationGateDefinition,
   type VerificationGatePlatformAdapter,
   type VerificationGatePlatformRunInput,
+  type TestEvidence,
 } from "@remoteagent/test-evidence";
 import {
   ProcessRunnerError,
+  computeTreeDigest,
   createWorkspacePathPolicy,
   type ProcessRunInput,
   type ProcessRunResult,
@@ -28,6 +35,9 @@ const OUTPUT_LIMIT = 1024 * 1024;
 const STREAMED_DIAGNOSTIC_LIMIT = 64 * 1024;
 const STREAMED_DIAGNOSTIC_LINE_LIMIT = 16 * 1024;
 const STREAMED_DIAGNOSTIC_COUNT_LIMIT = 32;
+const XCODE_TEST_FRAMEWORK_FAILURE_MARKER = "[REMOTEAGENT_XCODE_TEST_FRAMEWORK_FAILURE]";
+const XCODE_TEST_FRAMEWORK_FAILURE =
+  /(?:A failure was recorded without linking the XCTest framework|An issue was recorded without linking the Testing framework)/u;
 const XCODE_OUTPUT_ROOT = ".remoteagent-xcode";
 const XCODE_TEST_ACTIONS = new Set(["build-for-testing", "test", "test-without-building"]);
 const XCODE_ENABLE_TESTABILITY = "ENABLE_TESTABILITY=YES";
@@ -37,6 +47,19 @@ const XCODE_SWIFTPM_CONFIGURATION = [
   "swiftpm",
   "configuration",
 ] as const;
+
+/**
+ * Disk exhaustion is emitted by several tools in the Xcode build chain rather
+ * than by xcodebuild itself. Keep this intentionally narrow and only apply it
+ * to a failed process: successful builds may print incidental diagnostics.
+ */
+export function isXcodeDiskExhaustion(result: ProcessRunResult): boolean {
+  if (result.exitCode === 0) return false;
+  const output = `${result.stdout}\n${result.stderr}`;
+  return /(?:errno\s*[=:]\s*28|no\s+space\s+left\s+on\s+device|write\s*\(\s*\)\s*failed[^\n]{0,160}errno\s*[=:]\s*28)/iu.test(
+    output,
+  );
+}
 
 type BoundedOutputCapture = Readonly<{
   append(chunk: Buffer): void;
@@ -108,6 +131,7 @@ function createStreamedDiagnosticCapture(): StreamedDiagnosticCapture {
   let pending = "";
   let continuationLines = 0;
   let diagnosticCount = 0;
+  let frameworkFailure = false;
 
   const retain = (line: string): void => {
     if (retainedBytes >= STREAMED_DIAGNOSTIC_LIMIT) return;
@@ -119,6 +143,7 @@ function createStreamedDiagnosticCapture(): StreamedDiagnosticCapture {
   };
 
   const observeLine = (line: string): void => {
+    if (XCODE_TEST_FRAMEWORK_FAILURE.test(line)) frameworkFailure = true;
     if (diagnosticCount < STREAMED_DIAGNOSTIC_COUNT_LIMIT && SWIFT_COMPILER_DIAGNOSTIC.test(line)) {
       diagnosticCount += 1;
       continuationLines = 2;
@@ -136,6 +161,7 @@ function createStreamedDiagnosticCapture(): StreamedDiagnosticCapture {
       const lines = `${pending}${chunk.toString("utf8")}`.split(/\r?\n/u);
       pending = lines.pop() ?? "";
       for (const line of lines) observeLine(line);
+      if (XCODE_TEST_FRAMEWORK_FAILURE.test(pending)) frameworkFailure = true;
       if (Buffer.byteLength(pending) > STREAMED_DIAGNOSTIC_LINE_LIMIT) {
         pending = Buffer.from(pending).subarray(-STREAMED_DIAGNOSTIC_LINE_LIMIT).toString("utf8");
       }
@@ -145,8 +171,9 @@ function createStreamedDiagnosticCapture(): StreamedDiagnosticCapture {
         observeLine(pending);
         pending = "";
       }
-      if (retained.length === 0) return "";
-      return `\n[REMOTEAGENT_STREAMED_SWIFT_DIAGNOSTICS count=${String(diagnosticCount)}]\n${retained.join("\n")}\n`;
+      const frameworkMarker = frameworkFailure ? `\n${XCODE_TEST_FRAMEWORK_FAILURE_MARKER}\n` : "";
+      if (retained.length === 0) return frameworkMarker;
+      return `${frameworkMarker}\n[REMOTEAGENT_STREAMED_SWIFT_DIAGNOSTICS count=${String(diagnosticCount)}]\n${retained.join("\n")}\n`;
     },
   });
 }
@@ -158,7 +185,216 @@ export type XcodeGateAdapterOptions = Readonly<{
   knownSecrets?: readonly string[];
   /** Test seam only. Production leaves this undefined and uses the bounded process boundary. */
   processRunner?: (input: ProcessRunInput) => Promise<ProcessRunResult>;
+  /** Narrow seam for the bounded xcresulttool reader; production uses the selected toolchain. */
+  xcresultReader?: (path: string) => Promise<string>;
 }>;
+
+const MAX_XCRESULT_BYTES = 2 * 1024 * 1024;
+const MAX_XCRESULT_NODES = 10_000;
+const MAX_XCRESULT_DEPTH = 32;
+const MAX_XCRESULT_OUTPUT = 4 * 1024 * 1024;
+const XCRESULT_TIMEOUT_MS = 30_000;
+
+async function readXcresultWithToolchain(path: string, developerDir: string): Promise<string> {
+  const xcrun = await realpath("/usr/bin/xcrun");
+  const output = createBoundedOutputCapture(MAX_XCRESULT_OUTPUT);
+  const errors = createBoundedOutputCapture(MAX_XCRESULT_OUTPUT);
+  return new Promise((resolveOutput, reject) => {
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+    const child = spawn(
+      xcrun,
+      [
+        "xcresulttool",
+        "get",
+        "test-results",
+        "tests",
+        "--schema-version",
+        "0.1.0",
+        "--path",
+        path,
+        "--compact",
+      ],
+      {
+        env: {
+          DEVELOPER_DIR: developerDir,
+          PATH: `${join(developerDir, "usr", "bin")}:/usr/bin:/bin`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+      },
+    );
+    child.stdout.on("data", (chunk: Buffer) => output.append(chunk));
+    child.stderr.on("data", (chunk: Buffer) => errors.append(chunk));
+    child.once("error", () => settle(() => reject(new Error("xcresulttool unavailable"))));
+    child.once("close", (code) => {
+      const result = output.result();
+      if (code !== 0) settle(() => reject(new Error("xcresulttool failed")));
+      else if (result.truncated) settle(() => reject(new Error("xcresulttool output truncated")));
+      else settle(() => resolveOutput(result.value));
+    });
+    const timer = setTimeout(() => {
+      killTree(child);
+      settle(() => reject(new Error("xcresulttool timed out")));
+    }, XCRESULT_TIMEOUT_MS);
+    void errors;
+  });
+}
+
+export function xcodeExpectedSuiteIds(args: readonly string[]): readonly string[] {
+  const ids = args
+    .filter((arg) => arg.startsWith("-only-testing:"))
+    .map((arg) => arg.slice("-only-testing:".length).trim())
+    .filter((arg) => arg.length > 0)
+    .map((arg) => arg.split("/").slice(0, 2).join("/"));
+  return Object.freeze([...new Set(ids)].sort());
+}
+
+function normalizeXcodeTestId(id: string, errorMessage: string): string {
+  const parts = id.split("/");
+  if (
+    parts.length !== 3 ||
+    parts.some((part) => part.length === 0 || /\s/u.test(part) || /[*?]/u.test(part))
+  )
+    throw new Error(errorMessage);
+  const method = parts[2]!.replace(/\(\)$/u, "");
+  if (method.length === 0 || /\s/u.test(method) || /[*?]/u.test(method))
+    throw new Error(errorMessage);
+  return `${parts[0]}/${parts[1]}/${method}`;
+}
+
+export function xcodeExpectedTestIds(args: readonly string[]): readonly string[] {
+  const ids = args
+    .filter((arg) => arg.startsWith("-only-testing:"))
+    .map((arg) => arg.slice("-only-testing:".length).trim())
+    .filter((arg) => arg.length > 0)
+    .map((id) => {
+      const parts = id.split("/");
+      if (parts.length === 2) return null;
+      return normalizeXcodeTestId(id, "Xcode method selector malformed");
+    })
+    .filter((id): id is string => id !== null);
+  return Object.freeze([...new Set(ids)].sort());
+}
+
+/** Parse only bounded, documented xcresult testNodes; stdout is never consulted. */
+export function parseXcodeTestEvidence(
+  raw: string,
+  expectedSuiteIds: readonly string[],
+  requiredTestIds: readonly string[] = [],
+): TestEvidence {
+  if (Buffer.byteLength(raw, "utf8") > MAX_XCRESULT_BYTES)
+    throw new Error("xcresult payload too large");
+  let root: unknown;
+  try {
+    root = JSON.parse(raw);
+  } catch {
+    throw new Error("malformed xcresult payload");
+  }
+  if (
+    root === null ||
+    typeof root !== "object" ||
+    Array.isArray(root) ||
+    !Array.isArray((root as { testPlanConfigurations?: unknown }).testPlanConfigurations) ||
+    !Array.isArray((root as { devices?: unknown }).devices) ||
+    !Array.isArray((root as { testNodes?: unknown }).testNodes)
+  ) {
+    throw new Error("unrecognized xcresult root shape");
+  }
+  const executed: string[] = [];
+  const observedTests = new Set<string>();
+  const failed: string[] = [];
+  const observed = new Set<string>();
+  const ordinal = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  const expected = [...new Set(expectedSuiteIds)].sort(ordinal);
+  const requiredTests = [...new Set(requiredTestIds)]
+    .map((id) => normalizeXcodeTestId(id, "xcresult expected test id malformed"))
+    .sort(ordinal);
+  const expectedBySuite = new Map<string, string>();
+  for (const canonical of expected) {
+    const parts = canonical.split("/");
+    if (parts.length !== 2 || parts.some((part) => part.trim().length === 0)) {
+      throw new Error("xcresult expected suite id malformed");
+    }
+    const suite = parts[1]!;
+    if (expectedBySuite.has(suite)) throw new Error("xcresult expected suite basename ambiguous");
+    expectedBySuite.set(suite, canonical);
+  }
+  let nodes = 0;
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > MAX_XCRESULT_DEPTH || ++nodes > MAX_XCRESULT_NODES)
+      throw new Error("xcresult bounds exceeded");
+    if (value === null || typeof value !== "object") return;
+    const node = value as {
+      nodeType?: unknown;
+      nodeIdentifier?: unknown;
+      result?: unknown;
+      children?: unknown;
+    };
+    if (node.nodeType === "Test Case" || node.nodeType === "Test Case Run") {
+      if (typeof node.nodeIdentifier !== "string" || node.nodeIdentifier.trim().length === 0)
+        throw new Error("xcresult test case lacks nodeIdentifier");
+      const id = node.nodeIdentifier.trim();
+      const parts = id.split("/");
+      if (
+        (parts.length !== 2 && parts.length !== 3) ||
+        parts.some((part) => part.trim().length === 0)
+      )
+        throw new Error("xcresult test case nodeIdentifier malformed");
+      if (node.result === "Skipped" || node.result === "Expected Failure")
+        throw new Error("xcresult test case did not execute successfully");
+      if (!["Passed", "Failed"].includes(String(node.result)))
+        throw new Error("unrecognized xcresult result");
+      executed.push(id);
+      const suite = parts.length === 2 ? parts[0]! : parts[1]!;
+      const canonical = expectedBySuite.get(suite);
+      if (canonical === undefined) throw new Error("xcresult observed suite cannot map");
+      if (parts.length === 3 && canonical !== `${parts[0]}/${parts[1]}`)
+        throw new Error("xcresult observed target cannot map");
+      observed.add(canonical);
+      if (requiredTests.length > 0) {
+        const method = parts.at(-1)!.replace(/\(\)$/u, "");
+        observedTests.add(`${canonical}/${method}`);
+      }
+      if (node.result === "Failed") failed.push(id);
+    }
+    if (node.children !== undefined) {
+      if (!Array.isArray(node.children)) throw new Error("invalid xcresult children");
+      for (const child of node.children) visit(child, depth + 1);
+    }
+    for (const [key, child] of Object.entries(node))
+      if (key !== "children" && child && typeof child === "object") visit(child, depth + 1);
+  };
+  visit((root as { testNodes: unknown[] }).testNodes, 0);
+  const compare = ordinal;
+  const executedIds = [...new Set(executed)].sort(compare);
+  if (executedIds.length === 0 || executedIds.length !== executed.length)
+    throw new Error("xcresult executed tests invalid");
+  if (expected.length === 0 || expected.some((suite) => !observed.has(suite)))
+    throw new Error("xcresult expected suite missing");
+  if (requiredTests.some((test) => !observedTests.has(test)))
+    throw new Error("xcresult expected test missing");
+  const failedIds = [...new Set(failed)].sort(compare);
+  const payload = {
+    kind: "XCODE_TEST_RESULT_V1" as const,
+    tool: "xcresulttool" as const,
+    schema_version: "0.1.0" as const,
+    executed_test_ids: executedIds,
+    executed_count: executedIds.length,
+    failed_test_ids: failedIds,
+    expected_suite_ids: expected,
+    observed_suite_ids: [...observed].sort(compare),
+  };
+  return testEvidence.parse({
+    ...payload,
+    result_digest: `sha256:${createHash("sha256").update(raw, "utf8").digest("hex")}`,
+  });
+}
 
 function contained(root: string, candidate: string): boolean {
   const child = relative(root, candidate);
@@ -171,6 +407,32 @@ function exactArg(args: readonly string[], flag: string): string {
     throw new Error(`Xcode gate requires exactly one ${flag}`);
   }
   return args[index + 1]!;
+}
+
+/** Validate the server-owned result bundle location before an Xcode TEST gate can run. */
+export function validateXcodeTestGateResultBundlePath(
+  definition: VerificationGateDefinition,
+): string {
+  if (definition.gate_class !== "TEST") {
+    throw new Error("Xcode result bundle validation requires a TEST gate");
+  }
+  const value = exactArg(definition.argv, "-resultBundlePath");
+  const segments = value.split(/[\\/]/u);
+  if (
+    isAbsolute(value) ||
+    /^[A-Za-z]:[\\/]/u.test(value) ||
+    segments.some((segment) => segment === ".." || segment === "." || segment === "") ||
+    value === "." ||
+    !value.endsWith(".xcresult")
+  ) {
+    throw new Error("Xcode result bundle must be a canonical repository-relative .xcresult path");
+  }
+  const outputRoot = resolve(definition.relative_cwd, XCODE_OUTPUT_ROOT);
+  const bundle = resolve(definition.relative_cwd, value);
+  if (!contained(outputRoot, bundle) || bundle === outputRoot) {
+    throw new Error("Xcode result bundle must be below the relative Xcode output root");
+  }
+  return value;
 }
 
 /**
@@ -210,6 +472,9 @@ export function xcodeDestinationFromGateCatalog(
     throw new Error("Xcode gate catalog has no server-selected simulator destination");
   }
   for (const candidate of candidates) assertExplicitXcodeTestability(candidate.argv);
+  for (const candidate of candidates) {
+    if (candidate.gate_class === "TEST") validateXcodeTestGateResultBundlePath(candidate);
+  }
   const testCommands = candidates
     .filter((candidate) => candidate.argv.some((argument) => XCODE_TEST_ACTIONS.has(argument)))
     .map((candidate) =>
@@ -235,7 +500,7 @@ async function xcodeSwiftPmConfigurationPath(
   disposableRoot: string,
   relativeCwd: string,
   args: readonly string[],
-): Promise<Readonly<{ path: string; existed: boolean }>> {
+): Promise<Readonly<{ path: string; ownedRoot?: string }>> {
   const projectArgument = exactArg(args, "-project");
   if (
     isAbsolute(projectArgument) ||
@@ -251,21 +516,34 @@ async function xcodeSwiftPmConfigurationPath(
   if (!contained(gateCwd, projectRoot)) {
     throw new Error("Xcode gate project escapes its disposable working directory");
   }
+  let current = projectRoot;
+  let ownedRoot: string | undefined;
+  for (const component of XCODE_SWIFTPM_CONFIGURATION) {
+    current = join(current, component);
+    const existing = await lstat(current).catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (existing === undefined) {
+      ownedRoot = current;
+      break;
+    }
+    if (!existing.isDirectory() || existing.isSymbolicLink()) {
+      throw new Error("Xcode SwiftPM configuration path has an unsafe type");
+    }
+  }
   const path = join(projectRoot, ...XCODE_SWIFTPM_CONFIGURATION);
-  const parent = await realpath(dirname(path));
-  if (!contained(projectRoot, parent)) {
+  if (ownedRoot !== undefined && !contained(projectRoot, ownedRoot)) {
     throw new Error("Xcode SwiftPM configuration parent escapes the selected project");
   }
-  const existing = await lstat(path).catch((error: unknown) => {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (existing !== undefined && (!existing.isDirectory() || existing.isSymbolicLink())) {
-    throw new Error("Xcode SwiftPM configuration path has an unsafe type");
-  }
-  return Object.freeze({ path, existed: existing !== undefined });
+  return Object.freeze(ownedRoot === undefined ? { path } : { path, ownedRoot });
 }
 
 function killTree(child: ReturnType<typeof spawn>): void {
@@ -323,6 +601,7 @@ async function collectSwiftSourcePaths(root: string): Promise<readonly string[]>
 
 const SWIFT_COMPILER_DIAGNOSTIC = /^(.+?\.swift):(\d+):(\d+):\s+(?:fatal\s+)?error:\s+(.+)$/u;
 const XCTEST_ASSERTION_DIAGNOSTIC = /^(.+?\.swift):(\d+):\s+error:\s+(-\[[^\]]+\])\s*:\s*(.+)$/u;
+const XCTEST_REDACTED_ASSERTION_DIAGNOSTIC = /^\[REDACTED\]\s+error:\s+(-\[[^\]]+\])\s*:\s*(.+)$/u;
 const XCTEST_CASE_FAILURE = /^Test [Cc]ase '([^']+)' failed(?: \([^)]+\))?\.?$/u;
 const SWIFT_TESTING_FAILURE = /^[^\n]*(?:✘|✗)\s+(?:Test|Suite)\b[^\n]*\bfailed\b/iu;
 const XCODE_TESTING_FAILED_HEADER = /^Testing failed:\s*$/u;
@@ -494,6 +773,22 @@ export function parseXcodeTestDiagnostics(
       }
       continue;
     }
+    const redactedAssertion = XCTEST_REDACTED_ASSERTION_DIAGNOSTIC.exec(raw);
+    if (redactedAssertion !== null) {
+      const testName = redactedAssertion[1]?.trim().slice(0, 1024) ?? "";
+      const message = redactedAssertion[2]?.trim().slice(0, 4096) ?? "";
+      if (testName.length > 0 && message.length > 0) {
+        const identity = {
+          test_name: testName,
+          message,
+          path: null,
+          line: null,
+        };
+        const diagnostic = Object.freeze({ ...identity, digest: canonicalDigest(identity) });
+        diagnostics.set(diagnostic.digest, diagnostic);
+      }
+      continue;
+    }
     const failedCase = XCTEST_CASE_FAILURE.exec(raw);
     const testName = failedCase?.[1]?.trim().slice(0, 1024) ?? "";
     if (testName.length === 0) continue;
@@ -652,6 +947,17 @@ export async function createXcodeVerificationGatePlatformAdapter(
       }
 
       const outputRoot = join(input.disposable_root, definition.relative_cwd, XCODE_OUTPUT_ROOT);
+      const expectedSuiteIds = xcodeExpectedSuiteIds(definition.argv);
+      const expectedTestIds = xcodeExpectedTestIds(definition.argv);
+      let resultBundlePath: string | undefined;
+      if (definition.gate_class === "TEST") {
+        resultBundlePath = validateXcodeTestGateResultBundlePath(definition);
+        if (expectedSuiteIds.length === 0)
+          throw new Error("Xcode test gate requires expected suite selectors");
+        const bundle = resolve(input.disposable_root, definition.relative_cwd, resultBundlePath!);
+        if (!contained(outputRoot, bundle) || !bundle.endsWith(".xcresult"))
+          throw new Error("Xcode result bundle must be below disposable output root");
+      }
       const home = join(outputRoot, "Home");
       const temporary = join(outputRoot, "Tmp");
       const canonicalDisposableRoot = await realpath(input.disposable_root).catch(
@@ -688,6 +994,9 @@ export async function createXcodeVerificationGatePlatformAdapter(
         DEVELOPER_DIR: developerDir,
         PATH: `${join(developerDir, "usr", "bin")}:/usr/bin:/bin:/usr/sbin:/sbin`,
       });
+      let capturedEvidence: TestEvidence | undefined;
+      let evidenceFailure = false;
+      const evidenceFailureMarker = "[REMOTEAGENT_XCODE_EVIDENCE_INVALID]";
       const runner = await createTestRunner({
         root: input.disposable_root,
         scope: input.scope,
@@ -696,27 +1005,37 @@ export async function createXcodeVerificationGatePlatformAdapter(
         knownSecrets: options.knownSecrets ?? [],
         environment,
         processRunner: async (processInput) => {
-          let createdSwiftPmConfiguration = false;
+          let createdSwiftPmConfigurationRoot = false;
           try {
             // The shared runner binds its receipt to the tree immediately before this
             // callback. Creating disposable HOME/TMPDIR earlier would make the adapter's
             // own scratch directories look like a source mutation and invalidate an
             // otherwise honest platform receipt.
             await Promise.all([home, temporary].map((path) => mkdir(path, { recursive: true })));
-            if (!swiftPmConfiguration.existed) {
-              await mkdir(swiftPmConfiguration.path);
-              createdSwiftPmConfiguration = true;
+            if (swiftPmConfiguration.ownedRoot !== undefined) {
+              await mkdir(swiftPmConfiguration.ownedRoot);
+              createdSwiftPmConfigurationRoot = true;
+              await mkdir(swiftPmConfiguration.path, { recursive: true });
             }
+            const existingSwiftPmConfigurationDigest =
+              swiftPmConfiguration.ownedRoot === undefined
+                ? await computeTreeDigest(swiftPmConfiguration.path)
+                : undefined;
             const execute = options.processRunner ?? runXcodeProcess;
             const first = await execute(processInput);
+            if (isXcodeDiskExhaustion(first)) {
+              throw new ProcessRunnerError(
+                "RESOURCE_LIMIT",
+                "Xcode build exhausted available disk space",
+              );
+            }
             const retried = shouldRetryUninformativeXcodeTest(definition.argv, first);
             const result = retried ? await execute(processInput) : first;
-            if (
-              retried &&
-              isTransientXcodeDependencyFailure(first) &&
-              isTransientXcodeDependencyFailure(result)
-            ) {
-              throw new Error("Xcode dependency resolution remained unavailable after retry");
+            if (isXcodeDiskExhaustion(result)) {
+              throw new ProcessRunnerError(
+                "RESOURCE_LIMIT",
+                "Xcode build exhausted available disk space",
+              );
             }
             const retryMarker = retried
               ? `[REMOTEAGENT_XCODE_INFRASTRUCTURE_RETRY first_result_digest=${canonicalDigest({
@@ -725,7 +1044,7 @@ export async function createXcodeVerificationGatePlatformAdapter(
                   stderr: first.stderr,
                 })}]\n`
               : "";
-            return {
+            let relativizedResult = {
               ...result,
               stdout: relativizeXcodeDiagnostics(
                 `${retryMarker}${result.stdout}`,
@@ -738,25 +1057,122 @@ export async function createXcodeVerificationGatePlatformAdapter(
                 swiftSourcePaths,
               ),
             };
+            if (definition.gate_class === "TEST") {
+              const frameworkFailure =
+                XCODE_TEST_FRAMEWORK_FAILURE.test(
+                  `${relativizedResult.stdout}\n${relativizedResult.stderr}`,
+                ) ||
+                `${relativizedResult.stdout}\n${relativizedResult.stderr}`.includes(
+                  XCODE_TEST_FRAMEWORK_FAILURE_MARKER,
+                );
+              if (frameworkFailure && !result.timedOut && !result.cancelled) {
+                evidenceFailure = true;
+                capturedEvidence = undefined;
+                relativizedResult = {
+                  ...relativizedResult,
+                  stderr: `${relativizedResult.stderr}${
+                    relativizedResult.stderr.endsWith("\n") ? "" : "\n"
+                  }${XCODE_TEST_FRAMEWORK_FAILURE_MARKER}\n`,
+                };
+              } else {
+                try {
+                  capturedEvidence = parseXcodeTestEvidence(
+                    await (
+                      options.xcresultReader ??
+                      ((path) => readXcresultWithToolchain(path, developerDir))
+                    )(
+                      resolve(
+                        processInput.workspaceRoot,
+                        processInput.cwd ?? ".",
+                        resultBundlePath!,
+                      ),
+                    ),
+                    expectedSuiteIds,
+                    expectedTestIds,
+                  );
+                  if (result.exitCode === 0 && capturedEvidence.failed_test_ids.length > 0)
+                    throw new Error("Xcode PASS contradicts failed test evidence");
+                  if (result.exitCode !== 0 && capturedEvidence.failed_test_ids.length === 0) {
+                    if (
+                      parseXcodeCompilerDiagnostics(
+                        `${relativizedResult.stdout}\n${relativizedResult.stderr}`,
+                      ).length === 0
+                    )
+                      throw new Error("Xcode failure lacks failed test evidence");
+                    capturedEvidence = undefined;
+                  }
+                } catch {
+                  const hasCompilerDiagnostics =
+                    parseXcodeCompilerDiagnostics(
+                      `${relativizedResult.stdout}\n${relativizedResult.stderr}`,
+                    ).length > 0;
+                  if (
+                    !result.timedOut &&
+                    !result.cancelled &&
+                    (result.exitCode === 0 || !hasCompilerDiagnostics)
+                  ) {
+                    evidenceFailure = true;
+                    capturedEvidence = undefined;
+                    relativizedResult = {
+                      ...relativizedResult,
+                      stderr: `${relativizedResult.stderr}${
+                        relativizedResult.stderr.endsWith("\n") ? "" : "\n"
+                      }${evidenceFailureMarker}\n`,
+                    };
+                  } else {
+                    capturedEvidence = undefined;
+                  }
+                }
+              }
+            }
+            if (
+              retried &&
+              isTransientXcodeDependencyFailure(first) &&
+              isTransientXcodeDependencyFailure(result)
+            ) {
+              throw new Error("Xcode dependency resolution remained unavailable after retry");
+            }
+            if (existingSwiftPmConfigurationDigest !== undefined) {
+              const afterSwiftPmConfigurationDigest = await computeTreeDigest(
+                swiftPmConfiguration.path,
+              );
+              if (afterSwiftPmConfigurationDigest !== existingSwiftPmConfigurationDigest) {
+                throw new Error("Xcode SwiftPM configuration changed outside owned scratch");
+              }
+            }
+            return relativizedResult;
           } finally {
             // DerivedData, package checkouts and the isolated HOME are build outputs, not
             // source evidence. Remove the exact validated disposable root before the shared
             // runner computes its post-tree digest; stdout/stderr are already held in memory.
-            await rm(outputRoot, { recursive: true, force: true });
-            // Xcode creates this empty/untracked SwiftPM directory even when package checkouts
-            // and DerivedData are redirected. It is deterministic tool scratch, not source.
-            // Only remove the exact directory when this invocation created it; a pre-existing
-            // directory remains protected and any change beneath it invalidates the receipt.
-            if (createdSwiftPmConfiguration) {
-              await rm(swiftPmConfiguration.path, { recursive: true, force: true });
+            try {
+              await rm(outputRoot, { recursive: true, force: true });
+            } finally {
+              // Xcode creates this untracked SwiftPM directory even when package checkouts and
+              // DerivedData are redirected. It is deterministic tool scratch, not source. Only
+              // remove the exact first-missing subtree after exclusive ownership was established;
+              // a pre-existing directory remains protected and any change beneath it invalidates
+              // the receipt.
+              if (createdSwiftPmConfigurationRoot && swiftPmConfiguration.ownedRoot !== undefined) {
+                await rm(swiftPmConfiguration.ownedRoot, { recursive: true, force: true });
+              }
             }
           }
         },
       });
-      return runner.run({
+      const run = await runner.run({
         command_name: definition.gate_id,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
+      if (evidenceFailure && (run.outcome === "PASSED" || run.outcome === "FAILED")) {
+        const infrastructureRun = { ...run, outcome: "INFRASTRUCTURE" as const };
+        return testRun.parse({
+          ...infrastructureRun,
+          receipt_digest: testRunReceiptDigest(infrastructureRun),
+        });
+      }
+      if (capturedEvidence !== undefined) return testRunWithEvidence(run, capturedEvidence);
+      return run;
     },
   });
 }

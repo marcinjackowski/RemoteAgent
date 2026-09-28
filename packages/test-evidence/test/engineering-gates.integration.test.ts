@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   LocalArtifactStore,
   VerificationGateCatalog,
+  EngineeringGateOwnershipError,
+  validateEngineeringGateOwnership,
   VerificationGateClass,
   VerificationGateDefinition,
   VerificationGateOutcome,
@@ -37,12 +39,414 @@ import {
   createTestRunner,
   executeVerificationGate,
   executeVerificationGateBatch,
+  validateTrustedEvaluatorInputs,
+  verificationGateReceiptId,
   testCommandManifest,
+  testEvidence,
+  testRunReceiptDigest,
+  type TestRun,
   type ArtifactStore,
   type VerificationGateExecutionInput,
   type VerificationGateBatchExecutionInput,
   type VerificationGatePlatformAdapter,
 } from "../src/index.js";
+
+describe("Engineering gate ownership", () => {
+  const gate = (
+    extra: Partial<Omit<VerificationGateDefinition, "schema_version">> = {},
+  ): VerificationGateDefinition => ({
+    schema_version: 1,
+    gate_id: "gate",
+    gate_class: VerificationGateClass.TEST,
+    gate_tier: VerificationGateTier.FULL,
+    gate_schedule: "EACH_SLICE",
+    execution_order: 1,
+    executable: "/bin/true",
+    argv: [],
+    relative_cwd: ".",
+    required: true,
+    baseline: true,
+    test_first: false,
+    timeout_ms: 1_000,
+    environment_profile: "HERMETIC",
+    network_profile: "DENY",
+    mutable_outputs: [],
+    required_mutation_paths: ["Sources/A.swift", "Sources/Generated.swift"],
+    required_test_paths: ["Tests/A.swift"],
+    implementation_context: [
+      { kind: "READ", relative_path: "Sources/A.swift" },
+      { kind: "SEARCH", relative_path: "Sources/A.swift", query: "A" },
+    ],
+    ...extra,
+  });
+  const base = () => ({
+    catalog: { get: (id: string) => (id === "gate" ? gate() : undefined) },
+    targets: [
+      { target_id: "src", kind: "SOURCE" as const, paths: ["Sources/A.swift"] },
+      { target_id: "tests", kind: "TEST" as const, paths: ["Tests/A.swift"] },
+      { target_id: "gen", kind: "GENERATOR" as const, paths: ["Sources/Generated.swift"] },
+    ],
+    slices: [
+      {
+        slice_id: "one",
+        mutation_target_ids: ["src", "tests", "gen"],
+        required_read_context: [{ relative_path: "Sources/A.swift", must_exist: true }],
+      },
+    ],
+    criteria: [
+      {
+        criterion_id: "criterion",
+        owning_slice_id: "one",
+        required_gate_ids: ["gate"],
+        related_target_ids: ["src", "tests", "gen"],
+      },
+    ],
+  });
+  it("accepts multi-kind ownership and returns immutable full union", () => {
+    const result = validateEngineeringGateOwnership(base());
+    expect(result.gate_ids).toEqual(["gate"]);
+    expect(result.target_ids).toEqual(["gen", "src", "tests"]);
+    expect(result.criterion_ids).toEqual(["criterion"]);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.gate_ids)).toBe(true);
+  });
+  it.each([
+    ["equal source", "SOURCE", "Tests/Probe.swift"],
+    ["equal test", "TEST", "Tests/Probe.swift"],
+    ["equal generator", "GENERATOR", "Tests/Probe.swift"],
+    ["parent", "SOURCE", "Tests"],
+    ["descendant", "SOURCE", "Tests/Probe.swift/child"],
+  ] as const)("rejects evaluator overlap with any global %s target", (_label, kind, path) => {
+    const input = base();
+    const content = "probe\n";
+    const content_digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    input.targets.push({ target_id: `global-${kind}`, kind, paths: [path] });
+    input.catalog.get = () =>
+      gate({
+        environment_profile: "BUILD_TOOLCHAIN",
+        network_profile: "PLATFORM_MANAGED",
+        argv: ["-only-testing:T/S/test()"],
+        trusted_evaluator_inputs: {
+          files: [{ relative_path: "Tests/Probe.swift", content, content_digest }],
+          required_executed_test_ids: ["T/S/test()"],
+        },
+      });
+    expect(() => validateEngineeringGateOwnership(input)).toThrow(/ownership/u);
+  });
+  it("accepts evaluator input outside every global target", () => {
+    const input = base();
+    const content = "probe\n";
+    const content_digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    input.catalog.get = () =>
+      gate({
+        environment_profile: "BUILD_TOOLCHAIN",
+        network_profile: "PLATFORM_MANAGED",
+        argv: ["-only-testing:T/S/test()"],
+        trusted_evaluator_inputs: {
+          files: [{ relative_path: "Tests/Probe.swift", content, content_digest }],
+          required_executed_test_ids: ["T/S/test()"],
+        },
+      });
+    input.targets.push({ target_id: "unrelated", kind: "SOURCE", paths: ["Sources/Other.swift"] });
+    expect(() => validateEngineeringGateOwnership(input)).not.toThrow();
+  });
+  const violationCases = [
+    [
+      "foreign mutation",
+      (input: ReturnType<typeof base>) => {
+        input.catalog.get = () => gate({ required_mutation_paths: ["Sources/Foreign.swift"] });
+      },
+      ["FOREIGN_MUTATION_PATH"],
+    ],
+    [
+      "wrong slice",
+      (input: ReturnType<typeof base>) => {
+        input.targets.push({ target_id: "src2", kind: "SOURCE", paths: ["Sources/B.swift"] });
+        input.slices.push({
+          slice_id: "two",
+          mutation_target_ids: ["src2"],
+          required_read_context: [],
+        });
+        input.criteria.push({
+          criterion_id: "criterion-one",
+          owning_slice_id: "one",
+          required_gate_ids: ["gate"],
+          related_target_ids: ["src"],
+        });
+        input.criteria[0]!.owning_slice_id = "two";
+        input.criteria[0]!.related_target_ids = ["src2"];
+        input.catalog.get = () =>
+          gate({
+            required_mutation_paths: ["Sources/A.swift"],
+            required_test_paths: [],
+            implementation_context: [],
+          });
+      },
+      ["FOREIGN_MUTATION_PATH"],
+    ],
+    [
+      "foreign test",
+      (input: ReturnType<typeof base>) => {
+        input.catalog.get = () => gate({ required_test_paths: ["Tests/Foreign.swift"] });
+      },
+      ["FOREIGN_TEST_PATH"],
+    ],
+    [
+      "missing gate",
+      (input: ReturnType<typeof base>) => {
+        input.criteria[0]!.required_gate_ids = ["missing"];
+      },
+      ["MISSING_GATE"],
+    ],
+    [
+      "foreign target",
+      (input: ReturnType<typeof base>) => {
+        input.slices[0]!.mutation_target_ids = ["foreign"];
+        input.criteria[0]!.related_target_ids = [];
+        input.catalog.get = () =>
+          gate({
+            required_mutation_paths: [],
+            required_test_paths: [],
+            implementation_context: [],
+          });
+      },
+      ["FOREIGN_TARGET"],
+    ],
+    [
+      "foreign slice",
+      (input: ReturnType<typeof base>) => {
+        input.criteria[0]!.owning_slice_id = "foreign";
+        input.criteria[0]!.related_target_ids = [];
+        input.criteria.push({
+          criterion_id: "criterion-valid",
+          owning_slice_id: "one",
+          required_gate_ids: ["gate"],
+          related_target_ids: ["src", "tests", "gen"],
+        });
+        input.catalog.get = () =>
+          gate({
+            required_mutation_paths: [],
+            required_test_paths: [],
+            implementation_context: [],
+          });
+      },
+      ["FOREIGN_SLICE"],
+    ],
+    [
+      "missing slice and gate",
+      (input: ReturnType<typeof base>) => {
+        input.criteria[0]!.owning_slice_id = "foreign";
+        input.criteria[0]!.required_gate_ids = ["missing"];
+        input.criteria[0]!.related_target_ids = [];
+        input.criteria.push({
+          criterion_id: "criterion-valid",
+          owning_slice_id: "one",
+          required_gate_ids: ["gate"],
+          related_target_ids: ["src", "tests", "gen"],
+        });
+      },
+      ["FOREIGN_SLICE", "MISSING_GATE"],
+    ],
+    [
+      "read absent",
+      (input: ReturnType<typeof base>) => {
+        input.catalog.get = () =>
+          gate({ implementation_context: [{ kind: "READ", relative_path: "Other.swift" }] });
+      },
+      ["READ_CONTEXT_ABSENT"],
+    ],
+    [
+      "read not required",
+      (input: ReturnType<typeof base>) => {
+        input.slices[0]!.required_read_context.push({
+          relative_path: "Other.swift",
+          must_exist: false,
+        });
+        input.catalog.get = () =>
+          gate({
+            implementation_context: [{ kind: "SEARCH", relative_path: "Other.swift", query: "x" }],
+          });
+      },
+      ["READ_CONTEXT_NOT_REQUIRED"],
+    ],
+    [
+      "segment collision",
+      (input: ReturnType<typeof base>) => {
+        input.catalog.get = () => gate({ required_mutation_paths: ["Sources/A.swiftx"] });
+      },
+      ["FOREIGN_MUTATION_PATH"],
+    ],
+    [
+      "uncovered slice",
+      (input: ReturnType<typeof base>) => {
+        input.slices.push({
+          slice_id: "uncovered",
+          mutation_target_ids: ["src"],
+          required_read_context: [],
+        });
+      },
+      ["UNCOVERED_SLICE"],
+    ],
+    [
+      "duplicate target",
+      (input: ReturnType<typeof base>) => {
+        input.targets.push(input.targets[0]!);
+      },
+      ["DUPLICATE_TARGET"],
+    ],
+    [
+      "duplicate slice",
+      (input: ReturnType<typeof base>) => {
+        input.slices.push(input.slices[0]!);
+      },
+      ["DUPLICATE_SLICE"],
+    ],
+    [
+      "duplicate criterion",
+      (input: ReturnType<typeof base>) => {
+        input.criteria.push(input.criteria[0]!);
+      },
+      ["DUPLICATE_CRITERION"],
+    ],
+  ] as const;
+  it.each(violationCases)("rejects %s with exact violation codes", (_name, mutate, expected) => {
+    const input = base();
+    mutate(input);
+    try {
+      validateEngineeringGateOwnership(input);
+      throw new Error("expected ownership failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngineeringGateOwnershipError);
+      const ownership = error as EngineeringGateOwnershipError;
+      expect(ownership.violations.map((violation) => violation.code)).toEqual(expected);
+      expect(Object.isFrozen(ownership.violations)).toBe(true);
+      expect(ownership.violations.every((violation) => Object.isFrozen(violation))).toBe(true);
+    }
+  });
+  it("returns the sorted immutable union for two criteria and two gate tiers", () => {
+    const input = base();
+    input.catalog.get = (id: string) =>
+      id === "fast"
+        ? gate({
+            required_mutation_paths: ["Sources/A.swift"],
+            required_test_paths: [],
+            implementation_context: [],
+            gate_tier: "FAST",
+          })
+        : id === "full"
+          ? gate({
+              required_mutation_paths: ["Sources/Generated.swift"],
+              required_test_paths: [],
+              implementation_context: [],
+              gate_tier: "FULL",
+            })
+          : undefined;
+    input.criteria.push({
+      criterion_id: "criterion-two",
+      owning_slice_id: "one",
+      required_gate_ids: ["full"],
+      related_target_ids: ["gen"],
+    });
+    input.criteria[0]!.required_gate_ids = ["fast"];
+    const result = validateEngineeringGateOwnership(input);
+    expect(result.criterion_ids).toEqual(["criterion", "criterion-two"]);
+    expect(result.gate_ids).toEqual(["fast", "full"]);
+    expect(result.target_ids).toEqual(["gen", "src", "tests"]);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.criterion_ids)).toBe(true);
+  });
+  it("bounds violations and reports truncation deterministically", () => {
+    const input = base();
+    input.criteria[0]!.related_target_ids = Array.from(
+      { length: 300 },
+      (_, index) => `foreign-${index}`,
+    );
+    try {
+      validateEngineeringGateOwnership(input);
+    } catch (error) {
+      const ownership = error as EngineeringGateOwnershipError;
+      expect(ownership.violations).toHaveLength(256);
+      expect(ownership.truncated).toBe(true);
+      expect(ownership.violations[0]!.id).toBe("foreign-0");
+      expect(ownership.violations.at(-1)!.id).toBe("foreign-99");
+    }
+  });
+  it("allows optional context only for an owned planned mutation output", () => {
+    const input = base();
+    input.slices[0]!.required_read_context[0]!.must_exist = false;
+    expect(() => validateEngineeringGateOwnership(input)).not.toThrow();
+  });
+});
+
+it("allows planned optional context only for the owning slice", () => {
+  const gate: VerificationGateDefinition = {
+    schema_version: 1,
+    gate_id: "gate",
+    gate_class: VerificationGateClass.TEST,
+    gate_tier: VerificationGateTier.FULL,
+    gate_schedule: "EACH_SLICE",
+    execution_order: 1,
+    executable: "/bin/true",
+    argv: [],
+    relative_cwd: ".",
+    required: true,
+    baseline: true,
+    test_first: false,
+    timeout_ms: 1_000,
+    environment_profile: "HERMETIC",
+    network_profile: "DENY",
+    mutable_outputs: [],
+    required_mutation_paths: [],
+    required_test_paths: [],
+    implementation_context: [{ kind: "READ" as const, relative_path: "Sources/New.swift" }],
+  };
+  const input = {
+    catalog: { get: () => gate },
+    targets: [
+      { target_id: "one-target", kind: "SOURCE" as const, paths: ["Sources/One.swift"] },
+      { target_id: "two-target", kind: "SOURCE" as const, paths: ["Sources/New.swift"] },
+    ],
+    slices: [
+      {
+        slice_id: "one",
+        mutation_target_ids: ["one-target"],
+        required_read_context: [{ relative_path: "Sources/New.swift", must_exist: false }],
+      },
+      {
+        slice_id: "two",
+        mutation_target_ids: ["two-target"],
+        required_read_context: [{ relative_path: "Sources/New.swift", must_exist: false }],
+      },
+    ],
+    criteria: [
+      {
+        criterion_id: "criterion-one",
+        owning_slice_id: "one",
+        required_gate_ids: ["gate"],
+        related_target_ids: ["one-target"],
+      },
+      {
+        criterion_id: "criterion-two",
+        owning_slice_id: "two",
+        required_gate_ids: ["gate"],
+        related_target_ids: ["two-target"],
+      },
+    ],
+  };
+  try {
+    validateEngineeringGateOwnership(input);
+    throw new Error("expected foreign optional context rejection");
+  } catch (error) {
+    expect(error).toMatchObject({
+      violations: expect.arrayContaining([
+        expect.objectContaining({ code: "READ_CONTEXT_NOT_REQUIRED" }),
+      ]),
+    });
+  }
+  input.criteria.shift();
+  input.slices.shift();
+  expect(() => validateEngineeringGateOwnership(input)).not.toThrow();
+});
 
 function databaseWithName(name?: string): Database {
   const base = resolvePoolConfig();
@@ -393,6 +797,183 @@ describeIntegration("durable engineering gate executor", () => {
     });
     return { descriptor, operationId, operation, treeDigest };
   }
+
+  it.each([
+    "pass",
+    "missing-method",
+    "compiler-failure",
+    "protected-mutation",
+    "foreign-tree",
+    "tamper-missing-binding",
+    "tamper-input-digest",
+    "tamper-tree-digest",
+  ] as const)("binds trusted evaluator execution and replays durably: %s", async (mode) => {
+    await mkdir(join(root, "Tests"));
+    const content = "import XCTest\n";
+    const contentDigest = `sha256:${(await import("node:crypto")).createHash("sha256").update(content).digest("hex")}`;
+    const definition = VerificationGateDefinition.parse({
+      schema_version: 1,
+      gate_id: "evaluator-gate",
+      gate_class: VerificationGateClass.TEST,
+      executable: await realpath(process.execPath),
+      argv: [
+        "-e",
+        mode === "compiler-failure"
+          ? "process.stderr.write('compiler diagnostic');process.exit(65)"
+          : "process.stdout.write('ok')",
+        "--",
+        "-only-testing:T/S/test()",
+      ],
+      relative_cwd: "src",
+      required: true,
+      baseline: false,
+      test_first: false,
+      timeout_ms: 10_000,
+      environment_profile: "BUILD_TOOLCHAIN",
+      network_profile: "PLATFORM_MANAGED",
+      mutable_outputs: ["out"],
+      trusted_evaluator_inputs: {
+        files: [{ relative_path: "Tests/Probe.swift", content, content_digest: contentDigest }],
+        required_executed_test_ids: ["T/S/test()"],
+      },
+    });
+    const evaluatorCatalog = await VerificationGateCatalog.create({
+      definitions: [definition],
+      executable_allowlist: [definition.executable],
+    });
+    const candidateTree = await computeTreeDigest(root);
+    let executedTree: string | undefined;
+    const dispatches = vi.fn(
+      async (input: Parameters<VerificationGatePlatformAdapter["run"]>[0]) => {
+        expect(await readFile(join(input.disposable_root, "Tests/Probe.swift"), "utf8")).toBe(
+          content,
+        );
+        executedTree = await computeTreeDigest(input.disposable_root);
+        const manifest = testCommandManifest.parse({
+          schema_version: 1,
+          manifest_id: `verification-${definition.gate_id}`,
+          digest: canonicalDigest({ definition }),
+          entries: [
+            {
+              name: definition.gate_id,
+              phase: TestPhase.UNIT,
+              executable: definition.executable,
+              argv: definition.argv,
+              relative_cwd: definition.relative_cwd,
+              timeout_ms: definition.timeout_ms,
+              required: true,
+            },
+          ],
+        });
+        const candidate = await createTestRunner({
+          root: input.disposable_root,
+          scope: input.scope,
+          manifest,
+          store: input.store,
+          network: "DENY",
+        }).then((runner) => runner.run({ command_name: definition.gate_id }));
+        expect(candidate.outcome).toBe(mode === "compiler-failure" ? "FAILED" : "PASSED");
+        expect(candidate.tree_digest_before).toBe(executedTree);
+        const evidence = testEvidence.parse({
+          kind: "XCODE_TEST_RESULT_V1",
+          tool: "xcresulttool",
+          schema_version: "0.1.0",
+          executed_test_ids: [mode === "missing-method" ? "T/S/other()" : "T/S/test()"],
+          executed_count: 1,
+          failed_test_ids: [],
+          expected_suite_ids: ["T/S"],
+          observed_suite_ids: ["T/S"],
+          result_digest: `sha256:${"e".repeat(64)}`,
+        });
+        if (mode === "protected-mutation")
+          await writeFile(join(input.disposable_root, "Tests/Probe.swift"), "tampered\n");
+        const withEvidence = {
+          ...candidate,
+          ...(mode === "compiler-failure" ? {} : { test_evidence: evidence }),
+          ...(mode === "foreign-tree" ? { tree_digest_before: `sha256:${"f".repeat(64)}` } : {}),
+        } as TestRun;
+        return { ...withEvidence, receipt_digest: testRunReceiptDigest(withEvidence) };
+      },
+    );
+    const first = await executeVerificationGate(
+      executorInput({
+        catalog: evaluatorCatalog,
+        gate_id: definition.gate_id,
+        platform_adapter: { run: dispatches },
+      }),
+    );
+    expect(first.status).toBe("RECORDED");
+    if (first.status !== "RECORDED") return;
+    expect(first.receipt.outcome).toBe(
+      mode === "pass" || mode.startsWith("tamper-")
+        ? VerificationGateOutcome.PASSED
+        : mode === "compiler-failure"
+          ? VerificationGateOutcome.FAILED
+          : VerificationGateOutcome.INFRASTRUCTURE,
+    );
+    expect(first.receipt.tree_digest).toBe(candidateTree);
+    if (mode === "pass" || mode === "compiler-failure" || mode.startsWith("tamper-")) {
+      expect(first.receipt.trusted_evaluator_binding?.evaluator_inputs_digest).toBe(
+        validateTrustedEvaluatorInputs(definition.trusted_evaluator_inputs!).digest,
+      );
+      expect(first.receipt.trusted_evaluator_binding?.evaluated_tree_digest).toBe(executedTree);
+    }
+    expect(executedTree).not.toBe(candidateTree);
+    expect(await computeTreeDigest(root)).toBe(candidateTree);
+    await expect(access(join(root, "Tests/Probe.swift"))).rejects.toMatchObject({ code: "ENOENT" });
+    if (mode !== "pass" && mode !== "compiler-failure" && !mode.startsWith("tamper-")) {
+      expect(first.receipt.trusted_evaluator_binding).toBeUndefined();
+      expect(first.receipt.test_evidence).toBeUndefined();
+    }
+    if (mode === "compiler-failure") expect(first.receipt.test_evidence).toBeUndefined();
+    if (mode.startsWith("tamper-")) {
+      const tampered = { ...first.receipt };
+      if (mode === "tamper-missing-binding") {
+        delete (tampered as { trusted_evaluator_binding?: unknown }).trusted_evaluator_binding;
+      } else if (tampered.trusted_evaluator_binding !== undefined) {
+        tampered.trusted_evaluator_binding = {
+          ...tampered.trusted_evaluator_binding,
+          ...(mode === "tamper-input-digest"
+            ? { evaluator_inputs_digest: `sha256:${"0".repeat(64)}` }
+            : { evaluated_tree_digest: `sha256:${"f".repeat(64)}` }),
+        };
+      }
+      const { schema_version, receipt_id, ...identityFields } = tampered;
+      void schema_version;
+      void receipt_id;
+      if (mode !== "tamper-tree-digest")
+        tampered.receipt_id = verificationGateReceiptId(identityFields);
+      const durable = await control.readOperationCompletion(db, {
+        operationId: first.operation_id,
+      });
+      if (durable === null || durable.completion === null)
+        throw new Error("expected durable completion");
+      vi.spyOn(control, "readOperationCompletion").mockResolvedValue({
+        ...durable,
+        completion: { ...durable.completion, receipt: tampered },
+      });
+      await expect(
+        executeVerificationGate(
+          executorInput({
+            catalog: evaluatorCatalog,
+            gate_id: definition.gate_id,
+            platform_adapter: { run: dispatches },
+          }),
+        ),
+      ).rejects.toThrow(/trusted evaluator|binding|identity/u);
+      expect(dispatches).toHaveBeenCalledTimes(1);
+      return;
+    }
+    const replay = await executeVerificationGate(
+      executorInput({
+        catalog: evaluatorCatalog,
+        gate_id: definition.gate_id,
+        platform_adapter: { run: dispatches },
+      }),
+    );
+    expect(replay).toEqual(first);
+    expect(dispatches).toHaveBeenCalledTimes(1);
+  });
 
   it("executes a real process, re-reads durable evidence, and identities exact tree attempts", async () => {
     const initialCurrent = await computeTreeDigest(root);

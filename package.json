@@ -16,6 +16,7 @@
     "test": "vitest run",
     "build": "turbo run build",
     "workflow:validate": "tsx scripts/workflow/validate.ts",
+    "engineering:pilot": "tsx scripts/engineering/pilot.ts",
     "check": "pnpm run lint && pnpm run format && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run workflow:validate"
   },
   "pnpm": {

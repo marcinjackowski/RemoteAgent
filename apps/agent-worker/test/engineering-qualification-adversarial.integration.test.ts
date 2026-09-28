@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import type { RuntimeRequest, RuntimeResponse, RuntimeTransport } from "@remoteagent/model-runtime";
 import { EngineeringStage, canonicalDigest } from "@remoteagent/contracts";
 import { EngineeringControlPlaneRepository, productionRuntime } from "@remoteagent/database";
@@ -10,9 +14,11 @@ import {
 } from "../../../packages/database/test/integration-base.js";
 import {
   createEngineeringQualificationFixture,
+  EngineeringQualificationTransport,
   qualificationModel,
   type EngineeringQualificationFixture,
 } from "./engineering-qualification-fixture.js";
+import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
 
 const available = await ensurePostgres();
 const smallRiskFacts = Object.freeze({
@@ -30,6 +36,7 @@ const smallRiskFacts = Object.freeze({
 });
 const opaqueCanary = "opaque-adversarial-canary-7f9d";
 const hostileHostPath = "/Users/alice/private/host-repository";
+const run = promisify(execFile);
 
 class AdversarialPlanningTransport implements RuntimeTransport {
   readonly requests: RuntimeRequest[] = [];
@@ -69,6 +76,59 @@ class AdversarialPlanningTransport implements RuntimeTransport {
       model: qualificationModel,
       content: [{ type: "json", value: value as never }],
     };
+  }
+}
+
+class MixedMutationTransport extends EngineeringQualificationTransport {
+  #calls = 0;
+  public implementationCalls = 0;
+  constructor(
+    input: ConstructorParameters<typeof EngineeringQualificationTransport>[0],
+    private readonly forbiddenPath: string,
+    private readonly foreignReport: boolean,
+  ) {
+    super(input);
+  }
+  public override async converse(
+    request: RuntimeRequest,
+    config: RuntimeConfig,
+  ): Promise<RuntimeResponse> {
+    if (request.outputSchema?.name === "SliceImplementationReport_v1") {
+      this.#calls += 1;
+      this.implementationCalls += 1;
+      this.requests.push(request);
+      if (this.#calls === 1)
+        return {
+          model: qualificationModel,
+          content: [
+            {
+              type: "tool-use",
+              id: "forbidden",
+              name: "write",
+              input: { relative_path: this.forbiddenPath, content: "forbidden" },
+            },
+            {
+              type: "tool-use",
+              id: "allowed",
+              name: "write",
+              input: { relative_path: "src/qualified.ts", content: "allowed" },
+            },
+          ],
+        };
+      return {
+        model: qualificationModel,
+        content: [
+          {
+            type: "json",
+            value: {
+              schema_version: 1,
+              changed_files: this.foreignReport ? ["foreign/file.ts"] : ["src/qualified.ts"],
+            } as never,
+          },
+        ],
+      };
+    }
+    return super.converse(request, config);
   }
 }
 
@@ -184,6 +244,72 @@ describeIntegration(
         ).rows[0]!.count,
       ).toBe("0");
     });
+
+    it.each([
+      ["evaluator/fixture.json", false],
+      ["generator/output.swift", false],
+      ["instructions.md", false],
+      ["foreign/file.ts", true],
+    ] as const)(
+      "rejects mixed mutation or foreign report for %s",
+      async (forbiddenPath, foreignReport) => {
+        const fixture = await createEngineeringQualificationFixture({
+          id: `mixed-${forbiddenPath.replace(/[^A-Za-z0-9]/gu, "-")}`,
+        });
+        active.push(fixture);
+        const lease = await fixture.claimImplementer();
+        const transport = new MixedMutationTransport(
+          {
+            caseId: fixture.ids.caseId,
+            runId: fixture.ids.runId,
+            sliceIds: ["slice-1"],
+            implementationPaths: ["src/qualified.ts"],
+            processClass: "SMALL",
+          },
+          forbiddenPath,
+          foreignReport,
+        );
+        const production = fixture.makeProduction(lease, {
+          transport,
+          policy: { riskFacts: smallRiskFacts },
+        });
+        await expect(production.handler(lease, async () => undefined)).rejects.toThrow();
+        const counts = await fixture.db.query<{
+          bundles: string;
+          verifications: string;
+          commits: string;
+        }>(
+          `SELECT
+          (SELECT count(*)::text FROM engineering_artifact_revisions WHERE run_id=$1 AND artifact_kind='EvidenceBundle') AS bundles,
+          (SELECT count(*)::text FROM engineering_artifact_revisions WHERE run_id=$1 AND artifact_kind='VerificationDecision') AS verifications,
+          (SELECT count(*)::text FROM engineering_artifact_revisions WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt') AS commits`,
+          [fixture.ids.runId],
+        );
+        expect(counts.rows[0]).toEqual({ bundles: "0", verifications: "0", commits: "0" });
+        expect(transport.implementationCalls).toBe(3);
+        await expect(readFile(join(fixture.sourcePath, "src", "base.ts"), "utf8")).resolves.toBe(
+          "export const base = true;\n",
+        );
+        const workspacePath = join(
+          fixture.config.workspaceConfig.workspaceRoot,
+          fixture.ids.caseId,
+          verticalSliceWorkspaceId(fixture.ids.caseId),
+        );
+        await expect(readFile(join(workspacePath, "src", "base.ts"), "utf8")).resolves.toBe(
+          "export const base = true;\n",
+        );
+        await expect(access(join(fixture.sourcePath, forbiddenPath))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(access(join(workspacePath, forbiddenPath))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        const sourceHead = await run("git", ["-C", fixture.sourcePath, "rev-parse", "HEAD"]);
+        expect(sourceHead.stdout.trim()).toBe(fixture.baseSha);
+        const sourceStatus = await run("git", ["-C", fixture.sourcePath, "status", "--porcelain"]);
+        expect(sourceStatus.stdout.trim()).toBe("");
+      },
+    );
 
     it("keeps telemetry low-cardinality and redacts adversarial prompt canaries", async () => {
       const fixture = await createEngineeringQualificationFixture({ id: "adversarial-metrics" });

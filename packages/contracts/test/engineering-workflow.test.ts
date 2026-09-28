@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canonicalDigest } from "../src/canonical.js";
+import { toJsonSchema } from "../src/schema.js";
 import {
   assertEngineeringProcessClassAllowed,
   engineeringArtifact,
@@ -13,6 +14,9 @@ import {
   engineeringDesignDecision,
   engineeringEvidenceBundle,
   engineeringGateFailure,
+  engineeringGateFailureV1,
+  engineeringGateFailureV2,
+  engineeringGateFailureUnion,
   engineeringMemoryUpdate,
   engineeringLocalCommitReceipt,
   engineeringMinimumProcessClass,
@@ -770,6 +774,117 @@ describe("engineering workflow contracts", () => {
     ).toBe(false);
   });
 
+  it("keeps GateFailure v1 historical and validates typed v2 observations", () => {
+    const v1 = {
+      schema_version: 1,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: 1,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt: 1,
+      tree_digest: digest,
+      diff_digest: digest,
+      context_digest: digest,
+      config_digest: digest,
+      blocking_gate_ids: ["gate-1"],
+      receipt_ids: ["receipt-1"],
+      decision_ids: [],
+      diagnostics: [
+        {
+          gate_id: "gate-1",
+          outcome: "FAILED",
+          log_digest: digest,
+          trust: "UNTRUSTED_DATA",
+          excerpt: "failed",
+        },
+      ],
+    } as const;
+    expect(engineeringGateFailureV1.parse(v1)).toEqual(v1);
+    expect(engineeringGateFailureUnion.parse(v1)).toEqual(v1);
+
+    const v2 = {
+      ...v1,
+      schema_version: 2,
+      mapping_digest: digest,
+      observations: [
+        {
+          criterion_id: "criterion-1",
+          gate_id: "gate-1",
+          failure_class: "COMPILE_FAILED",
+          evidence_ref: "receipt-1",
+          related_target_ids: ["target-1", "target-2"],
+        },
+      ],
+    } as const;
+    const parsed = engineeringGateFailureV2.parse(v2);
+    expect(parsed).toMatchObject(v2);
+    expect(engineeringArtifact.parse(v2)).toMatchObject(v2);
+    const registrySchema = toJsonSchema("EngineeringGateFailure") as {
+      oneOf?: Array<{ properties?: { schema_version?: { const?: number } } }>;
+    };
+    expect(
+      registrySchema.oneOf?.map((variant) => variant.properties?.schema_version?.const),
+    ).toEqual([1, 2]);
+    expect(Object.isFrozen(parsed.observations)).toBe(true);
+    const firstObservation = parsed.observations[0];
+    expect(firstObservation).toBeDefined();
+    if (firstObservation === undefined) throw new Error("parsed observation missing");
+    expect(Object.isFrozen(firstObservation)).toBe(true);
+    expect(Object.isFrozen(firstObservation.related_target_ids)).toBe(true);
+    expect(engineeringGateFailureUnion.parse(v2)).toMatchObject(v2);
+
+    expect(engineeringGateFailureV2.safeParse({ ...v2, unexpected: true }).success).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse({
+        ...v2,
+        observations: [{ ...v2.observations[0], failure_class: "NOT_A_CLASS" }],
+      }).success,
+    ).toBe(false);
+    expect(engineeringGateFailureV2.safeParse({ ...v2, observations: [] }).success).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse(
+        (() => {
+          const withoutObservations = { ...v2 };
+          delete (withoutObservations as { observations?: unknown }).observations;
+          return withoutObservations;
+        })(),
+      ).success,
+    ).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse({
+        ...v2,
+        observations: [{ ...v2.observations[0], evidence_ref: "foreign-receipt" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse({
+        ...v2,
+        blocking_gate_ids: ["gate-1", "gate-2"],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse({
+        ...v2,
+        observations: [{ ...v2.observations[0], gate_id: "foreign-gate" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse({
+        ...v2,
+        observations: [v2.observations[0], v2.observations[0]],
+      }).success,
+    ).toBe(false);
+    expect(
+      engineeringGateFailureV2.safeParse({
+        ...v2,
+        observations: [{ ...v2.observations[0], related_target_ids: ["target-1", "target-1"] }],
+      }).success,
+    ).toBe(false);
+    expect(engineeringGateFailureUnion.safeParse({ ...v2, schema_version: 3 }).success).toBe(false);
+  });
+
   it("keeps local commit evidence strict and server-owned", () => {
     const receipt = {
       schema_version: 1,
@@ -856,6 +971,33 @@ describe("engineering workflow contracts", () => {
           {
             ...program.slice_blueprints[0],
             gate_ids: ["contracts.test", "contracts.test"],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts 256 blueprint paths and rejects 257", () => {
+    const allowedPaths = Array.from({ length: 256 }, (_, index) => `src/path-${index}`);
+    const withinLimit = engineeringProgramDesign.safeParse({
+      ...program,
+      slice_blueprints: [
+        {
+          ...program.slice_blueprints[0],
+          allowed_paths: allowedPaths,
+          test_paths: [allowedPaths[0]],
+        },
+      ],
+    });
+    expect(withinLimit.success).toBe(true);
+    expect(
+      engineeringProgramDesign.safeParse({
+        ...program,
+        slice_blueprints: [
+          {
+            ...program.slice_blueprints[0],
+            allowed_paths: [...allowedPaths, "src/path-256"],
+            test_paths: [allowedPaths[0]],
           },
         ],
       }).success,

@@ -5,9 +5,10 @@ import {
   CaseRepository,
   CheckpointRepository,
   ConnectionRepository,
+  Database,
   OwnerRepository,
   WorkUnitRepository,
-  type Database,
+  resolvePoolConfig,
 } from "@remoteagent/database";
 import { ContextCacheState, MetricName, MetricRegistry } from "@remoteagent/observability";
 
@@ -22,6 +23,16 @@ const available = await ensurePostgres();
 const CUTOFF = "2026-08-26T12:00:00.000Z";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
+const isolatedDatabaseConfig = (database: string) => {
+  const base = resolvePoolConfig();
+  if (base.connectionString !== undefined) {
+    const url = new URL(base.connectionString);
+    url.pathname = `/${database}`;
+    return { connectionString: url.toString() };
+  }
+  return { ...base, database };
+};
+
 describeIntegration(
   "production engineering reply context",
   () => {
@@ -30,8 +41,24 @@ describeIntegration(
 
     beforeAll(async () => {
       const created = await createTestDatabase();
-      db = created.db;
-      drop = created.drop;
+      // Reopen the isolated database through the package identity used by production
+      // repositories; the source test harness intentionally owns only setup/teardown.
+      const packageDb = new Database(isolatedDatabaseConfig(created.name));
+      try {
+        const identity = await packageDb.query<{ database_name: string }>(
+          "SELECT current_database() AS database_name",
+        );
+        expect(identity.rows[0]?.database_name).toBe(created.name);
+        db = packageDb;
+      } catch (error) {
+        await packageDb.close();
+        await created.drop();
+        throw error;
+      }
+      drop = async () => {
+        await db.close();
+        await created.drop();
+      };
     });
 
     afterAll(async () => drop());

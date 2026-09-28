@@ -1,5 +1,5 @@
 import { access, lstat, realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 export type NetworkMode = "DENY" | "ALLOW";
 
 export type ProcessRunnerErrorCode =
@@ -50,12 +50,23 @@ export async function prepareNetworkLaunch(
     throw new ProcessRunnerError("NOT_ENFORCEABLE", "sandbox-exec is unavailable");
   }
   const networkRule = mode === "DENY" ? "(deny network*)" : "(allow network*)";
-  const profile = `(version 1)(import "system.sb")${networkRule}(deny file-read*)(allow file-read* (subpath (param "WORKSPACE_ROOT")) (subpath "/usr/lib") (subpath "/usr/bin") (subpath "/bin") (subpath "/System/Library") (subpath "/private/var/db/dyld") (literal (param "EXECUTABLE")))(deny file-write*)(allow file-write* (subpath (param "WORKSPACE_ROOT")))(allow process-fork)(allow process-exec (literal (param "EXECUTABLE")))`;
+  // runProcess supplies a canonical root. ESM realpath resolution needs its
+  // ancestors' metadata, not directory listings or data from sibling paths.
+  const ancestors: string[] = [];
+  for (let current = dirname(workspaceRoot); ; current = dirname(current)) {
+    ancestors.push(current);
+    if (current === dirname(current)) break;
+  }
+  const ancestorMetadata = ancestors
+    .map((_, index) => `(literal (param "WORKSPACE_ANCESTOR_${index}"))`)
+    .join(" ");
+  const profile = `(version 1)(import "system.sb")${networkRule}(deny file-read*)(allow file-read-metadata ${ancestorMetadata})(allow file-read* (subpath (param "WORKSPACE_ROOT")) (subpath "/usr/lib") (subpath "/usr/bin") (subpath "/bin") (subpath "/System/Library") (subpath "/private/var/db/dyld") (literal (param "EXECUTABLE")))(deny file-write*)(allow file-write* (subpath (param "WORKSPACE_ROOT")))(allow process-fork)(allow process-exec (literal (param "EXECUTABLE")))`;
   return {
     executable: "/usr/bin/sandbox-exec",
     args: [
       "-D",
       `WORKSPACE_ROOT=${workspaceRoot}`,
+      ...ancestors.flatMap((ancestor, index) => ["-D", `WORKSPACE_ANCESTOR_${index}=${ancestor}`]),
       "-D",
       `EXECUTABLE=${executable}`,
       "-p",

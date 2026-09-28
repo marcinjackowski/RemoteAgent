@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   runSubscriptionProcess,
+  runSubscriptionControlCommand,
   subscriptionModelProfileV1,
   subscriptionProcessEnvironment,
   type NormalizedSubscriptionModelEvent,
@@ -124,6 +125,132 @@ describe("subscription CLI process boundary", () => {
     controller.abort();
     await expect(cancelled).resolves.toMatchObject({ outcome: "CANCELLED" });
     await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("cancels the entire subscription process tree", async () => {
+    const root = await fixture();
+    const ready = join(root, "child-ready");
+    const pidFile = join(root, "child-pid");
+    const release = join(root, "release-child");
+    const marker = join(root, "child-marker");
+    const childScript = `const fs=require('node:fs'); process.on('SIGTERM', () => {}); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); fs.writeFileSync(${JSON.stringify(ready)}, 'ready'); const wait=setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(wait); fs.writeFileSync(${JSON.stringify(marker)}, 'bad'); process.exit(0); } }, 10);`;
+    const parentScript = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio: 'ignore'}); setTimeout(() => {}, 10000);`;
+    const controller = new AbortController();
+    const running = runSubscriptionProcess({
+      profile: await profile({ timeout_ms: 10_000, kill_grace_ms: 50 }),
+      argv: ["-e", parentScript],
+      stdin: "",
+      cwd: root,
+      environment: safeEnvironment,
+      signal: controller.signal,
+      preflight: authenticated,
+    });
+    let childPid: number | undefined;
+    try {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        try {
+          await readFile(ready);
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+      await expect(readFile(ready, "utf8")).resolves.toBe("ready");
+      const parsedChildPid = Number(await readFile(pidFile, "utf8"));
+      expect(Number.isInteger(parsedChildPid) && parsedChildPid > 1).toBe(true);
+      if (!Number.isInteger(parsedChildPid) || parsedChildPid <= 1)
+        throw new Error("child PID is invalid");
+      childPid = parsedChildPid;
+      controller.abort();
+      await expect(running).resolves.toMatchObject({ outcome: "CANCELLED" });
+      await writeFile(release, "release-after-cancel");
+      const childExitDeadline = Date.now() + 5_000;
+      let childExited = false;
+      while (Date.now() < childExitDeadline) {
+        try {
+          process.kill(childPid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        } catch {
+          childExited = true;
+          break;
+        }
+      }
+      expect(childExited).toBe(true);
+      await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (!controller.signal.aborted) controller.abort();
+      await running.catch(() => undefined);
+      if (childPid !== undefined) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The process group cleanup may already have terminated the child.
+        }
+      }
+    }
+  });
+
+  it("cancels the control-command process tree before rejecting", async () => {
+    const root = await fixture();
+    const ready = join(root, "control-child-ready");
+    const pidFile = join(root, "control-child-pid");
+    const release = join(root, "control-release-child");
+    const marker = join(root, "control-child-marker");
+    const childScript = `const fs=require('node:fs'); process.on('SIGTERM', () => {}); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); fs.writeFileSync(${JSON.stringify(ready)}, 'ready'); const wait=setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(wait); fs.writeFileSync(${JSON.stringify(marker)}, 'bad'); process.exit(0); } }, 10);`;
+    const parentScript = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {stdio: 'ignore'}); setTimeout(() => {}, 10000);`;
+    const controller = new AbortController();
+    const running = runSubscriptionControlCommand({
+      profile: await profile({ timeout_ms: 10_000, kill_grace_ms: 50 }),
+      argv: ["-e", parentScript],
+      environment: safeEnvironment,
+      signal: controller.signal,
+      deadline: Date.now() + 10_000,
+    });
+    let childPid: number | undefined;
+    try {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        try {
+          await readFile(ready);
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+      await expect(readFile(ready, "utf8")).resolves.toBe("ready");
+      const parsedChildPid = Number(await readFile(pidFile, "utf8"));
+      expect(Number.isInteger(parsedChildPid) && parsedChildPid > 1).toBe(true);
+      if (!Number.isInteger(parsedChildPid) || parsedChildPid <= 1)
+        throw new Error("child PID is invalid");
+      childPid = parsedChildPid;
+      controller.abort();
+      await expect(running).rejects.toThrow(/cancelled/u);
+      await writeFile(release, "release-after-cancel");
+      const childExitDeadline = Date.now() + 5_000;
+      let childExited = false;
+      while (Date.now() < childExitDeadline) {
+        try {
+          process.kill(childPid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        } catch {
+          childExited = true;
+          break;
+        }
+      }
+      expect(childExited).toBe(true);
+      await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (!controller.signal.aborted) controller.abort();
+      await running.catch(() => undefined);
+      if (childPid !== undefined) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The process group cleanup may already have terminated the child.
+        }
+      }
+    }
   });
 
   it("uses argv without a shell and emits only normalized content-free events", async () => {

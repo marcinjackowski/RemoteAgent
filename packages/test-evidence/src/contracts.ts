@@ -35,6 +35,7 @@
  * statement about the code.
  */
 import {
+  canonicalDigest,
   TrustLevel,
   idString,
   relativeRepositoryPath,
@@ -258,6 +259,42 @@ export const testCommandManifest = versionedContract({
 
 export type TestCommandManifest = z.infer<typeof testCommandManifest>;
 
+/** Compact, server-parsed evidence proving which Xcode tests actually ran. */
+export const testEvidence = valueObject({
+  kind: z.literal("XCODE_TEST_RESULT_V1"),
+  tool: z.literal("xcresulttool"),
+  schema_version: z.literal("0.1.0"),
+  executed_test_ids: z.array(idString).min(1).max(4096),
+  executed_count: z.int().positive().max(4096),
+  failed_test_ids: z.array(idString).max(4096),
+  expected_suite_ids: z.array(idString).min(1).max(512),
+  observed_suite_ids: z.array(idString).min(1).max(512),
+  result_digest: sha256Digest,
+}).superRefine((evidence, ctx) => {
+  const uniqueSorted = (values: readonly string[]) =>
+    [...new Set(values)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const [field, values] of [
+    ["executed_test_ids", evidence.executed_test_ids],
+    ["failed_test_ids", evidence.failed_test_ids],
+    ["expected_suite_ids", evidence.expected_suite_ids],
+    ["observed_suite_ids", evidence.observed_suite_ids],
+  ] as const) {
+    if (JSON.stringify(values) !== JSON.stringify(uniqueSorted(values)))
+      ctx.addIssue({ code: "custom", path: [field], message: "must be unique and sorted" });
+  }
+  if (evidence.executed_count !== evidence.executed_test_ids.length)
+    ctx.addIssue({ code: "custom", path: ["executed_count"], message: "must match executed IDs" });
+  if (evidence.failed_test_ids.some((id) => !evidence.executed_test_ids.includes(id)))
+    ctx.addIssue({ code: "custom", path: ["failed_test_ids"], message: "must be executed IDs" });
+  if (evidence.expected_suite_ids.some((id) => !evidence.observed_suite_ids.includes(id)))
+    ctx.addIssue({
+      code: "custom",
+      path: ["observed_suite_ids"],
+      message: "must observe every expected suite",
+    });
+});
+export type TestEvidence = z.infer<typeof testEvidence>;
+
 /**
  * The receipt for one executed verification command.
  *
@@ -291,6 +328,8 @@ export const testRun = versionedContract({
   /** Redacted excerpt for reading inline; the artifact holds the full stream. */
   excerpt: evidenceExcerpt,
   artifact: artifactReference.nullable(),
+  /** Optional for historical runs; mandatory for newly validated Xcode TEST adapters. */
+  test_evidence: testEvidence.optional(),
   /** Digest over the receipt's own identifying fields. Ties a verdict to a run. */
   receipt_digest: sha256Digest,
 }).superRefine((run, ctx) => {
@@ -315,9 +354,56 @@ export const testRun = versionedContract({
       path: ["exit_code"],
     });
   }
+  if (
+    run.test_evidence !== undefined &&
+    run.outcome === TestOutcome.PASSED &&
+    run.test_evidence.failed_test_ids.length > 0
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["test_evidence", "failed_test_ids"],
+      message: "PASSED cannot contain failed tests",
+    });
+  }
+  if (
+    run.test_evidence !== undefined &&
+    run.outcome === TestOutcome.FAILED &&
+    run.test_evidence.failed_test_ids.length === 0
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["test_evidence", "failed_test_ids"],
+      message: "FAILED must contain a failed test",
+    });
+  }
 });
 
 export type TestRun = z.infer<typeof testRun>;
+
+/** Recompute the stable identity over all receipt fields, including optional evidence. */
+export function testRunReceiptDigest(run: Omit<TestRun, "receipt_digest">): string {
+  return canonicalDigest({
+    run_id: run.run_id,
+    scope: run.scope,
+    command_name: run.command_name,
+    phase: run.phase,
+    manifest_digest: run.manifest_digest,
+    outcome: run.outcome,
+    exit_code: run.exit_code,
+    signal: run.signal,
+    tree_digest_before: run.tree_digest_before,
+    tree_digest_after: run.tree_digest_after,
+    artifact_digest: run.artifact?.digest ?? null,
+    ...(run.test_evidence === undefined ? {} : { test_evidence: run.test_evidence }),
+  });
+}
+
+/** Attach validated Xcode evidence while preserving receipt identity. */
+export function testRunWithEvidence(run: TestRun, evidence: TestEvidence): TestRun {
+  const parsed = testEvidence.parse(evidence);
+  const next = { ...run, test_evidence: parsed };
+  return testRun.parse({ ...next, receipt_digest: testRunReceiptDigest(next) });
+}
 
 /**
  * Whether the evidence supports the change.

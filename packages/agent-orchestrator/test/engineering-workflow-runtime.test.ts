@@ -1,4 +1,9 @@
-import { agentCompletion, type AgentCompletion, type WorkUnit } from "@remoteagent/contracts";
+import {
+  agentCompletion,
+  canonicalDigest,
+  type AgentCompletion,
+  type WorkUnit,
+} from "@remoteagent/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +14,9 @@ import {
   engineeringStructuralFingerprint,
   evaluateEngineeringApproval,
   evaluateEngineeringProgress,
+  evaluateEngineeringGateCorrectionBudget,
+  evaluateStableGateDiagnosticPersistence,
+  evaluateCompilerDiagnosticProgress,
   planEngineeringWorkflow,
   SupervisorRuntime,
   type EngineeringRecoveredStage,
@@ -20,6 +28,15 @@ import {
   type RuntimeSnapshot,
   type RuntimeUnit,
 } from "../src/index.js";
+
+it("evaluates compiler diagnostic progress deterministically", () => {
+  expect(evaluateCompilerDiagnosticProgress([])).toBe("CONTINUE");
+  expect(evaluateCompilerDiagnosticProgress([["a"]])).toBe("CONTINUE");
+  expect(evaluateCompilerDiagnosticProgress([["a"], ["a"]])).toBe("NO_PROGRESS");
+  expect(evaluateCompilerDiagnosticProgress([["a"], []])).toBe("CONTINUE");
+  expect(evaluateCompilerDiagnosticProgress([["a", "b"], ["a"]])).toBe("CONTINUE");
+  expect(evaluateCompilerDiagnosticProgress([["a"], ["b"]])).toBe("CONTINUE");
+});
 
 const sha = (digit: string): string => `sha256:${digit.repeat(64)}`;
 const risk = (patch: Record<string, boolean> = {}) => ({
@@ -215,6 +232,38 @@ class MemoryStagePort implements EngineeringRuntimePort {
   }
 }
 
+class GateCorrectionStagePort extends MemoryStagePort {
+  public gateFailures = 0;
+  public constructor(private readonly mode: "ORDINARY" | "COMPILER" = "ORDINARY") {
+    super("SMALL");
+  }
+  public override async invokeAndRecord(input: {
+    binding: EngineeringStageBinding;
+  }): Promise<EngineeringStageCallResult> {
+    if (input.binding.stage !== EngineeringStage.GATE_EXECUTION)
+      return super.invokeAndRecord(input);
+    this.calls.push(input.binding.stage);
+    this.bindings.push(input.binding);
+    this.gateFailures += 1;
+    const evidence = stageEvidence(EngineeringStage.GATE_EXECUTION);
+    return {
+      status: "COMPLETED",
+      modelCalls: 0,
+      evidence: {
+        ...evidence,
+        gateFailureMode: this.mode,
+        structuralState: {
+          ...evidence.structuralState,
+          treeDigest: sha(String(this.gateFailures % 10)),
+          failedGateIds: ["qualification"],
+          failedGateEvidenceDigests: [sha(String(this.gateFailures))],
+        },
+        slice: { ...evidence.slice, directive: "CORRECT_SLICE" as const },
+      },
+    };
+  }
+}
+
 function stageEvidence(stage: string) {
   const index = Object.values(EngineeringStage).indexOf(stage as never) + 1;
   return {
@@ -308,6 +357,141 @@ function runtime(store: MemoryRuntimeStore, port: MemoryStagePort, now = 1_000) 
 }
 
 describe("SupervisorRuntime engineering stage driver", () => {
+  it("keeps gate correction budgets independent, recovery-safe, and slice-local", () => {
+    const recovered = evaluateEngineeringGateCorrectionBudget({
+      counts: { ordinary: 8, compiler: 0 },
+      mode: "ORDINARY",
+      alreadyCounted: true,
+    });
+    expect(recovered).toEqual({ disposition: "EXHAUSTED", counts: { ordinary: 8, compiler: 0 } });
+    const recoveredBelowCap = evaluateEngineeringGateCorrectionBudget({
+      counts: { ordinary: 7, compiler: 0 },
+      mode: "ORDINARY",
+      alreadyCounted: true,
+    });
+    expect(recoveredBelowCap).toEqual({
+      disposition: "CONTINUE",
+      counts: { ordinary: 7, compiler: 0 },
+    });
+    expect(
+      evaluateEngineeringGateCorrectionBudget({
+        counts: { ordinary: 8, compiler: 0 },
+        mode: "COMPILER",
+        alreadyCounted: false,
+      }).disposition,
+    ).toBe("CONTINUE");
+    expect(
+      evaluateEngineeringGateCorrectionBudget({
+        counts: { ordinary: 0, compiler: 8 },
+        mode: "ORDINARY",
+        alreadyCounted: false,
+      }).disposition,
+    ).toBe("CONTINUE");
+    expect(
+      evaluateEngineeringGateCorrectionBudget({
+        counts: { ordinary: 7, compiler: 0 },
+        mode: "ORDINARY",
+        alreadyCounted: false,
+      }).disposition,
+    ).toBe("EXHAUSTED");
+    expect(
+      evaluateEngineeringGateCorrectionBudget({
+        counts: { ordinary: 0, compiler: 7 },
+        mode: "COMPILER",
+        alreadyCounted: false,
+      }).disposition,
+    ).toBe("EXHAUSTED");
+    const freshSlice = evaluateEngineeringGateCorrectionBudget({
+      counts: { ordinary: 0, compiler: 0 },
+      mode: "ORDINARY",
+      alreadyCounted: false,
+    });
+    expect(freshSlice).toEqual({ disposition: "CONTINUE", counts: { ordinary: 1, compiler: 0 } });
+  });
+  it("stops after eight same-slice gate corrections even when tree evidence changes", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new GateCorrectionStagePort();
+    const result = await runtime(store, port).pumpOnce();
+    expect(port.gateFailures).toBe(8);
+    expect(
+      port.calls.filter((stage) => stage === EngineeringStage.SLICE_IMPLEMENTATION),
+    ).toHaveLength(8);
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      blocker_reason: expect.stringContaining("GATE_CORRECTION_LIMIT_EXHAUSTED"),
+    });
+    expect(result.terminalReasonCode).toBe("GATE_CORRECTION_LIMIT_EXHAUSTED");
+  });
+
+  it("does not duplicate recovered gate progress before the next fresh boundary", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new GateCorrectionStagePort();
+    const recoveredBase = stageEvidence(EngineeringStage.GATE_EXECUTION);
+    const recoveredEvidence = {
+      ...recoveredBase,
+      gateFailureMode: "ORDINARY" as const,
+      structuralState: {
+        ...recoveredBase.structuralState,
+        failedGateIds: ["qualification"],
+        failedGateEvidenceDigests: [canonicalDigest("recovered")],
+      },
+      slice: { ...recoveredBase.slice, directive: "CORRECT_SLICE" as const },
+    };
+    Object.assign(port.session, {
+      gateCorrectionCounts: [{ sliceId: "slice-1", ordinary: 7, compiler: 0 }],
+    });
+    const cycleFingerprint = engineeringGateFailureCycleFingerprint(
+      recoveredEvidence.structuralState,
+    );
+    port.session.gateFailureCycleFingerprints = [
+      cycleFingerprint,
+      cycleFingerprint,
+      cycleFingerprint,
+      cycleFingerprint,
+    ];
+    port.recoverStage = async (binding) =>
+      binding.stage === EngineeringStage.GATE_EXECUTION && binding.attempt === 1
+        ? { status: "RECOVERED", evidence: recoveredEvidence }
+        : { status: "NOT_STARTED" };
+    const result = await runtime(store, port).pumpOnce();
+    expect(
+      port.calls.filter((stage) => stage === EngineeringStage.SLICE_IMPLEMENTATION),
+    ).toHaveLength(2);
+    expect(store.state.completion).toMatchObject({
+      status: "BLOCKED",
+      blocker_reason: expect.stringContaining("GATE_CORRECTION_LIMIT_EXHAUSTED"),
+    });
+    expect(result.terminalReasonCode).toBe("GATE_CORRECTION_LIMIT_EXHAUSTED");
+  });
+  it("reconstructs three persistent diagnostics and stops a recovered boundary", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new GateCorrectionStagePort();
+    const base = stageEvidence(EngineeringStage.GATE_EXECUTION);
+    const evidence = {
+      ...base,
+      gateFailureMode: "COMPILER" as const,
+      structuralState: {
+        ...base.structuralState,
+        failedGateIds: ["qualification"],
+        stableGateDiagnosticFingerprints: ["slice-1:diagnostic"],
+      },
+      slice: { ...base.slice, directive: "CORRECT_SLICE" as const },
+    };
+    port.session.gateFailureDiagnosticHistory = [
+      ["slice-1:diagnostic"],
+      ["slice-1:diagnostic"],
+      ["slice-1:diagnostic"],
+    ];
+    port.recoverStage = async (binding) =>
+      binding.stage === EngineeringStage.GATE_EXECUTION && binding.attempt === 1
+        ? { status: "RECOVERED", evidence }
+        : { status: "NOT_STARTED" };
+    const result = await runtime(store, port).pumpOnce();
+    expect(result.terminalReasonCode).toBe("NO_PROGRESS");
+    expect(port.gateFailures).toBe(0);
+    expect(port.calls.filter((stage) => stage === EngineeringStage.GATE_EXECUTION)).toHaveLength(0);
+  });
+
   it.each(["SMALL", "MEDIUM", "LARGE_OR_HIGH_RISK"] as const)(
     "executes exactly the registry graph for %s",
     async (processClass) => {
@@ -603,6 +787,7 @@ describe("SupervisorRuntime engineering stage driver", () => {
             sliceRevision: 1,
             failedGateIds: ["flow-integration"],
             failedGateEvidenceDigests: [sha("f")],
+            stableGateDiagnosticFingerprints: ["stable-flow-diagnostic"],
             unresolvedFindingIds: [],
           },
           slice: {
@@ -623,7 +808,73 @@ describe("SupervisorRuntime engineering stage driver", () => {
     });
     expect(
       port.bindings.filter((binding) => binding.stage === EngineeringStage.GATE_EXECUTION),
-    ).toHaveLength(5);
+    ).toHaveLength(3);
+  });
+
+  it("stops fresh compiler correction on the second identical diagnostic boundary", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (result.status !== "COMPLETED" || input.binding.stage !== EngineeringStage.GATE_EXECUTION)
+        return result;
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          gateFailureMode: "COMPILER" as const,
+          structuralState: {
+            ...result.evidence.structuralState,
+            failedGateIds: ["swift-compile"],
+            stableGateDiagnosticFingerprints: ["stable-compiler-diagnostic"],
+          },
+          slice: { ...result.evidence.slice, directive: "CORRECT_SLICE" as const },
+        },
+      };
+    };
+
+    const result = await runtime(store, port).pumpOnce();
+
+    expect(result.terminalReasonCode).toBe("NO_PROGRESS");
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.GATE_EXECUTION),
+    ).toHaveLength(2);
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.SLICE_IMPLEMENTATION),
+    ).toHaveLength(2);
+  });
+
+  it("continues compiler correction when the diagnostic set is reduced", async () => {
+    const store = new MemoryRuntimeStore();
+    const port = new MemoryStagePort("SMALL");
+    const invoke = port.invokeAndRecord.bind(port);
+    port.invokeAndRecord = async (input) => {
+      const result = await invoke(input);
+      if (result.status !== "COMPLETED" || input.binding.stage !== EngineeringStage.GATE_EXECUTION)
+        return result;
+      const fingerprints = input.binding.attempt === 1 ? ["a", "b"] : ["a"];
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          gateFailureMode: "COMPILER" as const,
+          structuralState: {
+            ...result.evidence.structuralState,
+            failedGateIds: ["swift-compile"],
+            stableGateDiagnosticFingerprints: fingerprints,
+          },
+          slice: { ...result.evidence.slice, directive: "CORRECT_SLICE" as const },
+        },
+      };
+    };
+
+    const result = await runtime(store, port).pumpOnce();
+
+    expect(
+      port.bindings.filter((binding) => binding.stage === EngineeringStage.GATE_EXECUTION),
+    ).toHaveLength(3);
+    expect(result.terminalReasonCode).toBe("NO_PROGRESS");
   });
 
   it("executes two slices in ProgramDesign order before verification and local commit", async () => {
@@ -1067,6 +1318,14 @@ describe("engineering workflow policy", () => {
     expect(engineeringGateFailureCycleFingerprint(base)).not.toBe(
       engineeringGateFailureCycleFingerprint({ ...base, treeDigest: sha("2") }),
     );
+  });
+
+  it("stops after three consecutive shared stable gate diagnostics", () => {
+    expect(evaluateStableGateDiagnosticPersistence([["a"]])).toBe("CONTINUE");
+    expect(evaluateStableGateDiagnosticPersistence([["a"], ["a"]])).toBe("CONTINUE");
+    expect(evaluateStableGateDiagnosticPersistence([["a"], ["a"], ["a"]])).toBe("NO_PROGRESS");
+    expect(evaluateStableGateDiagnosticPersistence([["a"], ["a"], ["b"]])).toBe("CONTINUE");
+    expect(evaluateStableGateDiagnosticPersistence([["a"], ["a"], []])).toBe("CONTINUE");
   });
 
   it("distinguishes cancellation, deadline, exhaustion, no-progress, and oscillation", () => {

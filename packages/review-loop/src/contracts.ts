@@ -28,7 +28,14 @@
  * {@link reviewResolution} requires both the commit that fixed it and the run
  * receipts that vouch for that commit. "Fixed, trust me" is unrepresentable.
  */
-import { idString, sha256Digest, valueObject, versionedContract } from "@remoteagent/contracts";
+import {
+  canonicalDigest,
+  idString,
+  relativeRepositoryPath,
+  sha256Digest,
+  valueObject,
+  versionedContract,
+} from "@remoteagent/contracts";
 import * as z from "zod";
 
 /** Upper bound on findings one report may carry. */
@@ -258,6 +265,8 @@ export const preCommitModelFinding = valueObject({
   location: reviewLocation,
   evidence: z.string().max(MAX_EVIDENCE_LENGTH),
   required_fix: z.string().max(2048),
+  /** Exact repository-relative files whose bytes must change to resolve this finding. */
+  required_fix_paths: z.array(relativeRepositoryPath).max(64),
 }).superRefine((finding, ctx) => {
   if (!isBlockingSeverity(finding.severity)) return;
   if (finding.evidence.trim().length < MIN_EVIDENCE_LENGTH) {
@@ -362,11 +371,15 @@ export function mergeReviewReports(reports: readonly ReviewReport[]): readonly R
     NIT: 4,
   };
 
-  /** Same file and line is the same observation, whoever reported it. */
+  /** Same validated anchor and evidence/fix projection is the same observation. */
   const keyOf = (finding: ReviewFinding): string =>
-    finding.location === null
-      ? `unlocated:${finding.finding_id}`
-      : `${finding.location.relative_path}:${String(finding.location.line)}`;
+    canonicalDigest({
+      projection_version: 1,
+      effective_anchor: finding.location,
+      summary: finding.summary,
+      required_fix: finding.required_fix,
+      evidence_digest: canonicalDigest(finding.evidence),
+    });
 
   const bySite = new Map<string, ReviewFinding>();
   for (const report of reports) {
@@ -375,7 +388,11 @@ export function mergeReviewReports(reports: readonly ReviewReport[]): readonly R
       const existing = bySite.get(key);
       // Keep the higher severity on disagreement: a lenient reviewer must not be
       // able to overwrite a stricter one's blocker.
-      if (existing === undefined || order[finding.severity] < order[existing.severity]) {
+      if (
+        existing === undefined ||
+        order[finding.severity] < order[existing.severity] ||
+        (finding.severity === existing.severity && finding.finding_id < existing.finding_id)
+      ) {
         bySite.set(key, finding);
       }
     }

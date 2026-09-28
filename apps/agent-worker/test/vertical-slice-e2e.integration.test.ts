@@ -20,6 +20,7 @@ import {
 import {
   CaseRepository,
   ConnectionRepository,
+  EngineeringControlPlaneRepository,
   JobStore,
   OwnerRepository,
   WorkUnitRepository,
@@ -45,11 +46,18 @@ import { createStructuredPreCommitReviewSessionFactory } from "../src/engineerin
 import {
   createConfiguredEngineeringStageExecutor,
   createProductionEngineeringRuntimePort,
+  createEngineeringGateFailureMapping,
+  engineeringExecutionConfigWithGateFailureMapping,
   type EngineeringExecutionConfig,
 } from "../src/engineering-execution.js";
 import { createWorkerHandlers } from "../src/handlers.js";
 import { WorkerPersistence } from "../src/persistence.js";
 import { verticalSliceWorkspaceId } from "../src/vertical-slice-executor.js";
+import {
+  projectAcceptedLocalCommit,
+  selectLocalCommitOperationId,
+} from "./engineering-live-accepted-commit.js";
+import { projectAcceptedSliceGates } from "./engineering-live-accepted-slice-gates.js";
 
 const run = promisify(execFile);
 const available = await ensurePostgres();
@@ -104,9 +112,12 @@ class EngineeringScriptTransport implements RuntimeTransport {
           slice_id: sliceId,
           objective: `implement ${sliceId}`,
           observable_result: `${sliceId} file exists`,
-          allowed_paths: ["src"],
-          test_paths: ["src"],
-          gate_ids: ["unit"],
+          allowed_paths:
+            sliceId === "slice-1"
+              ? ["src/one-view.ts", "src/one.ts", "src/one.test.ts"]
+              : ["src/two.ts", "src/two.test.ts"],
+          test_paths: sliceId === "slice-1" ? ["src/one.test.ts"] : ["src/two.test.ts"],
+          gate_ids: [sliceId === "slice-1" ? "unit-slice-one" : "unit-slice-two"],
           inspection_method: "inspect durable Git evidence",
           stop_condition: "fresh review passes",
         })),
@@ -123,9 +134,12 @@ class EngineeringScriptTransport implements RuntimeTransport {
         slice_id: id,
         objective: `implement ${id}`,
         observable_result: `${id} file exists`,
-        allowed_paths: ["src"],
-        test_paths: ["src"],
-        gate_ids: ["unit"],
+        allowed_paths:
+          id === "slice-1"
+            ? ["src/one-view.ts", "src/one.ts", "src/one.test.ts"]
+            : ["src/two.ts", "src/two.test.ts"],
+        test_paths: id === "slice-1" ? ["src/one.test.ts"] : ["src/two.test.ts"],
+        gate_ids: [id === "slice-1" ? "unit-slice-one" : "unit-slice-two"],
         inspection_method: "inspect durable Git evidence",
         stop_condition: "fresh review passes",
       });
@@ -137,6 +151,16 @@ class EngineeringScriptTransport implements RuntimeTransport {
         return {
           model,
           content: [
+            {
+              type: "tool-use",
+              id: "write-one-test",
+              name: "write",
+              input: {
+                relative_path: "src/one.test.ts",
+                content:
+                  'const fs=require("node:fs");const assert=require("node:assert/strict");assert.ok(!fs.readFileSync("one-view.ts","utf8").includes("compile broken"));\n',
+              },
+            },
             {
               type: "tool-use",
               id: "write-bad-flow",
@@ -157,7 +181,7 @@ class EngineeringScriptTransport implements RuntimeTransport {
         this.#implementationTurn = 0;
         return json({
           schema_version: 1,
-          changed_files: ["src/one-view.ts", "src/one.ts"],
+          changed_files: ["src/one.test.ts", "src/one-view.ts", "src/one.ts"],
         });
       }
       if (index === 1 && turn === 0) {
@@ -186,9 +210,6 @@ class EngineeringScriptTransport implements RuntimeTransport {
         };
       }
       if (index === 1 && turn === 1) {
-        return json({ schema_version: 1, changed_files: ["src/one.ts"] });
-      }
-      if (index === 1 && turn === 2) {
         return {
           model,
           content: [
@@ -213,7 +234,7 @@ class EngineeringScriptTransport implements RuntimeTransport {
           ],
         };
       }
-      if (index === 1 && turn === 3) {
+      if (index === 1 && turn === 2) {
         this.#implementation += 1;
         this.#implementationTurn = 0;
         return json({
@@ -259,6 +280,16 @@ class EngineeringScriptTransport implements RuntimeTransport {
               type: "tool-use",
               id: "write-second-slice",
               name: "write",
+              input: {
+                relative_path: "src/two.test.ts",
+                content:
+                  'const fs=require("node:fs");const assert=require("node:assert/strict");assert.equal(fs.readFileSync("two.ts","utf8"),"second slice\\n");\n',
+              },
+            },
+            {
+              type: "tool-use",
+              id: "write-second-slice-implementation",
+              name: "write",
               input: { relative_path: "src/two.ts", content: "second slice\n" },
             },
           ],
@@ -267,7 +298,7 @@ class EngineeringScriptTransport implements RuntimeTransport {
       if (index === 3 && turn === 1) {
         this.#implementation += 1;
         this.#implementationTurn = 0;
-        return json({ schema_version: 1, changed_files: ["src/two.ts"] });
+        return json({ schema_version: 1, changed_files: ["src/two.test.ts", "src/two.ts"] });
       }
       throw new Error(`unexpected implementation turn ${String(index)}:${String(turn)}`);
     }
@@ -284,6 +315,7 @@ class EngineeringScriptTransport implements RuntimeTransport {
                   location: { relative_path: "src/one.ts", line: 1 },
                   evidence: "bad implementation",
                   required_fix: "Replace it with the accepted good implementation.",
+                  required_fix_paths: ["src/one.ts"],
                 },
                 {
                   severity: "HIGH",
@@ -291,6 +323,7 @@ class EngineeringScriptTransport implements RuntimeTransport {
                   location: { relative_path: "src/one-view.ts", line: 1 },
                   evidence: "inert action",
                   required_fix: "Wire the accepted production action.",
+                  required_fix_paths: ["src/one-view.ts"],
                 },
               ],
               lines_examined: 20,
@@ -403,18 +436,20 @@ describeIntegration(
       });
       const lease = await jobs.claim(db, { owner: "writer-e2e", leaseMs: 300_000 });
       if (lease === null) throw new Error("expected implementer lease");
+      const beforeArtifacts = await db.query<{ count: string }>(
+        "SELECT COUNT(*)::text AS count FROM engineering_artifact_revisions WHERE run_id='run-e2e'",
+      );
+      expect(beforeArtifacts.rows[0]?.count).toBe("0");
       const executable = await realpath(process.execPath);
       const catalog = await VerificationGateCatalog.create({
         definitions: [
           VerificationGateDefinition.parse({
             schema_version: 1,
-            gate_id: "unit",
+            gate_id: "unit-slice-one",
+            gate_schedule: "FIRST_SLICE",
             gate_class: VerificationGateClass.TEST,
             executable,
-            argv: [
-              "-e",
-              "const fs=require('node:fs');const p='one-view.ts';if(fs.existsSync(p)&&fs.readFileSync(p,'utf8').includes('compile broken')){console.error('error: review correction introduced compile broken');process.exit(1)}",
-            ],
+            argv: ["-e", "const fs=require('node:fs');eval(fs.readFileSync('one.test.ts','utf8'))"],
             relative_cwd: "src",
             required: true,
             baseline: false,
@@ -423,6 +458,24 @@ describeIntegration(
             environment_profile: "HERMETIC",
             network_profile: "DENY",
             mutable_outputs: [],
+            required_mutation_paths: ["src/one-view.ts"],
+          }),
+          VerificationGateDefinition.parse({
+            schema_version: 1,
+            gate_id: "unit-slice-two",
+            gate_schedule: "LAST_SLICE",
+            gate_class: VerificationGateClass.TEST,
+            executable,
+            argv: ["-e", "const fs=require('node:fs');eval(fs.readFileSync('two.test.ts','utf8'))"],
+            relative_cwd: "src",
+            required: true,
+            baseline: false,
+            test_first: false,
+            timeout_ms: 10_000,
+            environment_profile: "HERMETIC",
+            network_profile: "DENY",
+            mutable_outputs: [],
+            required_mutation_paths: ["src/two.ts"],
           }),
         ],
         executable_allowlist: [executable],
@@ -446,6 +499,45 @@ describeIntegration(
         catalog,
         configDigest: canonicalDigest({ repo: "repo", catalog: catalog.config_digest }),
       });
+      const mappedConfig = engineeringExecutionConfigWithGateFailureMapping(
+        config,
+        createEngineeringGateFailureMapping({
+          catalog,
+          targets: [
+            { target_id: "target-one", kind: "SOURCE", paths: ["src/one-view.ts"] },
+            { target_id: "target-one-impl", kind: "SOURCE", paths: ["src/one.ts"] },
+            { target_id: "target-two", kind: "SOURCE", paths: ["src/two.ts"] },
+            { target_id: "test-one", kind: "TEST", paths: ["src/one.test.ts"] },
+            { target_id: "test-two", kind: "TEST", paths: ["src/two.test.ts"] },
+          ],
+          slices: [
+            {
+              slice_id: "slice-1",
+              mutation_target_ids: ["target-one", "target-one-impl", "test-one"],
+              required_read_context: [],
+            },
+            {
+              slice_id: "slice-2",
+              mutation_target_ids: ["target-two", "test-two"],
+              required_read_context: [],
+            },
+          ],
+          criteria: [
+            {
+              criterion_id: "criterion-one",
+              owning_slice_id: "slice-1",
+              required_gate_ids: ["unit-slice-one"],
+              related_target_ids: ["target-one"],
+            },
+            {
+              criterion_id: "criterion-two",
+              owning_slice_id: "slice-2",
+              required_gate_ids: ["unit-slice-two"],
+              related_target_ids: ["target-two"],
+            },
+          ],
+        }),
+      );
       const transport = new EngineeringScriptTransport();
       const modelConfig = createRuntimeConfig({
         model,
@@ -456,7 +548,7 @@ describeIntegration(
       const stageExecutor = createConfiguredEngineeringStageExecutor({
         transport,
         modelConfig,
-        executionConfig: config,
+        executionConfig: mappedConfig,
       });
       const reviewer = createStructuredPreCommitReviewSessionFactory({
         transport,
@@ -506,7 +598,7 @@ describeIntegration(
           db,
           jobs,
           lease: writerLease,
-          config,
+          config: mappedConfig,
           transport,
           modelConfig,
           readContext: readContext as never,
@@ -555,13 +647,47 @@ describeIntegration(
         "wired action\n",
       );
       const artifacts = await db.query<{
+        recorded_at: string;
         artifact_kind: string;
         stage_attempt: number;
         slice_id: string | null;
         decision: string | null;
+        commit_sha: string | null;
       }>(
-        "SELECT artifact_kind, stage_attempt, payload->>'slice_id' AS slice_id, payload->>'decision' AS decision FROM engineering_artifact_revisions WHERE run_id='run-e2e' ORDER BY revision",
+        "SELECT recorded_at::text AS recorded_at, artifact_kind, stage_attempt, payload->>'slice_id' AS slice_id, payload->>'decision' AS decision, payload->>'commit_sha' AS commit_sha FROM engineering_artifact_revisions WHERE run_id='run-e2e' ORDER BY recorded_at, artifact_revision_id",
       );
+      expect(artifacts.rows.filter((row) => row.artifact_kind === "SystemDesign")).toHaveLength(1);
+      expect(artifacts.rows.filter((row) => row.artifact_kind === "ProgramDesign")).toHaveLength(1);
+      expect(
+        artifacts.rows.filter(
+          (row) => row.artifact_kind === "VerificationDecision" && row.decision === "VERIFIED",
+        ),
+      ).toHaveLength(1);
+      expect(
+        artifacts.rows.filter((row) => row.artifact_kind === "LocalCommitReceipt"),
+      ).toHaveLength(1);
+      expect(artifacts.rows.filter((row) => row.artifact_kind === "TerminalReason")).toHaveLength(
+        0,
+      );
+      const commitReceipt = artifacts.rows.find(
+        (row) => row.artifact_kind === "LocalCommitReceipt",
+      );
+      const workspaceHead = (
+        await run("git", ["-C", workspacePath, "rev-parse", "HEAD"])
+      ).stdout.trim();
+      expect(commitReceipt?.commit_sha).toBe(workspaceHead);
+      const positions = (kind: string) =>
+        artifacts.rows.flatMap((row, index) => (row.artifact_kind === kind ? [index] : []));
+      const reviewPositions = positions("ReviewDecision");
+      const gatePosition = positions("GateFailure")[0];
+      const verificationPosition = positions("VerificationDecision")[0];
+      const commitPosition = positions("LocalCommitReceipt")[0];
+      expect(reviewPositions[0]).toBeLessThan(reviewPositions[1]!);
+      expect(reviewPositions[0]).toBeLessThan(gatePosition!);
+      expect(gatePosition).toBeLessThan(reviewPositions[1]!);
+      expect(reviewPositions[1]).toBeLessThan(reviewPositions[2]!);
+      expect(reviewPositions[2]).toBeLessThan(verificationPosition!);
+      expect(verificationPosition).toBeLessThan(commitPosition!);
       const implementationArtifacts = artifacts.rows.filter(
         (row) => row.artifact_kind === "SliceImplementationReceipt",
       );
@@ -593,7 +719,7 @@ describeIntegration(
       const implementationRequests = transport.requests.filter(
         (request) => request.outputSchema?.name === "SliceImplementationReport_v1",
       );
-      expect(implementationRequests).toHaveLength(10);
+      expect(implementationRequests).toHaveLength(9);
       const correctionRequests = implementationRequests.filter(
         (request) =>
           request.tools
@@ -601,7 +727,7 @@ describeIntegration(
             .sort()
             .join(",") === "mkdir,patch",
       );
-      expect(correctionRequests).toHaveLength(6);
+      expect(correctionRequests).toHaveLength(5);
       expect(
         correctionRequests.every(
           (request) =>
@@ -611,11 +737,15 @@ describeIntegration(
               .join(",") === "mkdir,patch",
         ),
       ).toBe(true);
-      const correctionPrompt = correctionRequests[0]?.messages
-        .flatMap((message) => message.content)
-        .filter((content) => content.type === "text")
-        .map((content) => content.text)
-        .join("\n");
+      const correctionPrompt = correctionRequests
+        .map((request) =>
+          request.messages
+            .flatMap((message) => message.content)
+            .filter((content) => content.type === "text")
+            .map((content) => content.text)
+            .join("\n"),
+        )
+        .find((prompt) => prompt.includes("Code-owned prefetched repository context:"));
       expect(correctionPrompt).toContain('"relative_path":"src/one.ts"');
       expect(correctionPrompt).toContain("Previous independent-review correction evidence");
       expect(correctionPrompt).toContain("The first implementation is deliberately wrong");
@@ -625,6 +755,13 @@ describeIntegration(
       expect(correctionPrompt).toContain("ENGINEERING_CORRECTION_CONTEXT_REFERENCE");
       expect(correctionPrompt).toContain(canonicalDigest("context SLICE_IMPLEMENTATION"));
       expect(correctionPrompt).not.toContain("Context: context SLICE_IMPLEMENTATION");
+      expect(correctionPrompt).toContain('"relative_path":"src/one.ts"');
+      expect(correctionPrompt).toContain('"relative_path":"src/one-view.ts"');
+      expect(correctionPrompt).toContain("bad implementation");
+      expect(correctionPrompt).toContain("inert action");
+      expect(correctionPrompt).toContain(
+        '"required_mutation_paths":["src/one-view.ts","src/one.ts"]',
+      );
       const regressionGuardPrompt = correctionRequests
         .map((request) =>
           request.messages
@@ -645,42 +782,6 @@ describeIntegration(
         .map((content) => content.text)
         .join("\n");
       expect(firstImplementationPrompt).toContain("Context: context SLICE_IMPLEMENTATION");
-      const serializedPrefetch = correctionPrompt
-        ?.split("Code-owned prefetched repository context: ")[1]
-        ?.split("\nPrevious required-gate correction evidence:")[0];
-      const prefetched = JSON.parse(serializedPrefetch ?? "[]") as Array<{
-        evidence: string;
-        relative_path: string;
-      }>;
-      expect(prefetched).toHaveLength(2);
-      const prefetchedFlow = prefetched.find((entry) => entry.relative_path === "src/one.ts");
-      const prefetchedView = prefetched.find((entry) => entry.relative_path === "src/one-view.ts");
-      expect(JSON.parse(prefetchedFlow?.evidence ?? "{}")).toMatchObject({
-        complete: true,
-        content: "bad implementation\n",
-        relative_path: "src/one.ts",
-      });
-      expect(JSON.parse(prefetchedView?.evidence ?? "{}")).toMatchObject({
-        complete: true,
-        content: "inert action\n",
-        relative_path: "src/one-view.ts",
-      });
-      const recoveryInstruction = correctionRequests[2]?.messages
-        .flatMap((message) => message.content)
-        .find(
-          (content) =>
-            content.type === "json" &&
-            typeof content.value === "object" &&
-            content.value !== null &&
-            !Array.isArray(content.value) &&
-            content.value.kind === "MUTATION_RECOVERY_REQUIRED",
-        );
-      expect(recoveryInstruction).toMatchObject({
-        type: "json",
-        value: {
-          required_correction_paths_all: ["src/one-view.ts"],
-        },
-      });
       const ordinaryImplementationRequests = implementationRequests.filter(
         (request) => !correctionRequests.includes(request),
       );
@@ -705,6 +806,7 @@ describeIntegration(
       expect(reviewRequests.every((request) => (request.tools?.length ?? 0) === 0)).toBe(true);
 
       const requestsBeforeRecovery = transport.requests.length;
+      const artifactCountBeforeRecovery = artifacts.rows.length;
       const durableUnit = await units.findById(db, "unit-e2e");
       if (durableUnit === null) throw new Error("expected durable work unit");
       const recoveryPort = makeEngineeringPort(lease);
@@ -734,6 +836,49 @@ describeIntegration(
         ).stdout.trim(),
       ).toBe("1");
       expect(transport.requests).toHaveLength(requestsBeforeRecovery);
+      const artifactsAfterRecovery = await db.query<{ count: string }>(
+        "SELECT COUNT(*)::text AS count FROM engineering_artifact_revisions WHERE run_id='run-e2e'",
+      );
+      expect(Number(artifactsAfterRecovery.rows[0]?.count)).toBe(artifactCountBeforeRecovery);
+
+      const control = new EngineeringControlPlaneRepository(productionRuntime(), jobs);
+      const durableRows = await control.listRunArtifactRevisions(db, { runId: "run-e2e" });
+      const commitScope = { caseId: "case-e2e", runId: "run-e2e", jobId: lease.jobId } as const;
+      const commitOperationId = selectLocalCommitOperationId(durableRows, commitScope);
+      const commitCompletion = await control.readOperationCompletion(db, {
+        operationId: commitOperationId,
+      });
+      const acceptedCommit = projectAcceptedLocalCommit({
+        rows: durableRows,
+        completion: commitCompletion,
+        scope: commitScope,
+      });
+      expect(acceptedCommit.accepted.map((pair) => `${pair.sliceId}:${pair.attempt}`)).toEqual([
+        "slice-1:3",
+        "slice-2:4",
+      ]);
+      const acceptedSlices = await projectAcceptedSliceGates({
+        rows: durableRows,
+        acceptedCommit,
+        catalog,
+        scope: {
+          ...commitScope,
+          workspaceId: verticalSliceWorkspaceId("case-e2e"),
+          repositoryId: "repo",
+        },
+        readOperationCompletion: (operationId) =>
+          control.readOperationCompletion(db, { operationId }),
+      });
+      expect(acceptedSlices).toHaveLength(2);
+      expect(acceptedSlices.map((slice) => `${slice.sliceId}:${slice.attempt}`)).toEqual([
+        "slice-1:3",
+        "slice-2:4",
+      ]);
+      for (const slice of acceptedSlices) {
+        expect(slice.gates.aggregate.status).toBe("PASSED");
+        expect(slice.gates.completionIds.length).toBeGreaterThan(0);
+        expect(slice.gates.completionIds).toEqual(expect.arrayContaining(slice.commandReceiptIds));
+      }
     });
   },
   available,

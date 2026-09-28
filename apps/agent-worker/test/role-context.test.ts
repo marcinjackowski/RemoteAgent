@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { FakeTransport } from "@remoteagent/bedrock-runtime";
+import type { RuntimeJsonValue } from "@remoteagent/model-runtime";
 import { ContextCacheState, MetricName, MetricRegistry } from "@remoteagent/observability";
 
 import type { CompiledRoleContext } from "../src/context.js";
@@ -69,7 +70,7 @@ it("requests exact durable identity and sends the compiled packet as a separate 
 });
 
 it("records provider input usage only when returned and never substitutes the estimate", async () => {
-  const completion = {
+  const completion: RuntimeJsonValue = {
     schema_version: 1,
     run_id: "run-1",
     case_id: "case-1",
@@ -79,7 +80,7 @@ it("records provider input usage only when returned and never substitutes the es
     evidence: [],
     checkpoint_patch: {},
     next_actions: [],
-  } as const;
+  };
   const metrics = new MetricRegistry();
   const withUsage = new FakeTransport([
     {

@@ -44,6 +44,18 @@ const plannerUntrustedContent = valueObject({
 });
 
 export const plannerReadRequest = valueObject({ relative_path: relativeRepositoryPath });
+export const plannerReadExcerptRequest = valueObject({
+  relative_path: relativeRepositoryPath,
+  start_line: z.int().positive(),
+  end_line: z.int().positive(),
+}).superRefine((value, ctx) => {
+  if (value.end_line < value.start_line)
+    ctx.addIssue({
+      code: "custom",
+      path: ["end_line"],
+      message: "end_line must not precede start_line",
+    });
+});
 export const plannerSearchRequest = valueObject({
   query: z.string().trim().min(1).max(4096),
   relative_path: relativeRepositoryPath.optional(),
@@ -80,6 +92,10 @@ const plannerConfigEntry = valueObject({
 export type PlannerReadPort = Readonly<{
   readonly manifest: PlannerCapabilityManifest;
   read(input: z.infer<typeof plannerReadRequest>): Promise<z.infer<typeof plannerReadResult>>;
+  /** Server-only bounded diagnostic context; deliberately absent from capability manifest. */
+  readExcerpt(
+    input: z.infer<typeof plannerReadExcerptRequest>,
+  ): Promise<z.infer<typeof plannerReadExcerptResult>>;
   search(input: z.infer<typeof plannerSearchRequest>): Promise<z.infer<typeof plannerSearchResult>>;
   tree(input: z.infer<typeof plannerTreeRequest>): Promise<z.infer<typeof plannerTreeResult>>;
   symbols(
@@ -97,6 +113,14 @@ export const plannerReadResult = valueObject({
     value: text,
   }),
 });
+export const plannerReadExcerptResult = valueObject({
+  relative_path: relativeRepositoryPath,
+  start_line: z.int().positive(),
+  end_line: z.int().positive(),
+  full_file_digest: sha256Digest,
+  end_of_file: z.boolean(),
+  content: valueObject({ trust: z.literal(TrustLevel.UNTRUSTED_DATA), value: text }),
+});
 
 export const plannerSearchResult = valueObject({ matches: z.array(plannerSearchMatch).max(512) });
 export const plannerTreeResult = valueObject({ entries: z.array(plannerTreeEntry).max(512) });
@@ -104,11 +128,13 @@ export const plannerSymbolsResult = valueObject({ symbols: z.array(plannerSymbol
 export const plannerConfigResult = valueObject({ entries: z.array(plannerConfigEntry).max(256) });
 
 export type PlannerReadRequest = z.infer<typeof plannerReadRequest>;
+export type PlannerReadExcerptRequest = z.infer<typeof plannerReadExcerptRequest>;
 export type PlannerSearchRequest = z.infer<typeof plannerSearchRequest>;
 export type PlannerTreeRequest = z.infer<typeof plannerTreeRequest>;
 export type PlannerSymbolsRequest = z.infer<typeof plannerSymbolsRequest>;
 export type PlannerConfigRequest = z.infer<typeof plannerConfigRequest>;
 export type PlannerReadResult = z.infer<typeof plannerReadResult>;
+export type PlannerReadExcerptResult = z.infer<typeof plannerReadExcerptResult>;
 export type PlannerSearchResult = z.infer<typeof plannerSearchResult>;
 export type PlannerTreeResult = z.infer<typeof plannerTreeResult>;
 export type PlannerSymbolsResult = z.infer<typeof plannerSymbolsResult>;

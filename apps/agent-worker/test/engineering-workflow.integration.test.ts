@@ -8,6 +8,12 @@ import {
   engineeringArtifact,
   engineeringArtifactDigest,
   engineeringContextManifest,
+  engineeringGateFailureV1,
+  engineeringGateFailureV2,
+  engineeringLocalCommitReceipt,
+  engineeringProgramDesign,
+  engineeringSliceContract,
+  engineeringSystemDesign,
   engineeringWriteAuthorizationScopeV2Digest,
   engineeringWriteDeploymentPolicyV1Digest,
   EngineeringStage,
@@ -41,7 +47,7 @@ import {
   describeIntegration,
   ensurePostgres,
 } from "../../../packages/database/test/integration-base.js";
-import type { CompiledRoleContext } from "../src/context.js";
+import type { CompiledRoleContext, RoleContextRequest } from "../src/context.js";
 import {
   createStructuredEngineeringStageExecutor,
   createStructuredPreCommitReviewSessionFactory,
@@ -50,9 +56,12 @@ import {
   createPostgresEngineeringRuntimePort as createPostgresEngineeringRuntimePortProduction,
   engineeringApprovalCandidateFromLease,
   engineeringGateFailureEvidenceDigests,
+  engineeringStableGateDiagnosticFingerprints,
+  engineeringStableGateDiagnosticHistory,
   engineeringImplementationStageModelCallReserve,
   gateExecutionIntentDescriptor,
   type EngineeringStageExecutor,
+  type EngineeringReviewStageExecutor,
   type EngineeringSliceImplementationStageExecutor,
   type EngineeringLocalCommitStageExecutor,
   type EngineeringGateStageExecutor,
@@ -129,6 +138,22 @@ const createPostgresEngineeringRuntimePort = (
         : input.executor,
     writeDeploymentPolicy: WRITE_POLICY,
   });
+
+const asReviewExecutor = (executor: EngineeringStageExecutor): EngineeringReviewStageExecutor => {
+  const modelInvocation = executor.modelInvocation?.(EngineeringStage.SLICE_REVIEW) ?? undefined;
+  return {
+    configDigest: executor.configDigest,
+    schemaDigest: executor.schemaDigest,
+    ...(modelInvocation === undefined ? {} : { modelInvocation }),
+    execute: (input) => executor.execute({ ...input, processClass: "SMALL" }),
+  };
+};
+const optionalApproval = (candidate: ReturnType<typeof engineeringApprovalCandidateFromLease>) =>
+  candidate === undefined ? {} : { approvalCandidate: candidate };
+function requireValue<T>(value: T | null, label: string): NonNullable<T> {
+  if (value === null || value === undefined) throw new Error(`missing ${label}`);
+  return value as NonNullable<T>;
+}
 const smallRiskFacts = Object.freeze({
   authority: "SERVER_OWNED" as const,
   security_or_policy: false,
@@ -268,6 +293,9 @@ function manifest(stage: EngineeringStage, revision = 0) {
   } as CompiledRoleContext;
 }
 
+const readManifestContext = async ({ stage }: RoleContextRequest) =>
+  manifest(stage ?? EngineeringStage.DISCOVERY);
+
 function modelArtifact(stage: EngineeringStage): EngineeringArtifact {
   const common = { schema_version: 1, case_id: "case-1", run_id: "run-1", revision: 0 };
   switch (stage) {
@@ -381,7 +409,7 @@ function currentProgramDesignArtifact(input: {
   gateIdsByIndex?: readonly (readonly string[])[];
   allowedPath?: string;
   testPath?: string;
-}): EngineeringArtifact {
+}): ReturnType<typeof engineeringProgramDesign.parse> {
   const legacy = modelArtifact(EngineeringStage.PROGRAM_DESIGN);
   if (legacy.artifact_kind !== "ProgramDesign") throw new Error("program fixture mismatch");
   const allowedPath = input.allowedPath ?? "apps/agent-worker/src";
@@ -395,7 +423,7 @@ function currentProgramDesignArtifact(input: {
     inspection_method: `inspect evidence ${index + 1}`,
     stop_condition: `review ${index + 1} passes`,
   }));
-  return engineeringArtifact.parse({
+  return engineeringProgramDesign.parse({
     ...legacy,
     schema_version: 2,
     slice_order: blueprints.map((blueprint) => blueprint.slice_id),
@@ -532,7 +560,7 @@ function fakeLocalCommitExecutor(): EngineeringLocalCommitStageExecutor {
       });
     },
     execute: async ({ binding, descriptor }) =>
-      engineeringArtifact.parse({
+      engineeringLocalCommitReceipt.parse({
         schema_version: 1,
         artifact_kind: "LocalCommitReceipt",
         case_id: binding.caseId,
@@ -622,7 +650,7 @@ it("uses stable structured Xcode failures instead of volatile whole-log digests"
     line: 73,
   } as const;
   const failure = (logDigest: string, structured: boolean) =>
-    engineeringArtifact.parse({
+    engineeringGateFailureV1.parse({
       schema_version: 1,
       artifact_kind: "GateFailure",
       case_id: "case-1",
@@ -669,6 +697,255 @@ it("uses stable structured Xcode failures instead of volatile whole-log digests"
   expect(engineeringGateFailureEvidenceDigests(legacyFirst)).not.toEqual(
     engineeringGateFailureEvidenceDigests(legacySecond),
   );
+
+  const typedFailure = (
+    excerpt: string,
+    target = "target-1",
+    evidence = "receipt-1",
+    failureClass: "ASSERTION_FAILED" | "COMPILE_FAILED" = "ASSERTION_FAILED",
+  ) =>
+    engineeringGateFailureV2.parse({
+      schema_version: 2,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt: 2,
+      tree_digest: sha("1"),
+      diff_digest: sha("2"),
+      context_digest: sha("3"),
+      config_digest: sha("4"),
+      mapping_digest: sha("6"),
+      blocking_gate_ids: ["ios-tests"],
+      receipt_ids: ["receipt-1", "receipt-2"],
+      decision_ids: [],
+      diagnostics: [
+        {
+          gate_id: "ios-tests",
+          outcome: "FAILED",
+          log_digest: sha("5"),
+          trust: TrustLevel.UNTRUSTED_DATA,
+          excerpt,
+        },
+      ],
+      observations: [
+        {
+          criterion_id: "criterion-1",
+          gate_id: "ios-tests",
+          failure_class: failureClass,
+          evidence_ref: evidence,
+          related_target_ids: [target],
+        },
+      ],
+    });
+  const typedFirst = typedFailure("original wording");
+  const typedWording = typedFailure("localized wording", "target-1", "receipt-1");
+  const typedChanged = typedFailure("localized wording", "target-2", "receipt-2", "COMPILE_FAILED");
+  expect(engineeringGateFailureEvidenceDigests(typedFirst)).toEqual(
+    engineeringGateFailureEvidenceDigests(typedWording),
+  );
+  expect(engineeringGateFailureEvidenceDigests(typedFirst)).not.toEqual(
+    engineeringGateFailureEvidenceDigests(typedChanged),
+  );
+  const twoObservationFailure = engineeringGateFailureV2.parse({
+    ...typedFirst,
+    blocking_gate_ids: ["ios-tests", "ios-build"],
+    receipt_ids: ["receipt-1", "receipt-2"],
+    diagnostics: [
+      ...typedFirst.diagnostics,
+      {
+        gate_id: "ios-build",
+        outcome: "FAILED",
+        log_digest: sha("d"),
+        trust: TrustLevel.UNTRUSTED_DATA,
+        excerpt: "another failure",
+      },
+    ],
+    observations: [
+      ...typedFirst.observations,
+      {
+        criterion_id: "criterion-2",
+        gate_id: "ios-build",
+        failure_class: "COMPILE_FAILED",
+        evidence_ref: "receipt-2",
+        related_target_ids: ["target-2", "target-3"],
+      },
+    ],
+  });
+  const reordered = engineeringGateFailureV2.parse({
+    ...twoObservationFailure,
+    blocking_gate_ids: ["ios-build", "ios-tests"],
+    receipt_ids: ["receipt-2", "receipt-1"],
+    diagnostics: [...twoObservationFailure.diagnostics].reverse(),
+    observations: [...twoObservationFailure.observations]
+      .reverse()
+      .map((observation, index) =>
+        index === 0
+          ? { ...observation, related_target_ids: [...observation.related_target_ids].reverse() }
+          : observation,
+      ),
+  });
+  expect(engineeringGateFailureEvidenceDigests(twoObservationFailure)).toEqual(
+    engineeringGateFailureEvidenceDigests(reordered),
+  );
+});
+
+it("derives conservative stable diagnostic fingerprints", () => {
+  const compiler = (message: string, line: number, excerpt: string) => ({
+    path: "Sources/SafetyAlert.swift",
+    line,
+    column: 4,
+    message,
+    excerpt,
+    digest: canonicalDigest({
+      path: "Sources/SafetyAlert.swift",
+      line,
+      column: 4,
+      message,
+      excerpt,
+    }),
+  });
+  const make = (diagnostics: readonly ReturnType<typeof compiler>[]) =>
+    engineeringGateFailureV1.parse({
+      schema_version: 1,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: 0,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt: 2,
+      tree_digest: sha("1"),
+      diff_digest: sha("2"),
+      context_digest: sha("3"),
+      config_digest: sha("4"),
+      blocking_gate_ids: ["ios-build"],
+      receipt_ids: ["receipt-1"],
+      decision_ids: [],
+      diagnostics: diagnostics.map((item) => ({
+        gate_id: "ios-build",
+        outcome: "FAILED" as const,
+        log_digest: sha("5"),
+        trust: TrustLevel.UNTRUSTED_DATA,
+        excerpt: item.excerpt,
+        compiler_diagnostics: [item],
+        test_diagnostics: [],
+      })),
+    });
+  const first = make([compiler("cannot find type 'QuickSpec' in scope", 10, "old prose")]);
+  const shifted = make([compiler("cannot find type 'QuickSpec' in scope", 99, "new prose")]);
+  const changed = make([compiler("cannot find type 'Nimble' in scope", 99, "new prose")]);
+  expect(engineeringStableGateDiagnosticFingerprints(first)).toEqual(
+    engineeringStableGateDiagnosticFingerprints(shifted),
+  );
+  expect(engineeringStableGateDiagnosticFingerprints(first)).not.toEqual(
+    engineeringStableGateDiagnosticFingerprints(changed),
+  );
+  expect(
+    engineeringStableGateDiagnosticFingerprints(
+      make([compiler("unexpected compiler failure details", 1, "generic")]),
+    ),
+  ).toEqual([]);
+  for (const [message, symbol] of [
+    ["cannot find type 'QuickSpec' in scope", "QuickSpec"],
+    ["cannot find 'describe' in scope", "describe"],
+    ["cannot find 'it' in scope", "it"],
+    ["Unable to find module dependency: 'Quick'", "Quick"],
+  ] as const) {
+    expect(
+      engineeringStableGateDiagnosticFingerprints(make([compiler(message, 1, "context")])),
+    ).not.toEqual([]);
+    expect(symbol).toBeTruthy();
+  }
+  const ordinary = (gate: string, logDigest: string | null, attempt: number, receipt: string) =>
+    engineeringGateFailureV2.parse({
+      schema_version: 2,
+      artifact_kind: "GateFailure",
+      case_id: "case-1",
+      run_id: "run-1",
+      revision: attempt,
+      authority: "SERVER_OWNED",
+      slice_id: "slice-1",
+      attempt,
+      tree_digest: sha(String(attempt)),
+      diff_digest: sha(String(attempt + 1)),
+      context_digest: sha(String(attempt + 2)),
+      config_digest: sha("c"),
+      mapping_digest: canonicalDigest("mapping"),
+      blocking_gate_ids: [gate],
+      receipt_ids: [receipt],
+      decision_ids: [],
+      diagnostics: [
+        {
+          gate_id: gate,
+          outcome: "FAILED",
+          log_digest: logDigest,
+          trust: TrustLevel.UNTRUSTED_DATA,
+          excerpt: "ordinary gate failure",
+        },
+      ],
+      observations: [
+        {
+          criterion_id: "criterion-1",
+          gate_id: gate,
+          failure_class: "UNKNOWN",
+          evidence_ref: receipt,
+          related_target_ids: ["target-1"],
+        },
+      ],
+    });
+  const ordinaryFirst = engineeringStableGateDiagnosticFingerprints(
+    ordinary("unit", sha("6"), 1, "r1"),
+  );
+  const ordinarySame = engineeringStableGateDiagnosticFingerprints(
+    ordinary("unit", sha("6"), 2, "r2"),
+  );
+  expect(ordinaryFirst).toEqual(ordinarySame);
+  expect(ordinaryFirst).not.toEqual(
+    engineeringStableGateDiagnosticFingerprints(ordinary("unit", sha("7"), 3, "r3")),
+  );
+  expect(ordinaryFirst).not.toEqual(
+    engineeringStableGateDiagnosticFingerprints(ordinary("lint", sha("6"), 4, "r4")),
+  );
+  expect(ordinaryFirst).toHaveLength(1);
+  expect(engineeringStableGateDiagnosticFingerprints(ordinary("unit", null, 5, "r5"))).toEqual([]);
+});
+
+it("resets stable diagnostic history at passed gates and new slices", () => {
+  const failure = (slice_id: string) =>
+    ({
+      schema_version: 1,
+      artifact_kind: "GateFailure",
+      slice_id,
+      blocking_gate_ids: ["ios-build"],
+      diagnostics: [
+        {
+          gate_id: "ios-build",
+          compiler_diagnostics: [
+            {
+              path: "Sources/Feature.swift",
+              line: 1,
+              column: 1,
+              message: "cannot find type 'QuickSpec' in scope",
+              excerpt: "volatile",
+            },
+          ],
+          test_diagnostics: [],
+        },
+      ],
+    }) as unknown as EngineeringArtifact;
+  const row = (payload: EngineeringArtifact) => ({ payload });
+  const first = row(failure("slice-1"));
+  const second = row(failure("slice-1"));
+  const postPass = row({ artifact_kind: "EvidenceBundle" } as unknown as EngineeringArtifact);
+  const newSlice = row({ artifact_kind: "SliceContract" } as unknown as EngineeringArtifact);
+  expect(engineeringStableGateDiagnosticHistory([first, postPass, second])).toHaveLength(1);
+  expect(
+    engineeringStableGateDiagnosticHistory([first, newSlice, row(failure("slice-2"))]),
+  ).toHaveLength(1);
+  expect(engineeringStableGateDiagnosticHistory([first, second])).toHaveLength(2);
 });
 
 it("fingerprints the semantic compiler failure across line and excerpt-only edits", () => {
@@ -828,7 +1105,7 @@ describeIntegration(
 
     beforeEach(async () => {
       const created = await createTestDatabase();
-      db = created.db;
+      db = created.db as unknown as Database;
       drop = created.drop;
       await new OwnerRepository().insert(db, { ownerId: "owner-1", displayName: "owner" });
       await new ConnectionRepository().insert(db, {
@@ -888,6 +1165,7 @@ describeIntegration(
                   ...modelArtifact(binding.stage),
                   decision: "CHANGES_REQUIRED",
                   findings: ["[precommit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa] stable finding"],
+                  required_mutation_paths: ["apps/agent-worker/src/engineering-workflow.ts"],
                 })
               : modelArtifact(binding.stage),
         }),
@@ -896,9 +1174,9 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         implementationExecutor: fakeImplementationExecutor(),
         executeSystemStage: async ({ binding }: { binding: { attempt: number } }) =>
           engineeringArtifact.parse({
@@ -976,7 +1254,7 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
@@ -1075,9 +1353,9 @@ describeIntegration(
             db,
             lease: writerLease,
             jobs,
-            readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+            readContext: readManifestContext,
             executor,
-            reviewExecutor: executor,
+            reviewExecutor: asReviewExecutor(executor),
             implementationExecutor: fakeImplementationExecutor(),
             localCommitExecutor: fakeLocalCommitExecutor(),
             metrics,
@@ -1158,9 +1436,9 @@ describeIntegration(
         lease: lease!,
         jobs,
         workflowDeadlineMs: 5_000,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => {
+        readContext: async ({ stage }: RoleContextRequest) => {
           contextReads += 1;
-          return manifest(stage);
+          return manifest(stage ?? EngineeringStage.DISCOVERY);
         },
         executor: {
           configDigest: sha("5"),
@@ -1260,7 +1538,7 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           configDigestForStage: () => sha("7"),
@@ -1351,7 +1629,7 @@ describeIntegration(
           binding,
           context,
           definition: {
-            role: "PRODUCT_MANAGER",
+            role: "PLANNER",
             input_artifacts: [],
             output_artifacts: [],
             completion_contract: null,
@@ -1427,9 +1705,9 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => {
+        readContext: async ({ stage }: RoleContextRequest) => {
           contextReads += 1;
-          return manifest(stage);
+          return manifest(stage ?? EngineeringStage.DISCOVERY);
         },
         executor: {
           configDigest: sha("5"),
@@ -1481,7 +1759,9 @@ describeIntegration(
       expect(await recovered.recoverStage(binding)).toMatchObject({ status: "RECOVERED" });
       expect(normalCalls).toBe(0);
       expect(recoverCalls).toBe(2);
-      expect(recoveredDigest).toBe(engineeringArtifactDigest(context.compiled.manifest));
+      expect(recoveredDigest).toBe(
+        engineeringArtifactDigest((context as CompiledRoleContext).compiled.manifest),
+      );
       expect(recoveredDeadline).toBe(descriptorRow.rows[0]!.deadline_at.toISOString());
       expect(contextReads).toBe(1);
       const repaired = await db.query<{ completions: string; observations: string }>(
@@ -1527,7 +1807,7 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
@@ -1570,7 +1850,7 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
@@ -1674,9 +1954,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         implementationExecutor,
         policy: {
           riskFacts: {
@@ -1825,7 +2105,7 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
@@ -1872,7 +2152,7 @@ describeIntegration(
           definition: {
             role: "REVIEWER",
             input_artifacts: [],
-            output_artifacts: ["ReviewDecision"],
+            output_artifacts: ["EngineeringReviewDecision"],
             completion_contract: null,
             workspace_access: "READ_ONLY",
           },
@@ -1899,7 +2179,7 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
@@ -1942,9 +2222,9 @@ describeIntegration(
           definition: {
             role: "IMPLEMENTER",
             input_artifacts: [],
-            output_artifacts: ["SliceImplementationReceipt"],
+            output_artifacts: ["EngineeringSliceImplementationReceipt"],
             completion_contract: null,
-            workspace_access: "READ_WRITE",
+            workspace_access: "WRITE",
           },
         }),
       ).resolves.toMatchObject({
@@ -1977,7 +2257,7 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: {
           configDigest: sha("5"),
           schemaDigest: () => sha("6"),
@@ -2020,9 +2300,9 @@ describeIntegration(
           definition: {
             role: "IMPLEMENTER",
             input_artifacts: [],
-            output_artifacts: ["SliceImplementationReceipt"],
+            output_artifacts: ["EngineeringSliceImplementationReceipt"],
             completion_contract: null,
-            workspace_access: "READ_WRITE",
+            workspace_access: "WRITE",
           },
         }),
       ).rejects.toThrow(/zero model calls/u);
@@ -2061,9 +2341,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: generic,
-        reviewExecutor: review,
+        reviewExecutor: asReviewExecutor(review),
         policy: {
           riskFacts: {
             authority: "SERVER_OWNED",
@@ -2098,7 +2378,7 @@ describeIntegration(
           definition: {
             role: "REVIEWER",
             input_artifacts: [],
-            output_artifacts: ["ReviewDecision"],
+            output_artifacts: ["EngineeringReviewDecision"],
             completion_contract: null,
             workspace_access: "READ_ONLY",
           },
@@ -2120,7 +2400,7 @@ describeIntegration(
           definition: {
             role: "REVIEWER",
             input_artifacts: [],
-            output_artifacts: ["ReviewDecision"],
+            output_artifacts: ["EngineeringReviewDecision"],
             completion_contract: null,
             workspace_access: "READ_ONLY",
           },
@@ -2149,6 +2429,7 @@ describeIntegration(
                 ...modelArtifact(binding.stage),
                 decision: "CHANGES_REQUIRED",
                 findings: ["fix the bounded slice"],
+                required_mutation_paths: ["apps/agent-worker/src/engineering-workflow.ts"],
               }),
             };
           }
@@ -2159,9 +2440,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         implementationExecutor: fakeImplementationExecutor(),
         localCommitExecutor: fakeLocalCommitExecutor(),
         executeSystemStage: async ({
@@ -2296,9 +2577,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         implementationExecutor: fakeImplementationExecutor(),
         localCommitExecutor: fakeLocalCommitExecutor(),
         executeSystemStage: async ({ binding, context, decisionIds }) => {
@@ -2442,9 +2723,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         implementationExecutor: fakeImplementationExecutor(),
         localCommitExecutor: fakeLocalCommitExecutor(),
         executeSystemStage: async ({ binding, context, decisionIds }) => {
@@ -2562,9 +2843,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         implementationExecutor: fakeImplementationExecutor(),
         localCommitExecutor: fakeLocalCommitExecutor(),
         executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
@@ -2603,6 +2884,137 @@ describeIntegration(
         },
       });
       expect(modelPlanningCalls).toBe(0);
+    });
+
+    it("materializes one MEDIUM benchmark slice with its exact 20-path server scope", async () => {
+      const jobs = new JobStore(runtime);
+      await jobs.enqueue(db, {
+        caseId: "case-1",
+        jobType: "agent.implementer",
+        payload: { caseId: "case-1", workUnitId: "unit-1", runId: "run-1" },
+      });
+      const lease = await jobs.claim(db, { owner: "worker-1", leaseMs: 120_000 });
+      expect(lease).not.toBeNull();
+      const allowedPaths = Array.from(
+        { length: 20 },
+        (_, index) => `apps/agent-worker/src/benchmark-${index}.ts`,
+      );
+      const expectedPaths = [...allowedPaths].sort();
+      const testPath = allowedPaths[0]!;
+      const constraints = {
+        allowedPaths,
+        allowedTestPaths: [testPath],
+        requiredGateIds: ["gate-1"],
+        requiredGateSchedules: { "gate-1": "EACH_SLICE" as const },
+        requiredGateTestPaths: { "gate-1": [testPath] },
+        requiredGateMutationPaths: { "gate-1": [] },
+        benchmarkSliceIds: ["slice-1"],
+        sliceAllowedPaths: { "slice-1": allowedPaths },
+        sliceAllowedTestPaths: { "slice-1": [testPath] },
+      } as const;
+      const design = engineeringProgramDesign.parse({
+        ...modelArtifact(EngineeringStage.PROGRAM_DESIGN),
+        schema_version: 2,
+        slice_order: ["slice-1"],
+        slice_blueprints: [
+          {
+            slice_id: "slice-1",
+            objective: "one exact bounded slice",
+            observable_result: "the durable contract has the exact benchmark scope",
+            allowed_paths: allowedPaths,
+            test_paths: [testPath],
+            gate_ids: ["gate-1"],
+            inspection_method: "inspect the durable SliceContract",
+            stop_condition: "the exact scope is materialized",
+          },
+        ],
+      });
+      const systemDesign = engineeringSystemDesign.parse(
+        modelArtifact(EngineeringStage.SYSTEM_DESIGN),
+      );
+      const runtimeConfig = createRuntimeConfig({
+        model: { provider: "qualification_fake", model_id: "test-model" },
+        timeoutMs: 1_000,
+        toolLimits: { maxIterations: 2, maxCalls: 2 },
+      });
+      const transport = new FakeTransport([
+        { model: runtimeConfig.model, content: [{ type: "json", value: systemDesign }] },
+        { model: runtimeConfig.model, content: [{ type: "json", value: design }] },
+      ]);
+      const executor = createStructuredEngineeringStageExecutor({
+        transport,
+        config: runtimeConfig,
+        slicePlanningConstraints: constraints,
+      });
+      const reviewExecutor: EngineeringReviewStageExecutor = {
+        configDigest: executor.configDigest,
+        schemaDigest: executor.schemaDigest,
+        execute: async () => {
+          throw new Error("review executor must remain disconnected");
+        },
+      };
+      const port = createPostgresEngineeringRuntimePort({
+        db,
+        lease: lease!,
+        jobs,
+        readContext: readManifestContext,
+        executor,
+        reviewExecutor,
+        implementationExecutor: fakeImplementationExecutor(),
+        localCommitExecutor: fakeLocalCommitExecutor(),
+        executeSystemStage: async ({ binding }) => systemArtifact(binding.stage),
+        policy: { riskFacts: { ...smallRiskFacts, multi_module: true } },
+      });
+      const session = await port.open(runtimeIdentity());
+      expect(session.plan.processClass).toBe("MEDIUM");
+      const invoke = async (stage: EngineeringStage) => {
+        const binding = {
+          caseId: "case-1",
+          workUnitId: "unit-1",
+          runId: "run-1",
+          checkpointRevision: 0,
+          stage,
+          attempt: 1,
+        } as const;
+        const context = await port.prepareContext(binding);
+        await port.commitStarted(binding);
+        return port.invokeAndRecord({
+          binding,
+          context,
+          definition: {
+            role: "PLANNER",
+            input_artifacts: [],
+            output_artifacts: [],
+            completion_contract: null,
+            workspace_access: "READ_ONLY",
+          },
+        });
+      };
+      expect(await invoke(EngineeringStage.SYSTEM_DESIGN)).toMatchObject({
+        status: "COMPLETED",
+        modelCalls: 1,
+      });
+      expect(await invoke(EngineeringStage.PROGRAM_DESIGN)).toMatchObject({
+        status: "COMPLETED",
+        modelCalls: 1,
+      });
+      expect(await invoke(EngineeringStage.SLICE_PLANNING)).toMatchObject({
+        status: "COMPLETED",
+        modelCalls: 0,
+      });
+      expect(transport.requests).toHaveLength(2);
+      const rows = await db.query<{ payload: unknown }>(
+        "SELECT payload FROM engineering_artifact_revisions WHERE artifact_kind='SliceContract' ORDER BY artifact_revision_id DESC",
+      );
+      expect(rows.rows).toHaveLength(1);
+      const contract = rows.rows[0]?.payload as {
+        slice_id: string;
+        allowed_paths: string[];
+        test_paths: string[];
+      };
+      expect(contract.slice_id).toBe("slice-1");
+      expect(contract.allowed_paths).toEqual(expectedPaths);
+      expect(contract.test_paths).toEqual([testPath]);
     });
 
     it.each(["PATH", "GATE", "TEST", "MINIMUM"] as const)(
@@ -2645,7 +3057,7 @@ describeIntegration(
           db,
           lease: lease!,
           jobs,
-          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          readContext: readManifestContext,
           executor,
           implementationExecutor: {
             ...implementation,
@@ -2730,7 +3142,7 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
         policy: { riskFacts: { ...smallRiskFacts, multi_module: true } },
       });
@@ -2800,6 +3212,7 @@ describeIntegration(
                   ...modelArtifact(EngineeringStage.SLICE_REVIEW),
                   decision: "CHANGES_REQUIRED",
                   findings: ["correct the same slice"],
+                  required_mutation_paths: ["apps/agent-worker/src/engineering-workflow.ts"],
                 })
               : modelArtifact(EngineeringStage.SLICE_REVIEW),
           modelCalls: 1,
@@ -2830,9 +3243,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor: generic,
-        reviewExecutor: review,
+        reviewExecutor: asReviewExecutor(review),
         implementationExecutor: fakeImplementationExecutor(),
         localCommitExecutor: crashingCommit,
         executeSystemStage: async ({
@@ -2896,9 +3309,6 @@ describeIntegration(
         attempt: 1,
       } as const;
       const context = await first.prepareContext(localBinding);
-      expect(captured?.accepted).toEqual([
-        expect.objectContaining({ sliceId: "slice-1", attempt: 2 }),
-      ]);
       const durableDescriptor = await db.query<{
         descriptor: Record<string, unknown>;
         started: boolean;
@@ -2930,12 +3340,18 @@ describeIntegration(
           definition: {
             role: "IMPLEMENTER",
             input_artifacts: [],
-            output_artifacts: ["LocalCommitReceipt"],
+            output_artifacts: ["EngineeringLocalCommitReceipt"],
             completion_contract: null,
-            workspace_access: "READ_WRITE",
+            workspace_access: "WRITE",
           },
         }),
       ).rejects.toThrow(/simulated crash/);
+      const capturedProvenance = requireValue<
+        Parameters<EngineeringLocalCommitStageExecutor["prepare"]>[0]["provenance"]
+      >(captured, "local commit provenance");
+      expect(capturedProvenance.accepted).toEqual([
+        expect.objectContaining({ sliceId: "slice-1", attempt: 2 }),
+      ]);
 
       const resumed = createPostgresEngineeringRuntimePort(options);
       await resumed.open(runtimeIdentity());
@@ -2946,13 +3362,15 @@ describeIntegration(
       const artifactOnlyBinding = { ...localBinding, attempt: 2 } as const;
       await resumed.prepareContext(artifactOnlyBinding);
       await resumed.commitStarted(artifactOnlyBinding);
-      if (capturedDescriptor === null) throw new Error("expected prepared commit descriptor");
+      const preparedDescriptor = requireValue<
+        Awaited<ReturnType<EngineeringLocalCommitStageExecutor["prepare"]>>
+      >(capturedDescriptor, "prepared commit descriptor");
       const artifactOnlyReceipt = await baseCommit.execute({
         binding: artifactOnlyBinding,
-        descriptor: capturedDescriptor,
+        descriptor: preparedDescriptor,
       });
       await new EngineeringControlPlaneRepository(runtime).appendArtifactRevision(db, lease!, {
-        operationId: capturedDescriptor.operation_id,
+        operationId: preparedDescriptor.operation_id,
         artifactKey: "local_commit:2",
         artifact: artifactOnlyReceipt,
       });
@@ -2976,13 +3394,15 @@ describeIntegration(
       const tamperedBinding = { ...localBinding, attempt: 3 } as const;
       await artifactOnly.prepareContext(tamperedBinding);
       await artifactOnly.commitStarted(tamperedBinding);
-      if (capturedDescriptor === null) throw new Error("expected tamper descriptor");
+      const tamperDescriptor = requireValue<
+        Awaited<ReturnType<EngineeringLocalCommitStageExecutor["prepare"]>>
+      >(capturedDescriptor, "tamper descriptor");
       const validReceipt = await baseCommit.execute({
         binding: tamperedBinding,
-        descriptor: capturedDescriptor,
+        descriptor: tamperDescriptor,
       });
       await new EngineeringControlPlaneRepository(runtime).appendArtifactRevision(db, lease!, {
-        operationId: capturedDescriptor.operation_id,
+        operationId: tamperDescriptor.operation_id,
         artifactKey: "local_commit:3",
         artifact: { ...validReceipt, review_digest: sha("f") },
       });
@@ -3066,9 +3486,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
         policy,
       });
@@ -3105,9 +3525,9 @@ describeIntegration(
           db,
           lease: lease!,
           jobs,
-          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          readContext: readManifestContext,
           executor,
-          reviewExecutor: executor,
+          reviewExecutor: asReviewExecutor(executor),
           executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
           policy: {
             ...policy,
@@ -3135,9 +3555,9 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
         policy,
       });
@@ -3148,12 +3568,12 @@ describeIntegration(
         db,
         lease: staleLease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
         policy,
-        approvalCandidate: engineeringApprovalCandidateFromLease(staleLease),
+        ...optionalApproval(engineeringApprovalCandidateFromLease(staleLease)),
       });
       await expect(staleHolder.open(runtimeIdentity())).rejects.toThrow(/stale|lease/i);
       expect(
@@ -3169,12 +3589,12 @@ describeIntegration(
         db,
         lease: lease!,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
-        reviewExecutor: executor,
+        reviewExecutor: asReviewExecutor(executor),
         executeSystemStage: async ({ binding }) => systemArtifact(binding.stage, binding.attempt),
         policy,
-        approvalCandidate: engineeringApprovalCandidateFromLease(lease!),
+        ...optionalApproval(engineeringApprovalCandidateFromLease(lease!)),
       });
       expect(await granted.open(runtimeIdentity())).toMatchObject({
         plan: { processClass: "LARGE_OR_HIGH_RISK", ownerDecisionId: "owner-grant-1" },
@@ -3265,7 +3685,7 @@ describeIntegration(
         readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
         executor,
         policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
-        approvalCandidate: engineeringApprovalCandidateFromLease(lease),
+        ...optionalApproval(engineeringApprovalCandidateFromLease(lease)),
       });
       await expect(port.open(runtimeIdentity())).rejects.toThrow(/exact worker materialization/);
       expect((await db.query("SELECT 1 FROM engineering_operations")).rowCount).toBe(0);
@@ -3324,10 +3744,10 @@ describeIntegration(
           db,
           lease,
           jobs,
-          readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+          readContext: readManifestContext,
           executor,
           policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
-          approvalCandidate: engineeringApprovalCandidateFromLease(lease),
+          ...optionalApproval(engineeringApprovalCandidateFromLease(lease)),
         });
       await makePort().open(runtimeIdentity());
       await db.query(
@@ -3362,7 +3782,7 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async () => manifest(EngineeringStage.DISCOVERY),
+        readContext: async (_request: RoleContextRequest) => manifest(EngineeringStage.DISCOVERY),
         executor,
         policy: { riskFacts: smallRiskFacts },
       });
@@ -3416,7 +3836,7 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
         policy: { riskFacts: smallRiskFacts },
       });
@@ -3497,10 +3917,10 @@ describeIntegration(
         db,
         lease,
         jobs,
-        readContext: async ({ stage = EngineeringStage.DISCOVERY }) => manifest(stage),
+        readContext: readManifestContext,
         executor,
         policy: { riskFacts: { ...smallRiskFacts, security_or_policy: true } },
-        approvalCandidate: engineeringApprovalCandidateFromLease(lease),
+        ...optionalApproval(engineeringApprovalCandidateFromLease(lease)),
       });
       await port.open(runtimeIdentity());
       const invoke = async (stage: EngineeringStage) => {
@@ -3518,7 +3938,7 @@ describeIntegration(
           binding,
           context: prepared,
           definition: {
-            role: "ARCHITECT",
+            role: "PLANNER",
             input_artifacts: [],
             output_artifacts: [],
             completion_contract: null,
@@ -3548,7 +3968,7 @@ it("binds a structured stage to its server-owned provider-neutral schema", async
     timeoutMs: 1_000,
     toolLimits: { maxIterations: 2, maxCalls: 2 },
   });
-  const artifact = modelArtifact(EngineeringStage.SLICE_PLANNING);
+  const artifact = engineeringSliceContract.parse(modelArtifact(EngineeringStage.SLICE_PLANNING));
   const transport = new FakeTransport([
     { model: config.model, content: [{ type: "json", value: artifact }] },
   ]);
@@ -3636,6 +4056,129 @@ it("rejects a blueprint that exceeds the code-owned per-slice write-root limit",
   ).toThrow("exceeds the 4-root write limit");
 });
 
+it("allows a mapped MEDIUM slice to use its bounded twenty-file target scope", () => {
+  const targetPaths = Array.from(
+    { length: 20 },
+    (_, index) => `apps/agent-worker/src/full-flow-target-${index + 1}.ts`,
+  );
+  const design = currentProgramDesignArtifact({ count: 1 });
+  if (design.artifact_kind !== "ProgramDesign" || design.schema_version !== 2)
+    throw new Error("mapped ProgramDesign fixture mismatch");
+  const mapped = engineeringArtifact.parse({
+    ...design,
+    slice_order: ["slice-1"],
+    slice_blueprints: [
+      {
+        ...design.slice_blueprints[0]!,
+        slice_id: "slice-1",
+        allowed_paths: targetPaths,
+        test_paths: [targetPaths[0]!],
+      },
+    ],
+  });
+  if (mapped.artifact_kind !== "ProgramDesign" || mapped.schema_version !== 2)
+    throw new Error("mapped ProgramDesign parse mismatch");
+  const constraints = {
+    ...SLICE_PLANNING_CONSTRAINTS,
+    benchmarkSliceIds: ["slice-1"],
+    sliceAllowedPaths: { "slice-1": targetPaths },
+    sliceAllowedTestPaths: { "slice-1": [targetPaths[0]!] },
+  };
+  expect(() =>
+    assertEngineeringProgramDesignBlueprints({
+      design: mapped,
+      processClass: "MEDIUM",
+      constraints,
+    }),
+  ).not.toThrow();
+});
+
+it("repairs a mapped MEDIUM blueprint outside its server-derived slice scope", async () => {
+  const targetPaths = Array.from(
+    { length: 20 },
+    (_, index) => `apps/agent-worker/src/mapped-repair-target-${index + 1}.ts`,
+  );
+  const base = currentProgramDesignArtifact({ count: 1 });
+  if (base.artifact_kind !== "ProgramDesign" || base.schema_version !== 2)
+    throw new Error("mapped repair fixture mismatch");
+  const validDesign = engineeringProgramDesign.parse({
+    ...base,
+    slice_order: ["slice-1"],
+    slice_blueprints: [
+      {
+        ...base.slice_blueprints[0]!,
+        slice_id: "slice-1",
+        allowed_paths: targetPaths,
+        test_paths: [targetPaths[0]!],
+      },
+    ],
+  });
+  const invalidDesign = engineeringProgramDesign.parse({
+    ...validDesign,
+    slice_blueprints: [
+      {
+        ...validDesign.slice_blueprints[0]!,
+        allowed_paths: ["apps/agent-worker/src/foreign.ts", targetPaths[0]!],
+        test_paths: [targetPaths[0]!],
+      },
+    ],
+  });
+  const config = createRuntimeConfig({
+    model: { provider: "qualification_fake", model_id: "test-model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 2, maxCalls: 2 },
+  });
+  const constraints = {
+    ...SLICE_PLANNING_CONSTRAINTS,
+    benchmarkSliceIds: ["slice-1"],
+    sliceAllowedPaths: { "slice-1": targetPaths },
+    sliceAllowedTestPaths: { "slice-1": [targetPaths[0]!] },
+  };
+  const transport = new FakeTransport([
+    { model: config.model, content: [{ type: "json", value: invalidDesign }] },
+    { model: config.model, content: [{ type: "json", value: validDesign }] },
+  ]);
+  const executor = createStructuredEngineeringStageExecutor({
+    transport,
+    config,
+    slicePlanningConstraints: constraints,
+  });
+  const result = await executor.execute({
+    binding: {
+      caseId: "case-1",
+      workUnitId: "unit-1",
+      runId: "run-1",
+      checkpointRevision: 0,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      attempt: 1,
+    },
+    objective: "mapped bounded slice",
+    context: manifest(EngineeringStage.PROGRAM_DESIGN),
+    orderedArtifacts: [],
+    processClass: "MEDIUM",
+  });
+  expect(result).toMatchObject({ kind: "ARTIFACT", modelCalls: 2 });
+  expect(transport.requests).toHaveLength(2);
+  if (
+    result.kind !== "ARTIFACT" ||
+    result.artifact.artifact_kind !== "ProgramDesign" ||
+    result.artifact.schema_version !== 2
+  )
+    throw new Error("mapped repair did not return ProgramDesign");
+  const repaired = engineeringProgramDesign.parse(result.artifact);
+  expect(repaired.slice_blueprints[0]!.allowed_paths).toEqual([...targetPaths].sort());
+  const repairInstruction = transport.requests[1]!.messages.at(-1)!
+    .content.map((content) => (content.type === "text" ? content.text : ""))
+    .join("\n");
+  expect(repairInstruction).toContain("PLANNING_PATH_OUTSIDE_WRITE_CAP");
+  expect(repairInstruction).toContain("server-derived per-slice write-root budget");
+  const initialInstruction = transport.requests[0]!.messages.flatMap((message) => message.content)
+    .map((content) => (content.type === "text" ? content.text : ""))
+    .join("\n");
+  expect(initialInstruction).toContain("per-slice test scopes");
+  expect(initialInstruction).toContain('"slice-1":20');
+});
+
 it("binds FIRST/EACH/LAST gates to the exact code-owned blueprint positions", () => {
   const constraints = {
     allowedPaths: WRITE_POLICY.write_path_allowlist,
@@ -3675,6 +4218,81 @@ it("binds FIRST/EACH/LAST gates to the exact code-owned blueprint positions", ()
       constraints,
     }),
   ).toThrow(/exact scheduled required gates/);
+});
+
+it("requires the exact ordered benchmark slice IDs and binds them into the planning prompt", async () => {
+  const valid = currentProgramDesignArtifact({ count: 2 });
+  if (valid.artifact_kind !== "ProgramDesign" || valid.schema_version !== 2)
+    throw new Error("current ProgramDesign fixture mismatch");
+  const ids = valid.slice_blueprints.map((blueprint) => blueprint.slice_id);
+  const constraints = { ...SLICE_PLANNING_CONSTRAINTS, benchmarkSliceIds: ids };
+  for (const mutated of [
+    [...ids].reverse(),
+    [ids[0]!, "renamed-extra"],
+    ["renamed-slice", ...ids.slice(1)],
+  ]) {
+    try {
+      assertEngineeringProgramDesignBlueprints({
+        design: {
+          ...valid,
+          slice_blueprints: valid.slice_blueprints.map((b, i) => ({
+            ...b,
+            slice_id: mutated[i] ?? b.slice_id,
+          })),
+        },
+        processClass: "MEDIUM",
+        constraints,
+      });
+      throw new Error("expected benchmark slice order rejection");
+    } catch (error) {
+      expect(error).toMatchObject({ detailCode: "PLANNING_SLICE_ID_ORDER_MISMATCH" });
+    }
+  }
+  expect(() =>
+    assertEngineeringProgramDesignBlueprints({
+      design: {
+        ...valid,
+        slice_blueprints: [
+          ...valid.slice_blueprints,
+          { ...valid.slice_blueprints.at(-1)!, slice_id: "extra-slice" },
+        ],
+      },
+      processClass: "MEDIUM",
+      constraints,
+    }),
+  ).toThrow(/exact server-owned benchmark slice order/u);
+  const config = createRuntimeConfig({
+    model: { provider: "qualification_fake", model_id: "test-model" },
+    timeoutMs: 1_000,
+    toolLimits: { maxIterations: 2, maxCalls: 2 },
+  });
+  const transport = new FakeTransport([
+    { model: config.model, content: [{ type: "json", value: valid }] },
+  ]);
+  const executor = createStructuredEngineeringStageExecutor({
+    transport,
+    config,
+    slicePlanningConstraints: constraints,
+  });
+  await executor.execute({
+    binding: {
+      caseId: "case-1",
+      workUnitId: "unit-1",
+      runId: "run-1",
+      checkpointRevision: 0,
+      stage: EngineeringStage.PROGRAM_DESIGN,
+      attempt: 1,
+    },
+    objective: "bounded slices",
+    context: manifest(EngineeringStage.PROGRAM_DESIGN),
+    orderedArtifacts: [],
+    processClass: "MEDIUM",
+  });
+  expect(
+    transport.requests[0]!.messages.flatMap((message) => message.content)
+      .map((c) => (c.type === "text" ? c.text : ""))
+      .join("\n"),
+  ).toContain(JSON.stringify(ids));
 });
 
 it("replaces model-authored blueprint gate IDs with the exact code-owned schedule", async () => {
@@ -3734,15 +4352,20 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
     processClass: "LARGE_OR_HIGH_RISK",
   });
   expect(result.kind).toBe("ARTIFACT");
-  if (result.kind !== "ARTIFACT" || result.artifact.artifact_kind !== "ProgramDesign") {
+  if (
+    result.kind !== "ARTIFACT" ||
+    result.artifact.artifact_kind !== "ProgramDesign" ||
+    result.artifact.schema_version !== 2
+  ) {
     throw new Error("expected ProgramDesign artifact");
   }
-  expect(result.artifact.slice_blueprints.map((blueprint) => blueprint.gate_ids)).toEqual([
+  const scheduledResult = engineeringProgramDesign.parse(result.artifact);
+  expect(scheduledResult.slice_blueprints.map((blueprint) => blueprint.gate_ids)).toEqual([
     ["first", "each"],
     ["each"],
     ["each", "last"],
   ]);
-  expect(result.artifact.slice_blueprints.map((blueprint) => blueprint.test_paths)).toEqual([
+  expect(scheduledResult.slice_blueprints.map((blueprint) => blueprint.test_paths)).toEqual([
     [
       "apps/agent-worker/src/engineering-workflow.ts",
       "apps/agent-worker/src/required-first.test.ts",
@@ -3753,7 +4376,7 @@ it("replaces model-authored blueprint gate IDs with the exact code-owned schedul
       "apps/agent-worker/src/required-last.test.ts",
     ],
   ]);
-  expect(result.artifact.slice_blueprints.map((blueprint) => blueprint.allowed_paths)).toEqual([
+  expect(scheduledResult.slice_blueprints.map((blueprint) => blueprint.allowed_paths)).toEqual([
     [
       "apps/agent-worker/src",
       "apps/agent-worker/src/required-first.test.ts",
@@ -3773,7 +4396,19 @@ it("repairs one schema-valid ProgramDesign that violates server-owned slice cons
   if (validDesign.artifact_kind !== "ProgramDesign" || validDesign.schema_version !== 2) {
     throw new Error("current ProgramDesign fixture mismatch");
   }
-  const invalidDesign = engineeringArtifact.parse({
+  const mappedPaths = Array.from(
+    { length: 20 },
+    (_, index) => `apps/agent-worker/src/mapped-target-${index + 1}.ts`,
+  );
+  const mappedDesign = engineeringProgramDesign.parse({
+    ...validDesign,
+    slice_blueprints: validDesign.slice_blueprints.map((blueprint, index) =>
+      index === 0
+        ? { ...blueprint, allowed_paths: mappedPaths, test_paths: [mappedPaths[0]!] }
+        : blueprint,
+    ),
+  });
+  const invalidDesign = engineeringProgramDesign.parse({
     ...validDesign,
     slice_blueprints: validDesign.slice_blueprints.map((blueprint, index) =>
       index === 0
@@ -3798,12 +4433,20 @@ it("repairs one schema-valid ProgramDesign that violates server-owned slice cons
   });
   const transport = new FakeTransport([
     { model: config.model, content: [{ type: "json", value: invalidDesign }] },
-    { model: config.model, content: [{ type: "json", value: validDesign }] },
+    { model: config.model, content: [{ type: "json", value: mappedDesign }] },
   ]);
   const executor = createStructuredEngineeringStageExecutor({
     transport,
     config,
-    slicePlanningConstraints: SLICE_PLANNING_CONSTRAINTS,
+    slicePlanningConstraints: {
+      ...SLICE_PLANNING_CONSTRAINTS,
+      benchmarkSliceIds: ["slice-1", "slice-2"],
+      sliceAllowedPaths: { "slice-1": mappedPaths, "slice-2": ["apps/agent-worker/src"] },
+      sliceAllowedTestPaths: {
+        "slice-1": [mappedPaths[0]!],
+        "slice-2": ["apps/agent-worker/src/engineering-workflow.ts"],
+      },
+    },
   });
 
   const result = await executor.execute({
@@ -3827,7 +4470,7 @@ it("repairs one schema-valid ProgramDesign that violates server-owned slice cons
     transport.requests[1]!.messages.flatMap((message) => message.content)
       .map((content) => (content.type === "text" ? content.text : ""))
       .join("\n"),
-  ).toContain("no more than four model-authored write roots per slice");
+  ).toContain("generic plans use at most 4 exact write roots");
 });
 
 it("identifies an outside-write-cap ProgramDesign repair without exposing raw validation prose", async () => {
@@ -3835,7 +4478,7 @@ it("identifies an outside-write-cap ProgramDesign repair without exposing raw va
   if (validDesign.artifact_kind !== "ProgramDesign" || validDesign.schema_version !== 2) {
     throw new Error("current ProgramDesign fixture mismatch");
   }
-  const invalidDesign = engineeringArtifact.parse({
+  const invalidDesign = engineeringProgramDesign.parse({
     ...validDesign,
     slice_blueprints: validDesign.slice_blueprints.map((blueprint, index) =>
       index === 0

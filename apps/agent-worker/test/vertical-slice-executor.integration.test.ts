@@ -252,7 +252,17 @@ describeIntegration(
         attempt: 1,
         implement: async (tools) => {
           expect(Object.keys(tools).sort()).toEqual(
-            ["config", "mkdir", "patch", "read", "search", "tree", "write"].sort(),
+            [
+              "config",
+              "mkdir",
+              "patch",
+              "read",
+              "readExcerpt",
+              "search",
+              "sealDiscovery",
+              "tree",
+              "write",
+            ].sort(),
           );
           expect("command" in tools).toBe(false);
           expect("identity" in tools).toBe(false);
@@ -471,6 +481,80 @@ describeIntegration(
       ]);
       expect(result.actual.changedFiles).toEqual(["src/feature.test.ts", "src/feature.ts"]);
     });
+
+    it.each([true, false])(
+      "normalizes receipted restoration with remaining source delta=%s",
+      async (hasSourceDelta) => {
+        const authority: Authority = {
+          owner: "writer-a",
+          token: 7,
+          enabled: true,
+          inImplementation: false,
+        };
+        const execution = executeVerticalSlice({
+          db,
+          workspaceConfig: config(),
+          repositoryId: "repo",
+          baseSha,
+          caseId,
+          runId: "run-vslice",
+          checkpointRevision: 0,
+          writer: writer(authority),
+          slice,
+          attempt: 1,
+          testFirstAlreadySatisfied: true,
+          implement: async (tools) => {
+            const test = await tools.patch({
+              replacement_files: [
+                {
+                  relative_path: "src/base.ts",
+                  replacements: [
+                    {
+                      old_content: "export const base = true;\n",
+                      new_content: "export const base = false;\n",
+                    },
+                  ],
+                },
+              ],
+            });
+            expect(test.outcome).toBe(ToolOutcome.SUCCEEDED);
+            const restored = await tools.patch({
+              replacement_files: [
+                {
+                  relative_path: "src/base.ts",
+                  replacements: [
+                    {
+                      old_content: "export const base = false;\n",
+                      new_content: "export const base = true;\n",
+                    },
+                  ],
+                },
+              ],
+            });
+            expect(restored.outcome).toBe(ToolOutcome.SUCCEEDED);
+            if (hasSourceDelta) {
+              const source = await tools.write({
+                relative_path: "src/feature.ts",
+                content: "export const feature = true;\n",
+              });
+              expect(source.outcome).toBe(ToolOutcome.SUCCEEDED);
+            }
+            return {
+              changed_files: hasSourceDelta ? ["src/base.ts", "src/feature.ts"] : ["src/base.ts"],
+            };
+          },
+        });
+        if (!hasSourceDelta) {
+          await expect(execution).rejects.toThrow(
+            "NO_PROGRESS: slice implementation produced no actual file change",
+          );
+          return;
+        }
+        const result = await execution;
+        expect(result.implementerReport.changed_files).toEqual(["src/feature.ts"]);
+        expect(result.actual.changedFiles).toEqual(["src/feature.ts"]);
+      },
+    );
 
     it("wires exact SliceContract test_paths into the first mutation boundary", async () => {
       const testFirstSlice = engineeringSliceContract.parse({
@@ -983,6 +1067,11 @@ describeIntegration(
 
       const changesReview = await executeVerticalSliceReview({
         ...reviewBase,
+        slice: {
+          ...slice,
+          allowed_paths: ["src/base.ts", "src/slice-one.ts"],
+          test_paths: ["src/slice-one.ts"],
+        },
         createReviewerSession: async () => ({
           sessionId: "fresh-review-medium",
           toolNames: [],
@@ -996,6 +1085,7 @@ describeIntegration(
                   location: { relative_path: "src/slice-one.ts", line: 1 },
                   evidence: "slice one accepted",
                   required_fix: "Correct the bounded slice value.",
+                  required_fix_paths: ["src/base.ts"],
                 },
               ],
               lines_examined: 6,
@@ -1007,6 +1097,7 @@ describeIntegration(
       expect(changesReview.decision).toMatchObject({
         artifact_kind: "ReviewDecision",
         decision: "CHANGES_REQUIRED",
+        required_mutation_paths: ["src/base.ts"],
       });
       expect(changesReview.decision.findings).toHaveLength(1);
 

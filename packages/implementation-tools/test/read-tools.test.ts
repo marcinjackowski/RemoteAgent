@@ -69,6 +69,68 @@ afterEach(async () => {
 });
 
 describe("four bounded read-only tools", () => {
+  it("reads an exact server-only line excerpt with the complete-file digest", async () => {
+    const { tools } = await fixture();
+    const result = await tools.readExcerpt({
+      operation_id: "op-excerpt",
+      relative_path: "src/app.ts",
+      start_line: 1,
+      end_line: 1,
+    });
+    expect(result.outcome).toBe(ToolOutcome.SUCCEEDED);
+    const body = payload(result);
+    expect(body).toMatchObject({
+      tool: "read_excerpt",
+      complete: false,
+      relative_path: "src/app.ts",
+      start_line: 1,
+      end_line: 1,
+      content: "const needle = 42;\n",
+      end_of_file: false,
+    });
+    expect(typeof body["full_file_digest"]).toBe("string");
+    expect(result.output.value).not.toContain("readExcerpt");
+  });
+  it("refuses an invalid excerpt range before filesystem access", async () => {
+    const { tools } = await fixture();
+    const result = await tools.readExcerpt({
+      operation_id: "op-bad-excerpt",
+      relative_path: "src/app.ts",
+      start_line: 2,
+      end_line: 1,
+    });
+    expectRefused(result, "INVALID_REQUEST");
+  });
+  it("preserves line endings and final-newline semantics in excerpts", async () => {
+    const { root, tools } = await fixture();
+    await writeFile(join(root, "src", "endings.txt"), "one\r\ntwo\r\nthree");
+    const crlf = await tools.readExcerpt({
+      operation_id: "op-crlf",
+      relative_path: "src/endings.txt",
+      start_line: 1,
+      end_line: 2,
+    });
+    expect(payload(crlf).content).toBe("one\r\ntwo\r\n");
+    expect(payload(crlf).end_of_file).toBe(false);
+    const final = await tools.readExcerpt({
+      operation_id: "op-final",
+      relative_path: "src/endings.txt",
+      start_line: 3,
+      end_line: 3,
+    });
+    expect(payload(final).content).toBe("three");
+    expect(payload(final).end_of_file).toBe(true);
+    expectRefused(
+      await tools.readExcerpt({
+        operation_id: "op-eof",
+        relative_path: "src/endings.txt",
+        start_line: 4,
+        end_line: 4,
+      }),
+      "DISCOVERY_FAILED",
+    );
+  });
+
   it("reads, searches, lists and reads allowlisted config inside the root", async () => {
     const { tools } = await fixture();
 
@@ -126,7 +188,7 @@ describe("four bounded read-only tools", () => {
 
     const result = await tools.read({ operation_id: "op-missing", relative_path: "src/Guess.ts" });
 
-    expectRefused(result, "DISCOVERY_FAILED");
+    expectRefused(result, "FILE_NOT_FOUND");
     expect(payload(result)).toMatchObject({
       next_action: "Use search with a filename fragment before another read.",
     });

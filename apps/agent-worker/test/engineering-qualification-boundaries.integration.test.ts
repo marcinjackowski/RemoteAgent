@@ -61,6 +61,11 @@ class BoundaryTransport implements RuntimeTransport {
       gateIds?: readonly string[];
       reviewEvidence?: string;
       sliceIds?: readonly string[];
+      reviewFindings?: readonly {
+        summary: string;
+        evidence: string;
+        required_fix: string;
+      }[];
     },
   ) {}
 
@@ -110,8 +115,8 @@ class BoundaryTransport implements RuntimeTransport {
           slice_id: sliceId,
           objective: "exercise the exact production boundary",
           observable_result: "the durable terminal or accepted correction is exact",
-          allowed_paths: ["src"],
-          test_paths: ["src"],
+          allowed_paths: ["src", "src/change.ts"],
+          test_paths: ["src", "src/change.ts"],
           gate_ids: [...(this.scenario.gateIds ?? ["qualification"])],
           inspection_method: "inspect immutable attempts and receipts",
           stop_condition: "server-derived review or terminal state is durable",
@@ -130,8 +135,8 @@ class BoundaryTransport implements RuntimeTransport {
         slice_id: sliceId,
         objective: "exercise the exact production boundary",
         observable_result: "the durable terminal or accepted correction is exact",
-        allowed_paths: ["src"],
-        test_paths: ["src"],
+        allowed_paths: ["src", "src/change.ts"],
+        test_paths: ["src", "src/change.ts"],
         gate_ids: [...(this.scenario.gateIds ?? ["qualification"])],
         inspection_method: "inspect immutable attempts and receipts",
         stop_condition: "server-derived review or terminal state is durable",
@@ -193,17 +198,24 @@ class BoundaryTransport implements RuntimeTransport {
           ? { schema_version: 1, findings: [], lines_examined: 10 }
           : {
               schema_version: 1,
-              findings: [
-                {
-                  severity: "MEDIUM",
-                  summary: "The bounded implementation still needs correction.",
-                  location: { relative_path: "src/change.ts", line: 1 },
-                  evidence:
-                    this.scenario.reviewEvidence ??
-                    this.scenario.contents[this.reviewAttempts - 1]!.trim(),
-                  required_fix: "replace it with the accepted value",
-                },
-              ],
+              findings: (
+                this.scenario.reviewFindings ?? [
+                  {
+                    summary: "The bounded implementation still needs correction.",
+                    evidence:
+                      this.scenario.reviewEvidence ??
+                      this.scenario.contents[this.reviewAttempts - 1]!.trim(),
+                    required_fix: "replace it with the accepted value",
+                  },
+                ]
+              ).map((finding) => ({
+                severity: "MEDIUM" as const,
+                summary: finding.summary,
+                location: { relative_path: "src/change.ts", line: 1 },
+                evidence: finding.evidence,
+                required_fix: finding.required_fix,
+                required_fix_paths: ["src/change.ts"],
+              })),
               lines_examined: 10,
             },
       );
@@ -423,6 +435,79 @@ describeIntegration(
         [fixture.ids.runId],
       );
       expect(commits.rows[0]?.count).toBe("0");
+    });
+
+    it("preserves independent same-location review findings into correction", async () => {
+      const fixture = await createEngineeringQualificationFixture({
+        id: "review-distinct-findings",
+      });
+      active.push(fixture);
+      const transport = new BoundaryTransport(
+        { caseId: fixture.ids.caseId, runId: fixture.ids.runId },
+        {
+          contents: ["export const value = 'bad';\n", "export const value = 'good';\n"],
+          reviews: ["CHANGES_REQUIRED", "PASS"],
+          reviewFindings: [
+            {
+              summary: "first independent finding",
+              evidence: "export const value = 'bad';",
+              required_fix: "fix behavior",
+            },
+            {
+              summary: "second independent finding",
+              evidence: "export const value = 'bad';",
+              required_fix: "fix wiring",
+            },
+          ],
+        },
+      );
+      const lease = await fixture.claimImplementer();
+      const production = fixture.makeProduction(lease, {
+        transport,
+        policy: { riskFacts: smallRiskFacts },
+      });
+      await expect(production.handler(lease, async () => undefined)).resolves.toBeUndefined();
+      const rows = await fixture.db.query<{
+        payload: unknown;
+        artifact_kind: string;
+      }>(
+        "SELECT artifact_kind, payload FROM engineering_artifact_revisions WHERE run_id=$1 AND artifact_kind='ReviewDecision' ORDER BY recorded_at",
+        [fixture.ids.runId],
+      );
+      expect(rows.rows).toHaveLength(2);
+      const correctionReview = rows.rows.find((row) =>
+        JSON.stringify(row.payload).includes("first independent finding"),
+      );
+      expect(correctionReview).toBeDefined();
+      const correctionPayload = correctionReview?.payload as { findings?: unknown };
+      expect(Array.isArray(correctionPayload.findings)).toBe(true);
+      const findings = correctionPayload.findings as string[];
+      expect(findings).toHaveLength(2);
+      expect(findings.every((finding) => typeof finding === "string")).toBe(true);
+      const findingIds = findings.map((finding) => {
+        const match = /^\[(precommit-[0-9a-f]{32})\](?:\s|$)/u.exec(finding);
+        expect(match?.[1]).toBeDefined();
+        return match![1];
+      });
+      expect(new Set(findingIds).size).toBe(2);
+      expect(findings.join("\n")).toContain("first independent finding");
+      expect(findings.join("\n")).toContain("second independent finding");
+      expect(findings.join("\n")).toContain("fix behavior");
+      expect(findings.join("\n")).toContain("fix wiring");
+      const passReview = rows.rows.find(
+        (row) => (row.payload as { decision?: string }).decision === "PASS",
+      );
+      expect(passReview?.payload).toMatchObject({ findings: [] });
+      const correctionText = transport.requests
+        .filter((request) => request.outputSchema?.name === "SliceImplementationReport_v1")
+        .flatMap((request) => request.messages.flatMap((message) => message.content))
+        .filter((content) => content.type === "text")
+        .map((content) => content.text)
+        .join("\n");
+      expect(correctionText).toContain("first independent finding");
+      expect(correctionText).toContain("second independent finding");
+      expect(correctionText).toContain("fix behavior");
+      expect(correctionText).toContain("fix wiring");
     });
 
     it("opens a fresh reviewer when a new slice matches an older rejected patch", async () => {
@@ -716,11 +801,11 @@ describeIntegration(
       );
       expect(completion.rows[0]).toMatchObject({
         status: "BLOCKED",
-        summary: expect.stringContaining("NO_PROGRESS"),
+        summary: "required gates did not pass: FAST_GATE_BLOCKED_FULL",
       });
       await assertNoAcceptedWrite(fixture);
       expect(transport.reviewAttempts).toBe(0);
-      expect(transport.implementationAttempts).toBe(5);
+      expect(transport.implementationAttempts).toBe(1);
     });
 
     it.each([

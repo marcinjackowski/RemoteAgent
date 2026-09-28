@@ -25,6 +25,9 @@ export const PRE_COMMIT_REVIEW_SESSION_REUSED = "PRE_COMMIT_REVIEW_SESSION_REUSE
 export const PRE_COMMIT_REVIEW_NOT_EXECUTED = "PRE_COMMIT_REVIEW_NOT_EXECUTED";
 export const PRE_COMMIT_REVIEW_NO_CHANGE = "PRE_COMMIT_REVIEW_NO_CHANGE";
 
+/** Versioned server-owned projection used to identify validated findings. */
+const FINDING_IDENTITY_PROJECTION_VERSION = 1;
+
 export type PreCommitReviewBinding = Readonly<{
   caseId: string;
   runId: string;
@@ -106,6 +109,8 @@ export type FreshPreCommitReviewResult = Readonly<{
   evidenceBundleDigest: string;
   sessionId: string;
   modelCalls: number;
+  /** Server-validated union of exact files named by blocking findings. */
+  requiredMutationPaths: readonly string[];
 }>;
 
 const consumedSessions = new WeakSet<object>();
@@ -136,10 +141,6 @@ function assertExactObservation(
   ) {
     throw new ReviewContractError(PRE_COMMIT_REVIEW_STALE);
   }
-}
-
-function severityRank(severity: ReviewSeverity): number {
-  return { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3, NIT: 4 }[severity];
 }
 
 type ChangedLineEvidence = Readonly<{
@@ -240,7 +241,7 @@ function serverFindings(
   patch: string,
   codeOwnedGeneratorPaths: readonly string[],
   sliceAllowedPaths: readonly string[],
-): readonly ReviewFinding[] {
+): Readonly<{ findings: readonly ReviewFinding[]; requiredMutationPaths: readonly string[] }> {
   const generatorPaths = new Set(codeOwnedGeneratorPaths);
   // A generator output remains in the exact patch/digests for verification and compile evidence,
   // but it cannot authorize a model-correction loop: the model has no write capability for it.
@@ -255,7 +256,7 @@ function serverFindings(
   const serverEvidenceByLocation = new Map(
     changedLines.map((entry) => [`${entry.relativePath}:${String(entry.line)}`, entry]),
   );
-  const byLocation = new Map<string, PreCommitReviewOutput["findings"][number]>();
+  const byIdentity = new Map<string, PreCommitReviewOutput["findings"][number]>();
   for (const candidate of output.findings) {
     const location = `${candidate.location.relative_path}:${String(candidate.location.line)}`;
     const directServerEvidence = serverEvidenceByLocation.get(location);
@@ -282,13 +283,28 @@ function serverFindings(
     // the server-parsed new-file line in the actual unified diff. Model prose is never enough:
     // an unchanged line or a foreign path is downgraded even when its evidence resembles code.
     const blocking = isBlockingSeverity(candidate.severity);
+    const targetPaths = [...new Set(candidate.required_fix_paths)].sort();
+    const validTargets =
+      targetPaths.length > 0 &&
+      targetPaths.every(
+        (path) =>
+          !generatorPaths.has(path) &&
+          sliceAllowedPaths.includes(path) &&
+          !sliceAllowedPaths.some(
+            (allowedPath) => allowedPath !== path && allowedPath.startsWith(`${path}/`),
+          ),
+      );
     const effective = blocking
-      ? serverEvidence === undefined
+      ? serverEvidence === undefined || !validTargets
         ? {
             ...candidate,
             severity: ReviewSeverity.LOW,
-            summary: "Reviewer finding was not anchored in the actual patch.",
+            summary:
+              serverEvidence === undefined
+                ? "Reviewer finding was not anchored in the actual patch."
+                : "Reviewer finding named no valid in-scope correction target.",
             required_fix: "",
+            required_fix_paths: [],
           }
         : {
             ...candidate,
@@ -299,28 +315,54 @@ function serverFindings(
             // Blocking authority is always the exact server-observed changed line. The model's
             // quote may be useful prose but never overrides or weakens this anchor.
             evidence: serverEvidence.evidence,
+            required_fix_paths: targetPaths,
           }
       : candidate;
-    const effectiveLocation = `${effective.location.relative_path}:${String(effective.location.line)}`;
-    const current = byLocation.get(effectiveLocation);
-    if (
-      current === undefined ||
-      severityRank(effective.severity) < severityRank(current.severity)
-    ) {
-      byLocation.set(effectiveLocation, effective);
-    }
+    const identity = canonicalDigest({
+      projection_version: FINDING_IDENTITY_PROJECTION_VERSION,
+      effective_anchor: effective.location,
+      severity: effective.severity,
+      summary: effective.summary,
+      required_fix: effective.required_fix,
+      required_fix_paths: effective.required_fix_paths,
+      evidence_digest: canonicalDigest(effective.evidence),
+    });
+    if (!byIdentity.has(identity)) byIdentity.set(identity, effective);
   }
-  return Object.freeze(
-    [...byLocation.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([location, candidate]) =>
+  const findings = Object.freeze(
+    [...byIdentity.entries()]
+      .sort(([, left], [, right]) => {
+        const leftLocation = `${left.location.relative_path}:${String(left.location.line)}`;
+        const rightLocation = `${right.location.relative_path}:${String(right.location.line)}`;
+        return (
+          leftLocation.localeCompare(rightLocation) ||
+          left.summary.localeCompare(right.summary) ||
+          left.required_fix.localeCompare(right.required_fix) ||
+          canonicalDigest(left.evidence).localeCompare(canonicalDigest(right.evidence))
+        );
+      })
+      .map(([identity, candidate]) =>
         reviewFinding.parse({
           schema_version: 1,
-          finding_id: `precommit-${canonicalDigest({ location }).slice(7, 39)}`,
-          ...candidate,
+          finding_id: `precommit-${identity.slice(7, 39)}`,
+          severity: candidate.severity,
+          summary: candidate.summary,
+          location: candidate.location,
+          evidence: candidate.evidence,
+          required_fix: candidate.required_fix,
         }),
       ),
   );
+  const requiredMutationPaths = Object.freeze(
+    [
+      ...new Set(
+        [...byIdentity.values()]
+          .filter((finding) => isBlockingSeverity(finding.severity))
+          .flatMap((finding) => finding.required_fix_paths),
+      ),
+    ].sort(),
+  );
+  return Object.freeze({ findings, requiredMutationPaths });
 }
 
 /**
@@ -435,7 +477,7 @@ export async function executeFreshPreCommitReview(input: {
   }
   assertExactObservation(input.actual, await input.observeActual());
 
-  const findings = serverFindings(
+  const validated = serverFindings(
     output,
     input.actual.patch,
     request.slice_scope.code_owned_generator_paths,
@@ -455,10 +497,10 @@ export async function executeFreshPreCommitReview(input: {
     // explicitly the digest of raw patch bytes, not the richer actual-diff digest.
     diff_digest: rawPatchDigest,
     tree_digest: input.actual.treeDigest,
-    findings,
+    findings: validated.findings,
     lines_examined: linesExamined,
   });
-  const blockingFindingIds = findings
+  const blockingFindingIds = validated.findings
     .filter((finding) => isBlockingSeverity(finding.severity))
     .map((finding) => finding.finding_id)
     .sort();
@@ -466,7 +508,7 @@ export async function executeFreshPreCommitReview(input: {
     readiness:
       blockingFindingIds.length === 0 ? ReviewReadiness.READY : ReviewReadiness.CHANGES_REQUIRED,
     report,
-    findings,
+    findings: validated.findings,
     blockingFindingIds: Object.freeze(blockingFindingIds),
     rawPatchDigest,
     actualDiffDigest: input.actual.diffDigest,
@@ -474,5 +516,6 @@ export async function executeFreshPreCommitReview(input: {
     evidenceBundleDigest,
     sessionId: session.sessionId,
     modelCalls: reviewed.modelCalls,
+    requiredMutationPaths: validated.requiredMutationPaths,
   });
 }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspacePathPolicy } from "@remoteagent/workspace-runner";
 import { discoverAllowedConfig } from "../src/config-discovery.js";
 import { createPlannerReadPort } from "../src/read-tools.js";
+import { DiscoveryPolicyError } from "../src/discovery-policy.js";
 
 const roots: string[] = [];
 
@@ -44,5 +45,33 @@ describe("server-owned config discovery", () => {
     });
     await expect(port.config({ relative_path: "../.gitlab-ci.yml" } as never)).rejects.toThrow();
     expect(port.manifest.can_execute_commands).toBe(false);
+  });
+
+  it("treats fixed-leaf absence as optional but preserves discovery failures", async () => {
+    const missing = new DiscoveryPolicyError("FILE_NOT_FOUND", "missing leaf");
+    const port = {
+      config: async () => {
+        throw missing;
+      },
+      tree: async () => ({ entries: [] }),
+    } as never;
+    await expect(discoverAllowedConfig(port)).resolves.toEqual({ entries: [] });
+
+    const failed = new DiscoveryPolicyError("DISCOVERY_FAILED", "I/O failure");
+    const failingPort = {
+      config: async () => {
+        throw failed;
+      },
+      tree: async () => ({ entries: [] }),
+    } as never;
+    await expect(discoverAllowedConfig(failingPort)).rejects.toBe(failed);
+  });
+
+  it("allows a missing workflows leaf when its .github ancestor exists", async () => {
+    const root = await mkdtemp(join(tmpdir(), "repository-planner-workflows-missing-"));
+    roots.push(root);
+    await mkdir(join(root, ".github"));
+    const port = await createPlannerReadPort((await createWorkspacePathPolicy(root)).root);
+    await expect(discoverAllowedConfig(port)).resolves.toEqual({ entries: [] });
   });
 });

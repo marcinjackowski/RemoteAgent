@@ -23,5 +23,6 @@ export * from "./snapshot.js";
 export * from "./verification.js";
 export * from "./engineering-gates.js";
 export * from "./disposable-workspace.js";
+export * from "./trusted-evaluator-inputs.js";
 export * from "./baseline-workspace.js";
 export * from "./generator.js";

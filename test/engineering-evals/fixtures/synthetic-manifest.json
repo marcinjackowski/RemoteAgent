@@ -1,0 +1,45 @@
+{
+  "benchmark_id": "synthetic-ios",
+  "version": 1,
+  "repository_id": "synthetic-repo",
+  "seed_sha": "0000000000000000000000000000000000000000",
+  "objective_digest": "sha256:4bf4745e1d5fe8a038ee4dec888668afbbe4118fc2be7f47012bf899b98b09d4",
+  "projection_versions": {
+    "evaluation": "v1",
+    "finding_identity": "v1",
+    "gate_failure": "v1",
+    "journal": "v2"
+  },
+  "execution_config_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "gate_catalog_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "gate_schema_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "model_policy": {
+    "roles": ["DESIGNER", "IMPLEMENTER", "REVIEWER", "VERIFIER"],
+    "providers": ["codex_cli"]
+  },
+  "targets": [{ "target_id": "screen", "paths": ["Sources/Screen.swift"], "kind": "source" }],
+  "slices": [
+    {
+      "slice_id": "slice",
+      "mutation_target_ids": ["screen"],
+      "required_read_context": [{ "relative_path": "Sources/Screen.swift", "must_exist": true }]
+    }
+  ],
+  "criteria": [
+    {
+      "criterion_id": "criterion",
+      "owning_slice_id": "slice",
+      "required_gate_ids": ["gate"],
+      "executable_selector_ids": ["selector"],
+      "related_target_ids": ["screen"],
+      "expected_outcomes": { "baseline": "PASS", "current": "PASS" }
+    }
+  ],
+  "xcode": {
+    "scheme": "Synthetic",
+    "platform": "iOS",
+    "sdk": "iphonesimulator",
+    "destination": "platform=iOS Simulator"
+  },
+  "evidence": { "public_artifacts": ["summary"], "private_artifacts": ["journal"] }
+}

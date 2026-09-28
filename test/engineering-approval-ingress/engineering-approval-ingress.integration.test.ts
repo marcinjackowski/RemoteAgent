@@ -179,11 +179,14 @@ function button(id: string, customId: string, actorId = discordActorId) {
 }
 
 async function eventually<T>(read: () => Promise<T>, accepts: (value: T) => boolean): Promise<T> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // A full PostgreSQL suite can delay the background outbox relay beyond the old
+  // 100 x 10 ms polling window. Bound elapsed time without weakening the predicate.
+  const deadline = performance.now() + 15_000;
+  do {
     const value = await read();
     if (accepts(value)) return value;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
-  }
+  } while (performance.now() < deadline);
   throw new Error("timed out waiting for durable engineering ingress state");
 }
 

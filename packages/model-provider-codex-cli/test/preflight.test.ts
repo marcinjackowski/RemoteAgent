@@ -118,6 +118,10 @@ const environment = Object.freeze({
 });
 
 describe("Codex subscription preflight", () => {
+  it("pins the authenticated production CLI to the qualified exact version", () => {
+    expect(CODEX_CLI_SUPPORTED_VERSION).toBe("0.153.3");
+  });
+
   it("proves exact client version and ChatGPT subscription login with bounded argv/env", async () => {
     const fake = await fakeCodex({});
     const exactProfile = await profile(fake.executable);

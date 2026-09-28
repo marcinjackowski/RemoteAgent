@@ -64,6 +64,7 @@ import {
   createPlannerReadPort,
   plannerConfigRequest,
   plannerReadRequest,
+  plannerReadExcerptRequest,
   plannerSearchRequest,
   plannerTreeRequest,
 } from "@remoteagent/repository-planner";
@@ -130,6 +131,14 @@ export type ImplementationReadTools = Readonly<{
   readonly manifest: PlannerCapabilityManifest;
   read(
     input: ImplementationReadToolsInput & { readonly relative_path: string },
+  ): Promise<ImplementationToolResult>;
+  /** Server-only diagnostic range read; never included in model tool definitions. */
+  readExcerpt(
+    input: ImplementationReadToolsInput & {
+      readonly relative_path: string;
+      readonly start_line: number;
+      readonly end_line: number;
+    },
   ): Promise<ImplementationToolResult>;
   search(
     input: ImplementationReadToolsInput & {
@@ -289,7 +298,7 @@ function refuse(
     tool,
     refused: true,
     failure_code: code,
-    ...(code === "DISCOVERY_FAILED"
+    ...(code === "DISCOVERY_FAILED" || code === "FILE_NOT_FOUND"
       ? { next_action: "Use search with a filename fragment before another read." }
       : {}),
   });
@@ -369,6 +378,41 @@ export async function createImplementationReadTools(
           digest: result.digest,
           content: result.content.value,
         });
+      }),
+    readExcerpt: (input) =>
+      run("read" as ImplementationReadToolName, identity, input.operation_id, async () => {
+        const parsed = request(plannerReadExcerptRequest, {
+          relative_path: input.relative_path,
+          start_line: input.start_line,
+          end_line: input.end_line,
+        });
+        const result = await port.readExcerpt(parsed);
+        return present(
+          {
+            tool: "read_excerpt",
+            refused: false,
+            complete: false,
+            relative_path: result.relative_path,
+            start_line: result.start_line,
+            end_line: result.end_line,
+            full_file_digest: result.full_file_digest,
+            end_of_file: result.end_of_file,
+            content: result.content.value,
+          },
+          (kept) =>
+            canonicalJsonStringify({
+              tool: "read_excerpt",
+              refused: false,
+              complete: false,
+              relative_path: result.relative_path,
+              start_line: result.start_line,
+              end_line: result.end_line,
+              full_file_digest: result.full_file_digest,
+              end_of_file: result.end_of_file,
+              content: clip(result.content.value, kept),
+            }),
+          result.content.value.length,
+        );
       }),
     config: (input) =>
       run("config", identity, input.operation_id, async () => {

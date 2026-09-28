@@ -181,7 +181,10 @@ describe("runToolLoop", () => {
           count += 1;
         },
       }),
-    ).rejects.toBeInstanceOf(ToolLimitError);
+    ).rejects.toMatchObject({
+      code: "LIMIT_EXCEEDED",
+      detailCode: "TOOL_CALL_LIMIT_EXCEEDED",
+    });
     expect(count).toBe(0);
   });
 
@@ -199,7 +202,10 @@ describe("runToolLoop", () => {
           iterationCount += 1;
         },
       }),
-    ).rejects.toBeInstanceOf(ToolLimitError);
+    ).rejects.toMatchObject({
+      code: "LIMIT_EXCEEDED",
+      detailCode: "TOOL_ITERATION_LIMIT_EXCEEDED",
+    });
     expect(iterationCount).toBe(1);
     let zeroCount = 0;
     const zeroTransport = new FakeTransport([scripted[0]!]);
@@ -211,7 +217,10 @@ describe("runToolLoop", () => {
           zeroCount += 1;
         },
       }),
-    ).rejects.toBeInstanceOf(ToolLimitError);
+    ).rejects.toMatchObject({
+      code: "LIMIT_EXCEEDED",
+      detailCode: "TOOL_EXECUTION_DISABLED",
+    });
     expect(zeroCount).toBe(0);
     expect(zeroTransport.requests[0]).not.toHaveProperty("tools");
   });
@@ -390,7 +399,9 @@ describe("runToolLoop", () => {
       tools: [readTool, writeTool],
       execute: async (name) => {
         executed.push(name);
-        return { raw: `${name}-result` };
+        return name === "write"
+          ? { outcome: "SUCCEEDED", changed_files: ["src/Feature.swift"] }
+          : { raw: `${name}-result` };
       },
     });
 
@@ -672,9 +683,15 @@ describe("runToolLoop", () => {
       },
     });
     const transport = new FakeTransport([
-      { model: bounded.model, content: [use("failed-write", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-write", "write"), input: { relative_path: "src/A.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
-      { model: bounded.model, content: [use("corrected-write", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("corrected-write", "write"), input: { relative_path: "src/A.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "done" }] },
     ]);
     let writes = 0;
@@ -684,8 +701,8 @@ describe("runToolLoop", () => {
       execute: async () => {
         writes += 1;
         return writes === 1
-          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
-          : { outcome: "SUCCEEDED", failure_code: null };
+          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE", changed_files: [] }
+          : { outcome: "SUCCEEDED", failure_code: null, changed_files: ["src/A.swift"] };
       },
     });
 
@@ -696,6 +713,337 @@ describe("runToolLoop", () => {
       "FAILED_MUTATION_NOT_RECOVERED",
     );
   });
+
+  it("reconciles only the exact failed target, never a later successful sibling", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 4, maxCalls: 4 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const targetA = "src/A.swift";
+    const targetB = "src/B.swift";
+    const transport = new FakeTransport([
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-a", "write"), input: { relative_path: targetA } }],
+      },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+      {
+        model: bounded.model,
+        content: [{ ...use("success-b", "write"), input: { relative_path: targetB } }],
+      },
+      { model: bounded.model, content: [{ type: "text", text: "must remain blocked" }] },
+      { model: bounded.model, content: [{ type: "text", text: "still blocked" }] },
+    ]);
+    let writes = 0;
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [writeTool],
+        execute: async () => {
+          writes += 1;
+          return writes === 1
+            ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE", changed_files: [] }
+            : { outcome: "SUCCEEDED", failure_code: null, changed_files: [targetB] };
+        },
+      }),
+    ).rejects.toThrow(/failed mutation was recovered/);
+    expect(writes).toBe(2);
+    const recovery = JSON.stringify(transport.requests[2]?.messages);
+    expect(recovery).toContain('"unresolved_failed_mutation_paths":["src/A.swift"]');
+    expect(recovery).toContain("every exact failed path");
+    expect(transport.requests).toHaveLength(4);
+  });
+
+  it("lists every unresolved failed mutation path in sorted recovery evidence", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 2, maxCalls: 2 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["patch"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const patchTool = { name: "patch", inputSchema: { type: "object" } };
+    const transport = new FakeTransport([
+      {
+        model: bounded.model,
+        content: [
+          {
+            ...use("failed-batch", "patch"),
+            input: {
+              replacement_files: [
+                { relative_path: "src/Z.swift", replacements: [] },
+                { relative_path: "src/A.swift", replacements: [] },
+              ],
+            },
+          },
+        ],
+      },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+    ]);
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [patchTool],
+        execute: async () => ({
+          outcome: "FAILED",
+          failure_code: "REPLACEMENT_MISMATCH",
+          changed_files: [],
+        }),
+      }),
+    ).rejects.toThrow(/failed mutation was recovered/);
+    const recovery = transport.requests
+      .map((request) => JSON.stringify(request.messages))
+      .join("\n");
+    expect(recovery).toContain('"unresolved_failed_mutation_paths":["src/A.swift","src/Z.swift"]');
+  });
+
+  it.each(["THROWN_INPUT_ERROR", "DOMAIN_FAILED"] as const)(
+    "keeps an unscoped failed mutation unresolved after an unrelated success (%s)",
+    async (failureMode) => {
+      const bounded = createRuntimeConfig({
+        model: { provider: "test", model_id: "model" },
+        timeoutMs: 1000,
+        toolLimits: { maxIterations: 4, maxCalls: 4 },
+        toolLoopPolicy: {
+          readonlyToolNames: [],
+          mutationToolNames: ["write"],
+          mutationIterationsReserved: 0,
+          retainRecentToolPairs: 1,
+          requireSuccessfulMutationAfterFailure: true,
+        },
+      });
+      const transport = new FakeTransport([
+        { model: bounded.model, content: [use("unscoped-failure", "write")] },
+        { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+        {
+          model: bounded.model,
+          content: [
+            { ...use("unrelated-success", "write"), input: { relative_path: "src/B.swift" } },
+          ],
+        },
+        { model: bounded.model, content: [{ type: "text", text: "must remain blocked" }] },
+      ]);
+      await expect(
+        runToolLoop(transport, bounded, {
+          messages: [user],
+          tools: [writeTool],
+          execute: async (name, input) => {
+            if (name === "write" && Object.keys(input as object).length === 0) {
+              if (failureMode === "THROWN_INPUT_ERROR") {
+                throw new ToolInputError([{ path: [], code: "invalid_input" }]);
+              }
+              return { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" };
+            }
+            return { outcome: "SUCCEEDED", failure_code: null, changed_files: ["src/B.swift"] };
+          },
+        }),
+      ).rejects.toThrow(/failed mutation was recovered/);
+      const recovery = transport.requests
+        .map((request) => JSON.stringify(request.messages))
+        .join("\n");
+      expect(recovery).toContain('"unresolved_unscoped_mutation_failure":true');
+      expect(transport.requests).toHaveLength(4);
+    },
+  );
+
+  it("reconciles a failed target only after its later successful receipt", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 4, maxCalls: 4 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const target = "src/A.swift";
+    const transport = new FakeTransport([
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-a", "write"), input: { relative_path: target } }],
+      },
+      { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
+      {
+        model: bounded.model,
+        content: [{ ...use("success-a", "write"), input: { relative_path: target } }],
+      },
+      { model: bounded.model, content: [{ type: "text", text: "done" }] },
+    ]);
+    let writes = 0;
+    const result = await runToolLoop(transport, bounded, {
+      messages: [user],
+      tools: [writeTool],
+      execute: async () => {
+        writes += 1;
+        return writes === 1
+          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE", changed_files: [] }
+          : { outcome: "SUCCEEDED", failure_code: null, changed_files: [target] };
+      },
+    });
+    expect(result.content).toEqual([{ type: "text", text: "done" }]);
+    expect(writes).toBe(2);
+  });
+
+  it("keeps an ambiguous mutation sticky even after a later success", async () => {
+    const bounded = createRuntimeConfig({
+      model: { provider: "test", model_id: "model" },
+      timeoutMs: 1000,
+      toolLimits: { maxIterations: 3, maxCalls: 3 },
+      toolLoopPolicy: {
+        readonlyToolNames: [],
+        mutationToolNames: ["write"],
+        mutationIterationsReserved: 0,
+        retainRecentToolPairs: 1,
+        requireSuccessfulMutationAfterFailure: true,
+      },
+    });
+    const transport = new FakeTransport([
+      {
+        model: bounded.model,
+        content: [{ ...use("ambiguous-a", "write"), input: { relative_path: "src/A.swift" } }],
+      },
+      {
+        model: bounded.model,
+        content: [{ ...use("success-b", "write"), input: { relative_path: "src/B.swift" } }],
+      },
+    ]);
+    let writes = 0;
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [writeTool],
+        execute: async () => {
+          writes += 1;
+          return writes === 1
+            ? {
+                outcome: "AMBIGUOUS",
+                failure_code: null,
+                changed_files: ["src/A.swift"],
+                ambiguity_reason: "UNVERIFIED_POST_STATE",
+                requires_reconciliation: true,
+              }
+            : { outcome: "SUCCEEDED", failure_code: null, changed_files: ["src/B.swift"] };
+        },
+      }),
+    ).rejects.toThrow(/Ambiguous mutation cannot be retried/);
+    expect(writes).toBe(1);
+  });
+
+  it.each([
+    ["null", null, { relative_path: "src/B.swift" }],
+    ["empty object", {}, {}],
+    ["unknown outcome", { outcome: "UNKNOWN" }, { relative_path: "src/B.swift" }],
+  ] as const)(
+    "treats malformed domain outcome as ambiguous (%s), including after prior success",
+    async (_label, malformed, malformedInput) => {
+      const bounded = createRuntimeConfig({
+        model: { provider: "test", model_id: "model" },
+        timeoutMs: 1000,
+        toolLimits: { maxIterations: 4, maxCalls: 4 },
+        toolLoopPolicy: {
+          readonlyToolNames: [],
+          mutationToolNames: ["write"],
+          mutationIterationsReserved: 0,
+          retainRecentToolPairs: 1,
+          requireSuccessfulMutationAfterFailure: true,
+          requireSuccessfulMutationBeforeFinal: true,
+        },
+      });
+      const transport = new FakeTransport([
+        {
+          model: bounded.model,
+          content: [{ ...use("success-a", "write"), input: { relative_path: "src/A.swift" } }],
+        },
+        {
+          model: bounded.model,
+          content: [{ ...use("malformed-b", "write"), input: malformedInput }],
+        },
+        {
+          model: bounded.model,
+          content: [{ ...use("must-not-run", "write"), input: { relative_path: "src/C.swift" } }],
+        },
+      ]);
+      let writes = 0;
+      await expect(
+        runToolLoop(transport, bounded, {
+          messages: [user],
+          tools: [writeTool],
+          execute: async (_name, input) => {
+            writes += 1;
+            if ((input as { relative_path?: string }).relative_path === "src/A.swift") {
+              return { outcome: "SUCCEEDED", changed_files: ["src/A.swift"] };
+            }
+            if (writes === 2) return malformed;
+            return { outcome: "SUCCEEDED", changed_files: ["src/C.swift"] };
+          },
+        }),
+      ).rejects.toThrow(/Ambiguous mutation cannot be retried/);
+      expect(writes).toBe(2);
+      expect(transport.requests).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    ["distinct targets", "src/B.swift"],
+    ["same target", "src/A.swift"],
+  ] as const)(
+    "does not execute a mutation after same-batch ambiguity (%s)",
+    async (_label, secondPath) => {
+      const bounded = createRuntimeConfig({
+        model: { provider: "test", model_id: "model" },
+        timeoutMs: 1000,
+        toolLimits: { maxIterations: 3, maxCalls: 4 },
+        toolLoopPolicy: {
+          readonlyToolNames: [],
+          mutationToolNames: ["write"],
+          mutationIterationsReserved: 0,
+          retainRecentToolPairs: 1,
+          requireSuccessfulMutationAfterFailure: true,
+        },
+      });
+      const transport = new FakeTransport([
+        {
+          model: bounded.model,
+          content: [
+            { ...use("ambiguous", "write"), input: { relative_path: "src/A.swift" } },
+            { ...use("must-not-run", "write"), input: { relative_path: secondPath } },
+          ],
+        },
+      ]);
+      let writes = 0;
+      await expect(
+        runToolLoop(transport, bounded, {
+          messages: [user],
+          tools: [writeTool],
+          execute: async (_name, _input) => {
+            writes += 1;
+            if (writes === 1) {
+              return { outcome: "AMBIGUOUS", changed_files: [] };
+            }
+            return { outcome: "SUCCEEDED", changed_files: [secondPath] };
+          },
+        }),
+      ).rejects.toThrow(/Ambiguous mutation cannot be retried/);
+      expect(writes).toBe(1);
+    },
+  );
 
   it("requires a successful mutation before accepting the first compiler-repair final report", async () => {
     const bounded = createRuntimeConfig({
@@ -957,7 +1305,10 @@ describe("runToolLoop", () => {
       },
     });
     const transport = new FakeTransport([
-      { model: bounded.model, content: [use("atomic-batch", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("atomic-batch", "write"), input: { relative_path: "src/Flow.swift" } }],
+      },
       { model: bounded.model, content: [use("repair-source", "write")] },
       { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
       { model: bounded.model, content: [use("repair-test", "write")] },
@@ -1010,9 +1361,15 @@ describe("runToolLoop", () => {
       },
     });
     const transport = new FakeTransport([
-      { model: bounded.model, content: [use("failed-write", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-write", "write"), input: { relative_path: "src/A.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "premature final" }] },
-      { model: bounded.model, content: [use("corrected-write", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("corrected-write", "write"), input: { relative_path: "src/A.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "done" }] },
     ]);
     let writes = 0;
@@ -1023,7 +1380,7 @@ describe("runToolLoop", () => {
         writes += 1;
         return writes === 1
           ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
-          : { outcome: "SUCCEEDED", failure_code: null };
+          : { outcome: "SUCCEEDED", failure_code: null, changed_files: ["src/A.swift"] };
       },
     });
 
@@ -1082,28 +1439,37 @@ describe("runToolLoop", () => {
       },
     });
     const transport = new FakeTransport([
-      { model: bounded.model, content: [use("failed-write-1", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-write-1", "write"), input: { relative_path: "src/A.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "premature final 1" }] },
-      { model: bounded.model, content: [use("failed-write-2", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-write-2", "write"), input: { relative_path: "src/B.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "premature final 2" }] },
-      { model: bounded.model, content: [use("corrected-write", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("corrected-write", "write"), input: { relative_path: "src/B.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "done" }] },
+      { model: bounded.model, content: [{ type: "text", text: "still premature" }] },
     ]);
     let writes = 0;
-    const result = await runToolLoop(transport, bounded, {
-      messages: [user],
-      tools: [writeTool],
-      execute: async () => {
-        writes += 1;
-        return writes < 3
-          ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
-          : { outcome: "SUCCEEDED", failure_code: null };
-      },
-    });
-
+    await expect(
+      runToolLoop(transport, bounded, {
+        messages: [user],
+        tools: [writeTool],
+        execute: async () => {
+          writes += 1;
+          return writes < 3
+            ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
+            : { outcome: "SUCCEEDED", failure_code: null, changed_files: ["src/B.swift"] };
+        },
+      }),
+    ).rejects.toThrow(/failed mutation was recovered/);
     expect(writes).toBe(3);
-    expect(result.content).toEqual([{ type: "text", text: "done" }]);
-    expect(result).toMatchObject({ iterations: 3, calls: 3 });
     expect(JSON.stringify(transport.requests[4]?.messages)).toContain(
       "FAILED_MUTATION_NOT_RECOVERED",
     );
@@ -1431,7 +1797,7 @@ describe("runToolLoop", () => {
       execute: async () => {
         const failureCode = failureCodes.shift();
         return failureCode === null
-          ? { outcome: "SUCCEEDED", failure_code: null }
+          ? { outcome: "SUCCEEDED", failure_code: null, changed_files: [target] }
           : { outcome: "FAILED", failure_code: failureCode };
       },
     });
@@ -1455,12 +1821,28 @@ describe("runToolLoop", () => {
       },
     });
     const transport = new FakeTransport([
-      { model: bounded.model, content: [use("failed-write-1", "write")] },
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-write-1", "write"), input: { relative_path: "src/A.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "premature final 1" }] },
-      { model: bounded.model, content: [use("corrected-write-1", "write")] },
-      { model: bounded.model, content: [use("failed-write-2", "write")] },
+      {
+        model: bounded.model,
+        content: [
+          { ...use("corrected-write-1", "write"), input: { relative_path: "src/A.swift" } },
+        ],
+      },
+      {
+        model: bounded.model,
+        content: [{ ...use("failed-write-2", "write"), input: { relative_path: "src/B.swift" } }],
+      },
       { model: bounded.model, content: [{ type: "text", text: "premature final 2" }] },
-      { model: bounded.model, content: [use("corrected-write-2", "write")] },
+      {
+        model: bounded.model,
+        content: [
+          { ...use("corrected-write-2", "write"), input: { relative_path: "src/B.swift" } },
+        ],
+      },
       { model: bounded.model, content: [{ type: "text", text: "done" }] },
     ]);
     let writes = 0;
@@ -1471,7 +1853,11 @@ describe("runToolLoop", () => {
         writes += 1;
         return writes === 1 || writes === 3
           ? { outcome: "FAILED", failure_code: "WRITE_REQUIRES_NEW_FILE" }
-          : { outcome: "SUCCEEDED", failure_code: null };
+          : {
+              outcome: "SUCCEEDED",
+              failure_code: null,
+              changed_files: [writes === 2 ? "src/A.swift" : "src/B.swift"],
+            };
       },
     });
 
@@ -1543,7 +1929,7 @@ describe("runToolLoop", () => {
       tools: [writeTool],
       execute: async () => {
         executions += 1;
-        return { written: true };
+        return { outcome: "SUCCEEDED", changed_files: ["src/Feature.swift"] };
       },
     });
     expect(executions).toBe(1);

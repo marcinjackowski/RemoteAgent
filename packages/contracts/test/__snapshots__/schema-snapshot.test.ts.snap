@@ -2622,265 +2622,593 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
   },
   "EngineeringGateFailure": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "additionalProperties": false,
-    "properties": {
-      "artifact_kind": {
-        "const": "GateFailure",
-        "type": "string",
-      },
-      "attempt": {
-        "exclusiveMinimum": 0,
-        "maximum": 9007199254740991,
-        "type": "integer",
-      },
-      "authority": {
-        "const": "SERVER_OWNED",
-        "type": "string",
-      },
-      "blocking_gate_ids": {
-        "items": {
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string",
-        },
-        "maxItems": 128,
-        "minItems": 1,
-        "type": "array",
-      },
-      "case_id": {
-        "maxLength": 512,
-        "minLength": 1,
-        "type": "string",
-      },
-      "config_digest": {
-        "pattern": "^sha256:[0-9a-f]{64}$",
-        "type": "string",
-      },
-      "context_digest": {
-        "pattern": "^sha256:[0-9a-f]{64}$",
-        "type": "string",
-      },
-      "decision_ids": {
-        "items": {
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string",
-        },
-        "maxItems": 256,
-        "type": "array",
-      },
-      "diagnostics": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "compiler_diagnostics": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "column": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer",
-                  },
-                  "digest": {
-                    "pattern": "^sha256:[0-9a-f]{64}$",
-                    "type": "string",
-                  },
-                  "excerpt": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string",
-                  },
-                  "line": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer",
-                  },
-                  "message": {
-                    "maxLength": 2048,
-                    "minLength": 1,
-                    "type": "string",
-                  },
-                  "path": {
-                    "maxLength": 1024,
-                    "minLength": 1,
-                    "pattern": "^[A-Za-z0-9._+/-]+$",
-                    "type": "string",
-                  },
-                },
-                "required": [
-                  "path",
-                  "line",
-                  "column",
-                  "message",
-                  "excerpt",
-                  "digest",
-                ],
-                "type": "object",
-              },
-              "maxItems": 32,
-              "type": "array",
-            },
-            "excerpt": {
-              "maxLength": 16384,
-              "minLength": 1,
-              "type": "string",
-            },
-            "gate_id": {
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_kind": {
+            "const": "GateFailure",
+            "type": "string",
+          },
+          "attempt": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer",
+          },
+          "authority": {
+            "const": "SERVER_OWNED",
+            "type": "string",
+          },
+          "blocking_gate_ids": {
+            "items": {
               "maxLength": 512,
               "minLength": 1,
               "type": "string",
             },
-            "log_digest": {
-              "anyOf": [
-                {
-                  "pattern": "^sha256:[0-9a-f]{64}$",
-                  "type": "string",
-                },
-                {
-                  "type": "null",
-                },
-              ],
-            },
-            "outcome": {
-              "enum": [
-                "FAILED",
-                "TIMED_OUT",
-                "INFRASTRUCTURE",
-              ],
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+          },
+          "case_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "config_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "context_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "decision_ids": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
               "type": "string",
             },
-            "test_diagnostics": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[0-9a-f]{64}$",
-                    "type": "string",
-                  },
-                  "line": {
-                    "anyOf": [
-                      {
+            "maxItems": 256,
+            "type": "array",
+          },
+          "diagnostics": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "compiler_diagnostics": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "column": {
                         "exclusiveMinimum": 0,
                         "maximum": 9007199254740991,
                         "type": "integer",
                       },
-                      {
-                        "type": "null",
+                      "digest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string",
                       },
-                    ],
-                  },
-                  "message": {
-                    "maxLength": 4096,
-                    "minLength": 1,
-                    "type": "string",
-                  },
-                  "path": {
-                    "anyOf": [
-                      {
+                      "excerpt": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "line": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer",
+                      },
+                      "message": {
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "path": {
                         "maxLength": 1024,
                         "minLength": 1,
                         "pattern": "^[A-Za-z0-9._+/-]+$",
                         "type": "string",
                       },
-                      {
-                        "type": "null",
-                      },
+                    },
+                    "required": [
+                      "path",
+                      "line",
+                      "column",
+                      "message",
+                      "excerpt",
+                      "digest",
                     ],
+                    "type": "object",
                   },
-                  "test_name": {
-                    "maxLength": 1024,
+                  "maxItems": 32,
+                  "type": "array",
+                },
+                "excerpt": {
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "gate_id": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "log_digest": {
+                  "anyOf": [
+                    {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string",
+                    },
+                    {
+                      "type": "null",
+                    },
+                  ],
+                },
+                "outcome": {
+                  "enum": [
+                    "FAILED",
+                    "TIMED_OUT",
+                    "INFRASTRUCTURE",
+                  ],
+                  "type": "string",
+                },
+                "test_diagnostics": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string",
+                      },
+                      "line": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "message": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "path": {
+                        "anyOf": [
+                          {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._+/-]+$",
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "test_name": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "test_name",
+                      "message",
+                      "path",
+                      "line",
+                      "digest",
+                    ],
+                    "type": "object",
+                  },
+                  "maxItems": 32,
+                  "type": "array",
+                },
+                "trust": {
+                  "const": "UNTRUSTED_DATA",
+                  "type": "string",
+                },
+              },
+              "required": [
+                "gate_id",
+                "outcome",
+                "log_digest",
+                "trust",
+                "excerpt",
+              ],
+              "type": "object",
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+          },
+          "diff_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "receipt_ids": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "run_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "number",
+          },
+          "slice_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "tree_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+        },
+        "required": [
+          "schema_version",
+          "artifact_kind",
+          "case_id",
+          "run_id",
+          "revision",
+          "authority",
+          "slice_id",
+          "attempt",
+          "tree_digest",
+          "diff_digest",
+          "context_digest",
+          "config_digest",
+          "blocking_gate_ids",
+          "receipt_ids",
+          "decision_ids",
+          "diagnostics",
+        ],
+        "type": "object",
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_kind": {
+            "const": "GateFailure",
+            "type": "string",
+          },
+          "attempt": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer",
+          },
+          "authority": {
+            "const": "SERVER_OWNED",
+            "type": "string",
+          },
+          "blocking_gate_ids": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+          },
+          "case_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "config_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "context_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "decision_ids": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+            "maxItems": 256,
+            "type": "array",
+          },
+          "diagnostics": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "compiler_diagnostics": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "column": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer",
+                      },
+                      "digest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string",
+                      },
+                      "excerpt": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "line": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer",
+                      },
+                      "message": {
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "path": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9._+/-]+$",
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "path",
+                      "line",
+                      "column",
+                      "message",
+                      "excerpt",
+                      "digest",
+                    ],
+                    "type": "object",
+                  },
+                  "maxItems": 32,
+                  "type": "array",
+                },
+                "excerpt": {
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "gate_id": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "log_digest": {
+                  "anyOf": [
+                    {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string",
+                    },
+                    {
+                      "type": "null",
+                    },
+                  ],
+                },
+                "outcome": {
+                  "enum": [
+                    "FAILED",
+                    "TIMED_OUT",
+                    "INFRASTRUCTURE",
+                  ],
+                  "type": "string",
+                },
+                "test_diagnostics": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "digest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string",
+                      },
+                      "line": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "message": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                      "path": {
+                        "anyOf": [
+                          {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._+/-]+$",
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "test_name": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "test_name",
+                      "message",
+                      "path",
+                      "line",
+                      "digest",
+                    ],
+                    "type": "object",
+                  },
+                  "maxItems": 32,
+                  "type": "array",
+                },
+                "trust": {
+                  "const": "UNTRUSTED_DATA",
+                  "type": "string",
+                },
+              },
+              "required": [
+                "gate_id",
+                "outcome",
+                "log_digest",
+                "trust",
+                "excerpt",
+              ],
+              "type": "object",
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+          },
+          "diff_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "mapping_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
+          "observations": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "criterion_id": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "evidence_ref": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "failure_class": {
+                  "enum": [
+                    "ASSERTION_FAILED",
+                    "COMPILE_FAILED",
+                    "TEST_DISCOVERY_FAILED",
+                    "INFRASTRUCTURE",
+                    "UNKNOWN",
+                  ],
+                  "type": "string",
+                },
+                "gate_id": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                },
+                "related_target_ids": {
+                  "items": {
+                    "maxLength": 512,
                     "minLength": 1,
                     "type": "string",
                   },
+                  "maxItems": 256,
+                  "minItems": 1,
+                  "readOnly": true,
+                  "type": "array",
                 },
-                "required": [
-                  "test_name",
-                  "message",
-                  "path",
-                  "line",
-                  "digest",
-                ],
-                "type": "object",
               },
-              "maxItems": 32,
-              "type": "array",
+              "readOnly": true,
+              "required": [
+                "criterion_id",
+                "gate_id",
+                "failure_class",
+                "evidence_ref",
+                "related_target_ids",
+              ],
+              "type": "object",
             },
-            "trust": {
-              "const": "UNTRUSTED_DATA",
+            "maxItems": 512,
+            "minItems": 1,
+            "readOnly": true,
+            "type": "array",
+          },
+          "receipt_ids": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
               "type": "string",
             },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
           },
-          "required": [
-            "gate_id",
-            "outcome",
-            "log_digest",
-            "trust",
-            "excerpt",
-          ],
-          "type": "object",
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "run_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "schema_version": {
+            "const": 2,
+            "type": "number",
+          },
+          "slice_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string",
+          },
+          "tree_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string",
+          },
         },
-        "maxItems": 8,
-        "minItems": 1,
-        "type": "array",
+        "readOnly": true,
+        "required": [
+          "schema_version",
+          "artifact_kind",
+          "case_id",
+          "run_id",
+          "revision",
+          "authority",
+          "slice_id",
+          "attempt",
+          "tree_digest",
+          "diff_digest",
+          "context_digest",
+          "config_digest",
+          "mapping_digest",
+          "blocking_gate_ids",
+          "receipt_ids",
+          "decision_ids",
+          "diagnostics",
+          "observations",
+        ],
+        "type": "object",
       },
-      "diff_digest": {
-        "pattern": "^sha256:[0-9a-f]{64}$",
-        "type": "string",
-      },
-      "receipt_ids": {
-        "items": {
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string",
-        },
-        "maxItems": 256,
-        "minItems": 1,
-        "type": "array",
-      },
-      "revision": {
-        "maximum": 9007199254740991,
-        "minimum": 0,
-        "type": "integer",
-      },
-      "run_id": {
-        "maxLength": 512,
-        "minLength": 1,
-        "type": "string",
-      },
-      "schema_version": {
-        "const": 1,
-        "type": "number",
-      },
-      "slice_id": {
-        "maxLength": 512,
-        "minLength": 1,
-        "type": "string",
-      },
-      "tree_digest": {
-        "pattern": "^sha256:[0-9a-f]{64}$",
-        "type": "string",
-      },
-    },
-    "required": [
-      "schema_version",
-      "artifact_kind",
-      "case_id",
-      "run_id",
-      "revision",
-      "authority",
-      "slice_id",
-      "attempt",
-      "tree_digest",
-      "diff_digest",
-      "context_digest",
-      "config_digest",
-      "blocking_gate_ids",
-      "receipt_ids",
-      "decision_ids",
-      "diagnostics",
     ],
-    "type": "object",
   },
   "EngineeringLocalCommitReceipt": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3335,7 +3663,7 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
                 "pattern": "^[A-Za-z0-9._+/-]+$",
                 "type": "string",
               },
-              "maxItems": 16,
+              "maxItems": 256,
               "minItems": 1,
               "type": "array",
             },
@@ -3730,6 +4058,17 @@ exports[`JSON Schema snapshots > matches the recorded schema map 1`] = `
         "maxLength": 65536,
         "minLength": 1,
         "type": "string",
+      },
+      "required_mutation_paths": {
+        "default": [],
+        "items": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._+/-]+$",
+          "type": "string",
+        },
+        "maxItems": 256,
+        "type": "array",
       },
       "reviewed_digest": {
         "pattern": "^sha256:[0-9a-f]{64}$",

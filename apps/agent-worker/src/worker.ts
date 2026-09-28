@@ -45,7 +45,7 @@ import {
   type RuntimeTransport,
   type SubscriptionModelInvocationDescriptorV1,
 } from "@remoteagent/model-runtime";
-import type { EngineeringStage } from "@remoteagent/contracts";
+import { canonicalDigest, type EngineeringStage } from "@remoteagent/contracts";
 import {
   createCodexCliTransport,
   type CodexCliTransport,
@@ -68,7 +68,9 @@ import { createEngineeringRoleContextReader } from "./context.js";
 import {
   createEngineeringRoleModelComposition,
   createProductionEngineeringRuntimePort,
+  engineeringExecutionConfigWithGateFailureMapping,
   engineeringExecutionConfigFromEnv,
+  type EngineeringExecutionConfig,
 } from "./engineering-execution.js";
 import { createProductionEngineeringRecoveryCoordinator } from "./engineering-recovery.js";
 import {
@@ -76,6 +78,11 @@ import {
   createEngineeringInvocationJournalRunner,
 } from "./engineering-debug-journal.js";
 import { engineeringModelRoutingFromEnv } from "./engineering-model-routing.js";
+import {
+  createAfterEngineeringLivePreflight,
+  engineeringLiveQualificationSelectionFromEnv,
+  engineeringLiveBenchmarkPathsFromEnv,
+} from "./engineering-live-qualification.js";
 import {
   createLegacyConversationModelBinding,
   legacyConversationKnownSecretsFromEnv,
@@ -419,20 +426,58 @@ export async function main(): Promise<void> {
     },
   });
   const engineeringExecutionConfig = await engineeringExecutionConfigFromEnv();
+  let effectiveEngineeringExecutionConfig: EngineeringExecutionConfig | null =
+    engineeringExecutionConfig;
+  const liveSelection = engineeringLiveQualificationSelectionFromEnv();
   const engineeringModelRouting =
     engineeringExecutionConfig === null ? null : await engineeringModelRoutingFromEnv();
-  const engineeringModels =
-    engineeringExecutionConfig === null || engineeringModelRouting === null
-      ? null
-      : createEngineeringRoleModelComposition({
+  let liveEngineeringModels: ReturnType<typeof createEngineeringRoleModelComposition> | null = null;
+  if (liveSelection !== null) {
+    if (engineeringExecutionConfig === null || engineeringModelRouting === null)
+      throw new Error("live Engineering requires execution config and routing");
+    const benchmarkPaths = engineeringLiveBenchmarkPathsFromEnv();
+    const executionConfigPath = process.env.RA_ENGINEERING_CONFIG_PATH?.trim();
+    if (benchmarkPaths === null || executionConfigPath === undefined)
+      throw new Error("live Engineering benchmark paths/config are required");
+    const prepared = await createAfterEngineeringLivePreflight(
+      {
+        paths: benchmarkPaths,
+        executionConfigPath,
+        selection: liveSelection,
+        executionConfig: engineeringExecutionConfig,
+        routing: engineeringModelRouting,
+      },
+      (preflight) => {
+        effectiveEngineeringExecutionConfig = engineeringExecutionConfigWithGateFailureMapping(
+          engineeringExecutionConfig,
+          preflight.mapping,
+        );
+        return createEngineeringRoleModelComposition({
           routing: engineeringModelRouting,
-          executionConfig: engineeringExecutionConfig,
+          executionConfig: effectiveEngineeringExecutionConfig!,
           decorateTransport: (binding) =>
             createEngineeringDebugTransport(binding.transport, {
               role: binding.role,
               invocation: binding.invocation,
             }),
         });
+      },
+    );
+    liveEngineeringModels = prepared.value;
+  }
+  const engineeringModels =
+    liveEngineeringModels ??
+    (engineeringExecutionConfig === null || engineeringModelRouting === null
+      ? null
+      : createEngineeringRoleModelComposition({
+          routing: engineeringModelRouting,
+          executionConfig: effectiveEngineeringExecutionConfig!,
+          decorateTransport: (binding) =>
+            createEngineeringDebugTransport(binding.transport, {
+              role: binding.role,
+              invocation: binding.invocation,
+            }),
+        }));
   const handlers = createWorkerHandlers(
     {
       persistence,
@@ -458,6 +503,27 @@ export async function main(): Promise<void> {
                   ? "subscription-provider-unavailable"
                   : "role-routed-subscription",
               configDigest: engineeringExecutionConfig.configDigest,
+              compatibilityDigest:
+                engineeringModelRouting === null
+                  ? canonicalDigest({
+                      execution_config_digest:
+                        effectiveEngineeringExecutionConfig?.configDigest ??
+                        engineeringExecutionConfig.configDigest,
+                      deployment_config_digest: null,
+                      roles: null,
+                    })
+                  : canonicalDigest({
+                      execution_config_digest:
+                        effectiveEngineeringExecutionConfig?.configDigest ??
+                        engineeringExecutionConfig.configDigest,
+                      deployment_config_digest: engineeringModelRouting.deploymentConfigDigest,
+                      roles: Object.fromEntries(
+                        Object.entries(engineeringModelRouting.roles).map(([role, binding]) => [
+                          role,
+                          binding.invocation,
+                        ]),
+                      ),
+                    }),
               logger,
             }),
           }),
@@ -476,7 +542,7 @@ export async function main(): Promise<void> {
           db,
           lease,
           jobs,
-          config: engineeringExecutionConfig,
+          config: effectiveEngineeringExecutionConfig!,
           transport: engineeringModels.implementation.transport,
           modelConfig: engineeringModels.implementation.config,
           readContext,
@@ -515,7 +581,7 @@ export async function main(): Promise<void> {
           db,
           jobs,
           owner: config.owner,
-          config: engineeringExecutionConfig,
+          config: effectiveEngineeringExecutionConfig!,
           transport: engineeringModels.implementation.transport,
           modelConfig: engineeringModels.implementation.config,
           readContext,

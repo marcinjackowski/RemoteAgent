@@ -502,7 +502,7 @@ export async function runToolLoop(
                       ? "REQUIRED_CORRECTION_PATH_NOT_CHANGED"
                       : "SUCCESSFUL_MUTATION_REQUIRED",
                   next_action: missingRecoveryMutation
-                    ? "Use a mutation tool to correct the prior failed mutation before returning the final report."
+                    ? `Use mutation tools to correct every exact failed path in unresolved_failed_mutation_paths (${JSON.stringify([...unresolvedFailedMutationPaths].sort())}) before returning the final report.${unresolvedUnscopedMutationFailure ? " An unscoped mutation failure also remains unresolved." : ""}`
                     : missingRequiredMutationPath
                       ? completionRecoveryRefusals > 1
                         ? "The previous final report produced no mutation receipt. Invoke an enabled mutation tool for the exact required correction path now; do not return changed_files until that tool succeeds."
@@ -517,6 +517,12 @@ export async function runToolLoop(
                         required_correction_paths: requiredCorrectionPaths,
                         required_correction_paths_any: requiredCorrectionPathsAny,
                         required_correction_paths_all: requiredCorrectionPathsAll,
+                      }
+                    : {}),
+                  ...(missingRecoveryMutation
+                    ? {
+                        unresolved_failed_mutation_paths: [...unresolvedFailedMutationPaths].sort(),
+                        unresolved_unscoped_mutation_failure: unresolvedUnscopedMutationFailure,
                       }
                     : {}),
                   mutation_recovery_extension_remaining:
@@ -546,7 +552,10 @@ export async function runToolLoop(
 
     // Validate the entire batch before invoking even the first executor.
     if (config.toolLimits.maxIterations === 0 || config.toolLimits.maxCalls === 0) {
-      throw new ToolLimitError("Tool execution is disabled by zero tool limits");
+      throw new ToolLimitError(
+        "Tool execution is disabled by zero tool limits",
+        "TOOL_EXECUTION_DISABLED",
+      );
     }
     const exceedsIterationLimit = iterations + 1 > config.toolLimits.maxIterations;
     const hasMissingRequiredCorrectionPath =
@@ -560,10 +569,10 @@ export async function runToolLoop(
       uses.length > 0 &&
       uses.every((use) => mutationToolNames.has(use.name));
     if (exceedsIterationLimit && !usesRecoveryMutationExtension) {
-      throw new ToolLimitError("Maximum tool iterations exceeded");
+      throw new ToolLimitError("Maximum tool iterations exceeded", "TOOL_ITERATION_LIMIT_EXCEEDED");
     }
     if (calls + uses.length > config.toolLimits.maxCalls) {
-      throw new ToolLimitError("Maximum tool calls exceeded");
+      throw new ToolLimitError("Maximum tool calls exceeded", "TOOL_CALL_LIMIT_EXCEEDED");
     }
     if (unresolvedMutationAmbiguity && uses.some((use) => mutationToolNames.has(use.name))) {
       throw new ToolLimitError("Ambiguous mutation cannot be retried");
@@ -647,6 +656,9 @@ export async function runToolLoop(
     let mutationBatchFailed = false;
     let mutationBatchUnscopedFailure = false;
     let mutationBatchAmbiguous = false;
+    const unresolvedFailedPathsBeforeBatch = new Set(unresolvedFailedMutationPaths);
+    const requiredPathsAllBeforeBatch = new Set(remainingRequiredMutationPathsAll);
+    const requiredMutationObservedBeforeBatch = requiredMutationObserved;
     let repeatedMutationTargetRefusal = false;
     let repeatedMutationTargetRefusalDetail: string | undefined;
     let replacementRecovery: ReplacementFailureCoordinate | undefined;
@@ -663,9 +675,9 @@ export async function runToolLoop(
             mutationBatchSucceeded = true;
             successfulMutationObserved = true;
             const changedFiles = projectedChangedFiles(recordOf(output));
-            const repairedPaths =
-              changedFiles.length > 0 ? changedFiles : mutationTargetPaths(use.input);
-            for (const path of repairedPaths) unresolvedFailedMutationPaths.delete(path);
+            // Only a server-owned changed_files projection can reconcile a failed target. The
+            // model's request target is not evidence that the mutation actually changed bytes.
+            for (const path of changedFiles) unresolvedFailedMutationPaths.delete(path);
             if (
               policy?.requiredSuccessfulMutationPaths?.some((path) =>
                 changedFiles.includes(path),
@@ -683,7 +695,17 @@ export async function runToolLoop(
             }
           } else {
             mutationBatchFailed = true;
-            if (outcome === "AMBIGUOUS") mutationBatchAmbiguous = true;
+            // A mutating tool must prove a recognized domain outcome. Missing or malformed
+            // outcomes are fail-closed ambiguity, and no later use in this batch may execute.
+            if (outcome === null || outcome === "AMBIGUOUS") {
+              mutationBatchAmbiguous = true;
+              results.push({
+                type: "tool-result",
+                id: use.id,
+                output: { ok: true, value: output, progress },
+              });
+              break;
+            }
             if (outcome === "FAILED") {
               replacementRecovery = replacementFailureCoordinate(use.input, output);
               const failedPaths =
@@ -760,16 +782,30 @@ export async function runToolLoop(
       if (mutationBatchUnscopedFailure) unresolvedUnscopedMutationFailure = true;
       unresolvedMutationFailure =
         unresolvedUnscopedMutationFailure || unresolvedFailedMutationPaths.size > 0;
-      unresolvedMutationAmbiguity = mutationBatchAmbiguous;
+      // Ambiguity is sticky for the complete attempt. A later success cannot prove whether the
+      // ambiguous side effect happened, so it must not clear this safety guard.
+      unresolvedMutationAmbiguity = unresolvedMutationAmbiguity || mutationBatchAmbiguous;
       // A real mutation attempt is progress even when the domain boundary refuses it. Permit one
       // fresh recovery instruction for the new failure; repeated finals without a mutation remain
       // bounded by completionRecoveryRefusals above.
       completionRecoveryRefusals = 0;
     } else if (mutationBatchSucceeded) {
-      unresolvedUnscopedMutationFailure = false;
-      unresolvedMutationFailure = unresolvedFailedMutationPaths.size > 0;
-      unresolvedMutationAmbiguity = false;
-      completionRecoveryRefusals = 0;
+      unresolvedMutationFailure =
+        unresolvedUnscopedMutationFailure || unresolvedFailedMutationPaths.size > 0;
+      // Keep ambiguity sticky until an explicit reconciliation boundary (there is none inside
+      // this bounded attempt).
+      const recoveryProgress =
+        [...unresolvedFailedPathsBeforeBatch].some(
+          (path) => !unresolvedFailedMutationPaths.has(path),
+        ) ||
+        [...requiredPathsAllBeforeBatch].some(
+          (path) => !remainingRequiredMutationPathsAll.has(path),
+        ) ||
+        (!requiredMutationObservedBeforeBatch && requiredMutationObserved);
+      if (recoveryProgress) completionRecoveryRefusals = 0;
+    }
+    if (mutationBatchAmbiguous) {
+      throw new ToolLimitError("Ambiguous mutation cannot be retried");
     }
     if (repeatedMutationTargetRefusal) {
       throw new ToolLimitError(

@@ -21,6 +21,7 @@ export type DiscoveryErrorCode =
   | "SYMLINK_NOT_ALLOWED"
   | "FILE_NOT_ALLOWED"
   | "BINARY_FILE"
+  | "FILE_NOT_FOUND"
   | "OVERSIZE"
   | "DISCOVERY_FAILED";
 
@@ -127,6 +128,7 @@ async function verifyPath(
   root: VerifiedWorkspacePath,
   input: string,
   requireFile: boolean,
+  missingCode: "FILE_NOT_FOUND" | "DISCOVERY_FAILED" = "FILE_NOT_FOUND",
 ): Promise<{ relativePath: RelativeRepositoryPath; target: string }> {
   let relativePath: RelativeRepositoryPath;
   try {
@@ -137,10 +139,22 @@ async function verifyPath(
   if (isForbiddenPath(relativePath)) fail("FILE_NOT_ALLOWED", "Path is not allowed");
   const target = resolve(root, relativePath);
   if (!contained(root, target)) fail("PATH_ESCAPE", "Path escapes the verified workspace");
+  const canonicalRoot = await realpath(root).catch(() =>
+    fail("DISCOVERY_FAILED", "Workspace root is unavailable"),
+  );
+  if (canonicalRoot !== root) fail("SYMLINK_NOT_ALLOWED", "Workspace root changed");
   let current: string = root;
-  for (const segment of relativePath.split("/")) {
+  const segments = relativePath.split("/");
+  for (const [index, segment] of segments.entries()) {
     current = join(current, segment);
-    const stat = await lstat(current).catch(() => fail("DISCOVERY_FAILED", "Path is unavailable"));
+    const stat = await lstat(current).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        fail(
+          index === segments.length - 1 ? missingCode : "DISCOVERY_FAILED",
+          "File is not present",
+        );
+      fail("DISCOVERY_FAILED", "Path is unavailable");
+    });
     if (stat.isSymbolicLink()) fail("SYMLINK_NOT_ALLOWED", "Symlink path component is not allowed");
   }
   const canonical = await realpath(target).catch(() =>
@@ -206,7 +220,7 @@ export async function readSafeFile(
 ): Promise<SafeReadResult> {
   const first = await verifyPath(root, input, true);
   await beforeRead?.(first.relativePath);
-  const verified = await verifyPath(root, first.relativePath, true);
+  const verified = await verifyPath(root, first.relativePath, true, "DISCOVERY_FAILED");
   const handle = await open(verified.target, constants.O_RDONLY | noFollow).catch(() =>
     fail("DISCOVERY_FAILED", "File could not be opened safely"),
   );
@@ -230,6 +244,64 @@ export async function readSafeFile(
   } finally {
     await handle.close();
   }
+}
+
+/** Read a bounded line window while retaining the digest of the complete file. */
+export async function readSafeFileExcerpt(
+  root: VerifiedWorkspacePath,
+  input: string,
+  startLine: number,
+  endLine: number,
+  beforeRead?: DiscoveryReadSeam,
+  budget: ScanBudget = { scannedBytes: 0, entries: 0 },
+): Promise<
+  Readonly<{
+    relativePath: RelativeRepositoryPath;
+    content: string;
+    digest: string;
+    startLine: number;
+    endLine: number;
+    endOfFile: boolean;
+  }>
+> {
+  if (
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(endLine) ||
+    startLine < 1 ||
+    endLine < startLine
+  )
+    fail("DISCOVERY_FAILED", "Excerpt range is invalid");
+  const result = await readSafeFile(root, input, beforeRead, budget);
+  const starts = [0];
+  const delimiters: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < result.content.length; index += 1) {
+    if (result.content[index] === "\n") {
+      const delimiterStart = index > 0 && result.content[index - 1] === "\r" ? index - 1 : index;
+      delimiters.push({ start: delimiterStart, end: index + 1 });
+      starts.push(index + 1);
+    }
+  }
+  // A trailing newline terminates the final physical line; it does not create an extra
+  // addressable empty line for excerpt coordinates.
+  const lineCount =
+    result.content.length > 0 && result.content.endsWith("\n") ? starts.length - 1 : starts.length;
+  if (startLine > lineCount) fail("DISCOVERY_FAILED", "Excerpt starts beyond file");
+  const boundedEnd = Math.min(endLine, lineCount);
+  const startOffset = starts[startLine - 1]!;
+  const terminatingDelimiter = delimiters[boundedEnd - 1];
+  const endOffset =
+    terminatingDelimiter === undefined || boundedEnd < lineCount
+      ? (starts[boundedEnd] ?? result.content.length)
+      : terminatingDelimiter.end;
+  const content = result.content.slice(startOffset, endOffset);
+  return {
+    relativePath: result.relativePath,
+    content,
+    digest: result.digest,
+    startLine,
+    endLine: boundedEnd,
+    endOfFile: boundedEnd === lineCount,
+  };
 }
 
 export async function listSafeTree(

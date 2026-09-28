@@ -1,16 +1,37 @@
 /** Bounded, content-free diagnostic journal for one Engineering invocation. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { mkdir, open, realpath, type FileHandle } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  link,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
-import { canonicalDigest, engineeringArtifact, sha256Digest } from "@remoteagent/contracts";
+import {
+  canonicalDigest,
+  canonicalJsonStringify,
+  engineeringArtifact,
+  type EngineeringArtifact,
+  sha256Digest,
+} from "@remoteagent/contracts";
+import type { EngineeringRuntimeStopCode } from "@remoteagent/agent-orchestrator";
 import type { Database, JobLease } from "@remoteagent/database";
 import {
   implementationToolResult,
   type ImplementationToolResult,
 } from "@remoteagent/implementation-tools";
 import type { StructuredLogger } from "@remoteagent/observability";
+import {
+  VerificationGateReceipt,
+  type VerificationGateReceipt as VerificationGateReceiptType,
+} from "@remoteagent/test-evidence";
 import type {
   RuntimeContent,
   RuntimeJsonValue,
@@ -26,6 +47,7 @@ import {
 } from "@remoteagent/model-runtime";
 import * as z from "zod";
 
+import { CaseResumeUnresolvedError } from "./handlers.js";
 import { parseXcodeCompilerDiagnostics, parseXcodeTestDiagnostics } from "./xcode-gate-adapter.js";
 
 const id = z.string().min(1).max(512);
@@ -40,8 +62,10 @@ export const ENGINEERING_MODEL_WARNING_TOKEN_LIMIT =
 export const ENGINEERING_MODEL_CALL_TOKEN_RESERVE =
   35_000 * ENGINEERING_MODEL_DIAGNOSTIC_BUDGET_MULTIPLIER;
 /** Receipt-backed corrections start from bounded server-prefetched context, then rotate after one pair. */
-export const ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE = 64_000;
-export const ENGINEERING_CORRECTION_TAIL_MODEL_CALL_TOKEN_RESERVE = 32_000;
+// Corrections can carry a substantially larger provider response than ordinary calls. Keep a
+// single conservative runway for both correction phases so admission happens before dispatch.
+export const ENGINEERING_CORRECTION_INITIAL_MODEL_CALL_TOKEN_RESERVE = 128_000;
+export const ENGINEERING_CORRECTION_TAIL_MODEL_CALL_TOKEN_RESERVE = 128_000;
 export const ENGINEERING_REVIEWER_MODEL_CALL_TOKEN_RESERVE = 32_000;
 export const ENGINEERING_VERIFIER_MODEL_CALL_TOKEN_RESERVE = 32_000;
 
@@ -55,6 +79,25 @@ function engineeringModelCallTokenReserve(
   return ENGINEERING_MODEL_CALL_TOKEN_RESERVE;
 }
 
+/** Byte-based admission estimate, not a guarantee of provider token usage or response size. */
+export function engineeringModelRequestTokenReserve(
+  request: import("@remoteagent/model-runtime").RuntimeRequest,
+  floorTokens: number,
+): Readonly<{ requestBytes: number; reserveTokens: number }> {
+  if (!Number.isSafeInteger(floorTokens) || floorTokens <= 0)
+    throw new Error("Engineering model call token reserve is invalid");
+  const requestShape = {
+    messages: request.messages,
+    ...(request.tools === undefined ? {} : { tools: request.tools }),
+    ...(request.outputSchema === undefined ? {} : { outputSchema: request.outputSchema }),
+  };
+  const requestBytes = Buffer.byteLength(canonicalJsonStringify(requestShape), "utf8");
+  const reserveTokens = Math.max(floorTokens, requestBytes + 16_384);
+  if (!Number.isSafeInteger(requestBytes) || !Number.isSafeInteger(reserveTokens))
+    throw new Error("Engineering model request estimate exceeds safe integer bounds");
+  return Object.freeze({ requestBytes, reserveTokens });
+}
+
 /** A typed, code-owned signal that permits receipt-backed implementation finalization. */
 export class EngineeringModelBudgetError extends Error {
   readonly code = "ENGINEERING_MODEL_BUDGET_EXHAUSTED";
@@ -64,6 +107,19 @@ export class EngineeringModelBudgetError extends Error {
       `Engineering model call refused because the ${String(reserveTokens)}-token reserve would exceed the ${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT)}-token hard limit`,
     );
     this.name = "EngineeringModelBudgetError";
+  }
+}
+
+/** A provider response crossed the hard ceiling after dispatch; it is not pre-call admission. */
+export class EngineeringModelUsageLimitExceededError extends Error {
+  readonly code = "ENGINEERING_MODEL_USAGE_LIMIT_EXCEEDED" as const;
+
+  constructor(
+    readonly accountedTokens: number,
+    readonly hardLimit: number,
+  ) {
+    super(`Engineering model usage exceeded the ${String(hardLimit)}-token hard limit`);
+    this.name = "EngineeringModelUsageLimitExceededError";
   }
 }
 const relativePath = z
@@ -87,10 +143,16 @@ const usage = z.strictObject({
   response_output_tokens: z.number().int().nonnegative().nullable().optional(),
   response_total_tokens: z.number().int().nonnegative().nullable().optional(),
   provider_reported: z.boolean().optional(),
+  usage_completeness: z.enum(["COMPLETE", "PARTIAL", "MISSING"]).optional(),
+  response_estimated_tokens: z.number().int().nonnegative().optional(),
+  response_reserved_tokens: z.number().int().nonnegative().optional(),
+  response_duration_ms: z.number().int().nonnegative().optional(),
   responses: z.number().int().nonnegative(),
   input_tokens: z.number().int().nonnegative(),
   output_tokens: z.number().int().nonnegative(),
   total_tokens: z.number().int().nonnegative(),
+  estimated_tokens: z.number().int().nonnegative().optional(),
+  accounted_tokens: z.number().int().nonnegative().optional(),
   responses_without_usage: z.number().int().nonnegative(),
   responses_with_partial_usage: z.number().int().nonnegative(),
   comparison: z.enum(["TARGET", "WARNING", "HARD_LIMIT"]),
@@ -205,6 +267,9 @@ const progressSnapshot = z.strictObject({
   }),
   tokens: z.strictObject({
     used: z.number().int().nonnegative(),
+    provider_reported: z.number().int().nonnegative().optional(),
+    estimated: z.number().int().nonnegative().optional(),
+    accounted: z.number().int().nonnegative().optional(),
     target: z.number().int().positive(),
     warning: z.number().int().positive(),
     hard_limit: z.number().int().positive(),
@@ -222,9 +287,104 @@ const decisionEvent = z.strictObject({
   attempt: z.number().int().positive().nullable(),
   decision_code: debugDecisionCode,
   structural_digest: sha256Digest,
+  duration_ms: z.number().int().nonnegative().optional(),
 });
 
-const debugEvent = z.discriminatedUnion("event", [
+const modelCallAdmission = z.strictObject({
+  event: z.literal("MODEL_CALL_ADMISSION"),
+  stage: boundedName.nullable(),
+  role: subscriptionModelRole.nullable(),
+  request_bytes: z.number().int().nonnegative(),
+  reserved_tokens: z.number().int().positive(),
+  accounted_tokens: z.number().int().nonnegative(),
+  decision: z.enum(["RESERVED", "REFUSED"]),
+});
+
+const runCompletedV2 = z
+  .strictObject({
+    event: z.literal("RUN_COMPLETED"),
+    schema_version: z.literal(2),
+    status: z.enum(["SUCCEEDED", "FAILED"]),
+    commit_sha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/u)
+      .nullable(),
+    artifact_kinds: z.array(boundedName).max(512),
+    handler_outcome: z.enum(["SUCCEEDED", "FAILED"]),
+    engineering_outcome: z.enum([
+      "COMPLETED",
+      "BLOCKED",
+      "FAILED",
+      "CANCELLED",
+      "WAITING",
+      "INCOMPLETE",
+      "UNKNOWN",
+    ]),
+    diagnostic_completeness: z.enum(["COMPLETE", "INCOMPLETE"]),
+    terminal_reason_code: boundedName.nullable(),
+    next_safe_step: z.enum(["STOP", "RETRY", "RECONCILE", "WAIT", "INVESTIGATE"]),
+    reconciliation_required: z.boolean(),
+    elapsed_ms: z.number().int().nonnegative(),
+    last_event_at: z.string().datetime({ offset: true }),
+  })
+  .superRefine((value, ctx) => {
+    if ((value.engineering_outcome === "COMPLETED") !== (value.status === "SUCCEEDED")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "status must match engineering outcome",
+      });
+    }
+    if (value.engineering_outcome === "COMPLETED" && value.commit_sha === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["commit_sha"],
+        message: "COMPLETED requires a commit receipt",
+      });
+    }
+    if (value.engineering_outcome === "UNKNOWN" && value.diagnostic_completeness === "COMPLETE") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["diagnostic_completeness"],
+        message: "UNKNOWN requires incomplete diagnostics",
+      });
+    }
+    if (value.status === "SUCCEEDED" || value.engineering_outcome === "COMPLETED") {
+      if (value.diagnostic_completeness !== "COMPLETE")
+        ctx.addIssue({
+          code: "custom",
+          path: ["diagnostic_completeness"],
+          message: "successful terminal requires complete diagnostics",
+        });
+      if (value.terminal_reason_code !== "COMPLETED")
+        ctx.addIssue({
+          code: "custom",
+          path: ["terminal_reason_code"],
+          message: "successful terminal requires COMPLETED reason",
+        });
+      if (value.next_safe_step !== "STOP")
+        ctx.addIssue({
+          code: "custom",
+          path: ["next_safe_step"],
+          message: "successful terminal requires STOP",
+        });
+      if (value.reconciliation_required)
+        ctx.addIssue({
+          code: "custom",
+          path: ["reconciliation_required"],
+          message: "successful terminal cannot require reconciliation",
+        });
+      for (const kind of ["LocalCommitReceipt", "ReviewDecision", "VerificationDecision"])
+        if (!value.artifact_kinds.includes(kind))
+          ctx.addIssue({
+            code: "custom",
+            path: ["artifact_kinds"],
+            message: `successful terminal requires ${kind}`,
+          });
+    }
+  });
+
+const debugEvent = z.union([
   z.strictObject({
     event: z.literal("RUN_STARTED"),
     case_id: id,
@@ -235,6 +395,17 @@ const debugEvent = z.discriminatedUnion("event", [
       .regex(/^[0-9a-f]{40}$/u)
       .nullable(),
     config_digest: sha256Digest,
+    campaign_id: sha256Digest.optional(),
+    compatibility_digest: sha256Digest.optional(),
+    lease_deadline_at: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+  z.strictObject({
+    event: z.literal("CAMPAIGN_USAGE_RECOVERED"),
+    prior_journal_count: z.number().int().nonnegative(),
+    provider_reported_tokens: z.number().int().nonnegative(),
+    estimated_tokens: z.number().int().nonnegative(),
+    accounted_tokens: z.number().int().nonnegative(),
+    usage_completeness: z.enum(["COMPLETE", "INCOMPLETE"]),
   }),
   usage,
   toolBatch,
@@ -242,6 +413,7 @@ const debugEvent = z.discriminatedUnion("event", [
   toolInputRefusal,
   progressSnapshot,
   decisionEvent,
+  modelCallAdmission,
   z.strictObject({
     event: z.literal("MODEL_OUTPUT_SHAPE"),
     keys: z.array(boundedName).max(64),
@@ -379,6 +551,7 @@ const debugEvent = z.discriminatedUnion("event", [
       .nullable(),
     artifact_kinds: z.array(boundedName).max(512),
   }),
+  runCompletedV2,
 ]);
 
 export type EngineeringDebugEvent = z.infer<typeof debugEvent>;
@@ -388,6 +561,7 @@ type UsageTotals = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  estimatedTokens: number;
   responsesWithoutUsage: number;
   responsesWithPartialUsage: number;
 };
@@ -421,10 +595,378 @@ type JournalContext = {
 const journalContext = new AsyncLocalStorage<JournalContext>();
 
 type StoredEvent = EngineeringDebugEvent & {
-  schema_version: 1;
+  schema_version: 1 | 2;
   sequence: number;
   recorded_at: string;
+  integrity?: {
+    algorithm: "sha256";
+    previous_digest: string | null;
+    record_digest: string;
+  };
 };
+
+const storedEventIntegrity = z.strictObject({
+  algorithm: z.literal("sha256"),
+  previous_digest: sha256Digest.nullable(),
+  record_digest: sha256Digest,
+});
+const reconstructionRecord = z
+  .strictObject({
+    sequence: z.number().int().nonnegative(),
+    recorded_at: z.string().datetime({ offset: true }),
+    schema_version: z.union([z.literal(1), z.literal(2)]),
+    integrity: storedEventIntegrity.optional(),
+  })
+  .catchall(z.unknown());
+
+export type EngineeringDebugJournalReconstruction = {
+  readonly events: readonly StoredEvent[];
+  readonly diagnostic_completeness: "COMPLETE" | "INCOMPLETE";
+  readonly integrity_valid: boolean;
+  readonly terminal_present: boolean;
+  readonly truncated_final_line: boolean;
+  readonly legacy_records: boolean;
+};
+
+export type EngineeringCampaignUsage = {
+  readonly priorJournalCount: number;
+  readonly providerReportedTokens: number;
+  readonly estimatedTokens: number;
+  readonly accountedTokens: number;
+  readonly completeness: "COMPLETE" | "INCOMPLETE";
+};
+
+const ENGINEERING_CAMPAIGN_MAX_JOURNALS = 64;
+
+/** Recover exact response deltas from trusted sibling journals before the new journal is opened. */
+export async function recoverEngineeringCampaignUsage(input: {
+  readonly artifactRoot: string;
+  readonly caseId: string;
+  readonly runId: string;
+  readonly campaignId: string;
+  readonly compatibilityDigest: string;
+}): Promise<EngineeringCampaignUsage> {
+  const root = await realpath(input.artifactRoot);
+  const directory = join(root, "engineering-debug");
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith(".jsonl")).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return {
+        priorJournalCount: 0,
+        providerReportedTokens: 0,
+        estimatedTokens: 0,
+        accountedTokens: 0,
+        completeness: "COMPLETE",
+      };
+    throw error;
+  }
+  if (names.length > ENGINEERING_CAMPAIGN_MAX_JOURNALS)
+    throw new Error("engineering campaign journal scan exceeds bounded file count");
+  let priorJournalCount = 0;
+  let providerReportedTokens = 0;
+  let estimatedTokens = 0;
+  let incomplete = false;
+  for (const name of names) {
+    const reconstruction = await reconstructEngineeringDebugJournal(join(directory, name));
+    const started = reconstruction.events.find((event) => event.event === "RUN_STARTED");
+    if (
+      started?.event !== "RUN_STARTED" ||
+      started.case_id !== input.caseId ||
+      started.run_id !== input.runId
+    )
+      continue;
+    if (started.campaign_id === undefined || started.compatibility_digest === undefined)
+      throw new Error("matching legacy engineering campaign journal requires a new run");
+    if (started.campaign_id !== input.campaignId)
+      throw new Error("engineering campaign identity drift requires a new run");
+    if (started.compatibility_digest !== input.compatibilityDigest)
+      throw new Error("engineering campaign compatibility drift requires a new run");
+    if (reconstruction.diagnostic_completeness !== "COMPLETE") {
+      incomplete = true;
+      continue;
+    }
+    priorJournalCount += 1;
+    for (const event of reconstruction.events) {
+      if (event.event !== "MODEL_USAGE") continue;
+      providerReportedTokens += event.response_total_tokens ?? 0;
+      estimatedTokens += event.response_estimated_tokens ?? 0;
+      if (!Number.isSafeInteger(providerReportedTokens) || !Number.isSafeInteger(estimatedTokens))
+        throw new Error("engineering campaign usage exceeds safe integer bounds");
+    }
+  }
+  if (incomplete)
+    throw new Error("matching engineering campaign journal is incomplete or untrusted");
+  return {
+    priorJournalCount,
+    providerReportedTokens,
+    estimatedTokens,
+    accountedTokens: providerReportedTokens + estimatedTokens,
+    completeness: "COMPLETE",
+  };
+}
+
+function recordDigest(record: Omit<StoredEvent, "integrity">): string {
+  return canonicalDigest(record);
+}
+
+/** Strictly reconstruct a journal without changing its raw history. */
+export async function reconstructEngineeringDebugJournal(
+  filePath: string,
+): Promise<EngineeringDebugJournalReconstruction> {
+  const bytes = await readFile(filePath, "utf8");
+  if (bytes.length > 16 * 1024 * 1024)
+    throw new Error("engineering debug journal exceeds reconstruction limit");
+  const complete = bytes.endsWith("\n");
+  const rawLines = bytes.split("\n");
+  if (complete) rawLines.pop();
+  const lines = complete ? rawLines : rawLines.slice(0, -1);
+  const events: StoredEvent[] = [];
+  let previousDigest: string | null = null;
+  let integrityValid = true;
+  let legacy = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.trim() === "") throw new Error(`malformed journal line ${String(index + 1)}`);
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new Error(`malformed journal line ${String(index + 1)}`);
+    }
+    const envelope = reconstructionRecord.parse(value);
+    if (envelope.sequence !== index)
+      throw new Error(`journal sequence mismatch at line ${String(index + 1)}`);
+    const stored = value as StoredEvent;
+    const eventValue = Object.fromEntries(
+      Object.entries(stored).filter(
+        ([key]) => !["sequence", "recorded_at", "schema_version", "integrity"].includes(key),
+      ),
+    );
+    // RUN_COMPLETED v2 historically shares the envelope schema_version field.
+    if (stored.event === "RUN_COMPLETED" && stored.schema_version === 2) {
+      (eventValue as Record<string, unknown>).schema_version = 2;
+    }
+    const parsed = debugEvent.parse(eventValue);
+    if (stored.integrity === undefined) {
+      legacy = true;
+      integrityValid = false;
+    } else {
+      const expected = recordDigest({
+        sequence: stored.sequence,
+        recorded_at: stored.recorded_at,
+        schema_version: stored.schema_version,
+        ...parsed,
+      });
+      const integrity = stored.integrity;
+      if (integrity === undefined)
+        throw new Error(`journal integrity missing at line ${String(index + 1)}`);
+      if (integrity.previous_digest !== previousDigest || integrity.record_digest !== expected) {
+        throw new Error(`journal integrity mismatch at line ${String(index + 1)}`);
+      }
+      previousDigest = integrity.record_digest;
+    }
+    events.push({
+      sequence: stored.sequence,
+      recorded_at: stored.recorded_at,
+      schema_version: stored.schema_version,
+      ...parsed,
+      ...(stored.integrity === undefined ? {} : { integrity: stored.integrity }),
+    } as StoredEvent);
+  }
+  const starts = events.filter((event) => event.event === "RUN_STARTED");
+  const terminals = events.filter((event) => event.event === "RUN_COMPLETED");
+  if (terminals.length > 1 || terminals.some((_, index) => index !== terminals.length - 1)) {
+    throw new Error("journal contains duplicate terminal events");
+  }
+  const terminalPresent = terminals.length === 1;
+  if (terminalPresent && events.at(-1)?.event !== "RUN_COMPLETED") {
+    throw new Error("journal contains events after terminal event");
+  }
+  return {
+    events,
+    diagnostic_completeness:
+      complete &&
+      !legacy &&
+      integrityValid &&
+      starts.length === 1 &&
+      starts[0]?.sequence === 0 &&
+      terminalPresent
+        ? "COMPLETE"
+        : "INCOMPLETE",
+    integrity_valid: integrityValid,
+    terminal_present: terminalPresent,
+    truncated_final_line: !complete,
+    legacy_records: legacy,
+  };
+}
+
+/** Render a recovered summary into a new file; existing files are never overwritten. */
+export async function writeReconstructedEngineeringDebugSummary(
+  reconstruction: EngineeringDebugJournalReconstruction,
+  summaryPath: string,
+): Promise<void> {
+  const handle = await open(summaryPath, "wx", 0o600);
+  try {
+    const suffix =
+      reconstruction.diagnostic_completeness === "COMPLETE"
+        ? ""
+        : "\n\n> Diagnostic completeness: INCOMPLETE (recovered journal is not trusted as complete).\n";
+    await handle.writeFile(renderEngineeringDebugSummary(reconstruction.events) + suffix, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+export type EngineeringEvidenceExport = {
+  readonly schema_version: 1;
+  readonly export_kind: "EngineeringEvidenceExport";
+  readonly identity: {
+    readonly case_id: string;
+    readonly run_id: string;
+    readonly invocation_id: string;
+  };
+  readonly artifacts: readonly {
+    readonly revision: number;
+    readonly artifact_kind: string;
+    readonly payload_digest: string;
+    readonly record_digest: string;
+    readonly payload: EngineeringArtifact;
+  }[];
+  readonly gate_receipts: readonly {
+    readonly record_digest: string;
+    readonly receipt: VerificationGateReceiptType;
+  }[];
+  readonly export_digest: string;
+};
+
+/** Export validated durable evidence below artifactRoot using exclusive atomic publication. */
+export async function exportEngineeringEvidence(input: {
+  readonly artifactRoot: string;
+  readonly caseId: string;
+  readonly runId: string;
+  readonly jobId: string;
+  readonly invocationId: string;
+  readonly db: Pick<Database, "query">;
+}): Promise<{ readonly filePath: string; readonly export: EngineeringEvidenceExport }> {
+  id.parse(input.caseId);
+  id.parse(input.runId);
+  id.parse(input.jobId);
+  id.parse(input.invocationId);
+  const root = await realpath(input.artifactRoot);
+  const directory = join(root, "engineering-private-evidence");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const canonicalDirectory = await realpath(directory);
+  await chmod(canonicalDirectory, 0o700);
+  const child = relative(root, canonicalDirectory);
+  if (child === "" || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error("engineering evidence directory escaped the artifact root");
+  }
+  const rows = await input.db.query<{
+    revision: number;
+    artifact_kind: string;
+    payload: unknown;
+    payload_digest: string | null;
+  }>(
+    `SELECT revision, artifact_kind, payload, payload_digest
+       FROM engineering_artifact_revisions WHERE run_id=$1 ORDER BY revision`,
+    [input.runId],
+  );
+  const artifacts = rows.rows.map((row) => {
+    const payload = engineeringArtifact.parse(row.payload);
+    if (
+      payload.artifact_kind !== row.artifact_kind ||
+      payload.case_id !== input.caseId ||
+      payload.run_id !== input.runId ||
+      payload.revision !== row.revision
+    ) {
+      throw new Error("engineering artifact identity mismatch");
+    }
+    const payloadDigest = canonicalDigest(payload);
+    if (row.payload_digest !== null && row.payload_digest !== payloadDigest) {
+      throw new Error("engineering artifact payload digest mismatch");
+    }
+    const record = {
+      revision: row.revision,
+      artifact_kind: row.artifact_kind,
+      payload_digest: payloadDigest,
+      payload,
+    };
+    return { ...record, record_digest: canonicalDigest(record) };
+  });
+  const gateRows = await input.db.query<{ receipt: unknown }>(
+    `SELECT c.receipt
+       FROM job_completions c
+       JOIN job_intents i ON i.intent_id = c.intent_id
+       JOIN engineering_operations o ON o.intent_id = i.intent_id
+      WHERE i.job_id=$1 AND o.run_id=$2 AND i.kind='engineering.verification.gate'
+      ORDER BY c.recorded_at, c.completion_id`,
+    [input.jobId, input.runId],
+  );
+  const gateReceipts = gateRows.rows.map(({ receipt }) => {
+    const parsed = VerificationGateReceipt.parse(receipt);
+    if (parsed.case_id !== input.caseId || parsed.run_id !== input.runId)
+      throw new Error("verification receipt identity mismatch");
+    const record = { receipt: parsed };
+    return { ...record, record_digest: canonicalDigest(record) };
+  });
+  const unsigned = {
+    schema_version: 1 as const,
+    export_kind: "EngineeringEvidenceExport" as const,
+    identity: { case_id: input.caseId, run_id: input.runId, invocation_id: input.invocationId },
+    artifacts,
+    gate_receipts: gateReceipts,
+  };
+  const exported: EngineeringEvidenceExport = {
+    ...unsigned,
+    export_digest: canonicalDigest(unsigned),
+  };
+  const filePath = join(
+    canonicalDirectory,
+    `evidence-${exported.export_digest.slice("sha256:".length)}.json`,
+  );
+  const temporaryPath = join(canonicalDirectory, `.evidence-${randomUUID()}.tmp`);
+  const handle = await open(temporaryPath, "wx", 0o600);
+  try {
+    await handle.writeFile(canonicalJsonStringify(exported), "utf8");
+  } finally {
+    await handle.close();
+  }
+  try {
+    // hard-link publication is atomic and refuses to replace an existing file.
+    await link(temporaryPath, filePath);
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return { filePath, export: exported };
+}
+
+export async function closeExportAndDropEngineeringRun(input: {
+  readonly close: () => Promise<void>;
+  readonly export: () => Promise<void>;
+  readonly drop: () => Promise<void>;
+}): Promise<void> {
+  let failure: unknown = null;
+  try {
+    await input.close();
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await input.export();
+  } catch (error) {
+    failure ??= error;
+  }
+  try {
+    await input.drop();
+  } catch (error) {
+    failure ??= error;
+  }
+  if (failure !== null) throw failure;
+}
 
 export function engineeringDebugErrorDigest(error: unknown): string {
   return canonicalDigest({
@@ -611,24 +1153,36 @@ function tokenCount(value: number | undefined): number | undefined {
   return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-function addUsage(current: UsageTotals, usage: RuntimeUsage | undefined): UsageTotals {
+function addUsage(
+  current: UsageTotals,
+  usage: RuntimeUsage | undefined,
+  estimate: number,
+): UsageTotals {
   if (usage === undefined) {
     return {
       ...current,
       responses: current.responses + 1,
       responsesWithoutUsage: current.responsesWithoutUsage + 1,
+      estimatedTokens: current.estimatedTokens + estimate,
     };
   }
   const inputTokens = tokenCount(usage.inputTokens);
   const outputTokens = tokenCount(usage.outputTokens);
   const reportedTotal = tokenCount(usage.totalTokens);
-  const complete = inputTokens !== undefined && outputTokens !== undefined;
+  const complete =
+    inputTokens !== undefined && outputTokens !== undefined && reportedTotal !== undefined;
+  const lowerBound = Math.max(
+    reportedTotal ?? 0,
+    (inputTokens ?? 0) + (outputTokens ?? 0),
+    inputTokens ?? 0,
+    outputTokens ?? 0,
+  );
   return {
     responses: current.responses + 1,
     inputTokens: current.inputTokens + (inputTokens ?? 0),
     outputTokens: current.outputTokens + (outputTokens ?? 0),
-    totalTokens:
-      current.totalTokens + (reportedTotal ?? (complete ? inputTokens + outputTokens : 0)),
+    totalTokens: current.totalTokens + lowerBound,
+    estimatedTokens: current.estimatedTokens + (complete ? 0 : Math.max(0, estimate - lowerBound)),
     responsesWithoutUsage: current.responsesWithoutUsage,
     responsesWithPartialUsage:
       current.responsesWithPartialUsage +
@@ -732,7 +1286,10 @@ function progressEvent(
       remaining: Math.max(0, state.callLimit - state.callsUsed),
     },
     tokens: {
-      used: state.usage.totalTokens,
+      used: state.usage.totalTokens + state.usage.estimatedTokens,
+      provider_reported: state.usage.totalTokens,
+      estimated: state.usage.estimatedTokens,
+      accounted: state.usage.totalTokens + state.usage.estimatedTokens,
       target: ENGINEERING_MODEL_TARGET_TOKEN_LIMIT,
       warning: ENGINEERING_MODEL_WARNING_TOKEN_LIMIT,
       hard_limit: ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
@@ -746,11 +1303,13 @@ function progressEvent(
       ),
       remaining_to_target: Math.max(
         0,
-        ENGINEERING_MODEL_TARGET_TOKEN_LIMIT - state.usage.totalTokens,
+        ENGINEERING_MODEL_TARGET_TOKEN_LIMIT -
+          state.usage.totalTokens -
+          state.usage.estimatedTokens,
       ),
       remaining_to_hard_limit: Math.max(
         0,
-        ENGINEERING_MODEL_HARD_TOKEN_LIMIT - state.usage.totalTokens,
+        ENGINEERING_MODEL_HARD_TOKEN_LIMIT - state.usage.totalTokens - state.usage.estimatedTokens,
       ),
     },
     gates: {
@@ -773,6 +1332,7 @@ function progressEvent(
 function capturedDecisionAppend(
   context: JournalContext,
   decisionCode: EngineeringDebugDecisionCode,
+  durationMs?: number,
 ): () => Promise<void> {
   // Capture both records from one exact in-memory boundary. A later tool result may update the
   // shared invocation state while the first append is waiting on disk; computing progress only
@@ -792,6 +1352,7 @@ function capturedDecisionAppend(
       calls_used: context.state.callsUsed,
       tokens_used: context.state.usage.totalTokens,
     }),
+    ...(durationMs === undefined ? {} : { duration_ms: durationMs }),
   };
   const progress = progressEvent(context, decisionCode);
   return async () => {
@@ -803,8 +1364,9 @@ function capturedDecisionAppend(
 async function appendDecision(
   context: JournalContext,
   decisionCode: EngineeringDebugDecisionCode,
+  durationMs?: number,
 ): Promise<void> {
-  await capturedDecisionAppend(context, decisionCode)();
+  await capturedDecisionAppend(context, decisionCode, durationMs)();
 }
 
 /** Refuse a new provider call when its role-specific conservative reserve crosses the hard ceiling. */
@@ -812,6 +1374,7 @@ export function assertEngineeringModelCallBudget(
   totalTokens: number,
   role?: SubscriptionModelRole | null,
   reserveOverride?: number,
+  estimatedTokens = 0,
 ): void {
   if (!Number.isSafeInteger(totalTokens) || totalTokens < 0) {
     throw new Error("Engineering model token total is invalid");
@@ -823,7 +1386,7 @@ export function assertEngineeringModelCallBudget(
     throw new Error("Engineering model call token reserve is invalid");
   }
   const reserveTokens = engineeringModelCallTokenReserve(role, reserveOverride);
-  if (totalTokens > ENGINEERING_MODEL_HARD_TOKEN_LIMIT - reserveTokens) {
+  if (totalTokens + estimatedTokens > ENGINEERING_MODEL_HARD_TOKEN_LIMIT - reserveTokens) {
     throw new EngineeringModelBudgetError(reserveTokens);
   }
 }
@@ -839,7 +1402,12 @@ export async function assertEngineeringModelCallBudgetBeforeStage(
   const context = journalContext.getStore();
   if (context === undefined) return;
   try {
-    assertEngineeringModelCallBudget(context.state.usage.totalTokens, undefined, reserveTokens);
+    assertEngineeringModelCallBudget(
+      context.state.usage.totalTokens,
+      undefined,
+      reserveTokens,
+      context.state.usage.estimatedTokens,
+    );
   } catch (error) {
     await appendDecision(context, "MODEL_CALL_REFUSED_BUDGET").catch(() => undefined);
     throw error;
@@ -871,6 +1439,7 @@ export function runWithEngineeringCorrectionModelCallBudget<T>(work: () => Promi
 export function runWithEngineeringDebugJournal<T>(
   journal: EngineeringDebugJournal,
   work: () => Promise<T>,
+  initialUsage?: EngineeringCampaignUsage,
 ): Promise<T> {
   return journalContext.run(
     {
@@ -880,7 +1449,8 @@ export function runWithEngineeringDebugJournal<T>(
           responses: 0,
           inputTokens: 0,
           outputTokens: 0,
-          totalTokens: 0,
+          totalTokens: initialUsage?.providerReportedTokens ?? 0,
+          estimatedTokens: initialUsage?.estimatedTokens ?? 0,
           responsesWithoutUsage: 0,
           responsesWithPartialUsage: 0,
         },
@@ -910,16 +1480,35 @@ export function runWithEngineeringDebugStage<T>(stage: string, work: () => Promi
   if (context === undefined) return work();
   const scoped = { ...context, stage: safeName(stage, "INVALID_STAGE") };
   return journalContext.run(scoped, async () => {
-    await appendDecision(scoped, "STAGE_ENTERED").catch(() => undefined);
+    const startedAt = scoped.journal.clockNow().getTime();
+    await appendDecision(scoped, "STAGE_ENTERED", 0).catch(() => undefined);
     try {
       const result = await work();
       scoped.state.completedStages.add(
         stageScopeKey(scoped.stage ?? "INVALID_STAGE", scoped.sliceId, scoped.attempt),
       );
-      await appendDecision(scoped, "STAGE_COMPLETED").catch(() => undefined);
+      await appendDecision(
+        scoped,
+        "STAGE_COMPLETED",
+        Math.max(0, scoped.journal.clockNow().getTime() - startedAt),
+      ).catch(() => undefined);
       return result;
     } catch (error) {
-      await appendDecision(scoped, "STAGE_FAILED").catch(() => undefined);
+      await appendDecision(
+        scoped,
+        "STAGE_FAILED",
+        Math.max(0, scoped.journal.clockNow().getTime() - startedAt),
+      ).catch(() => undefined);
+      await scoped.journal
+        .append({
+          event: "STAGE_ERROR",
+          stage: scoped.stage ?? "INVALID_STAGE",
+          error_name: safeName(error instanceof Error ? error.name : undefined, "UnknownError"),
+          error_code: engineeringDebugErrorCode(error),
+          error_detail_code: engineeringDebugErrorDetailCode(error),
+          error_digest: engineeringDebugErrorDigest(error),
+        })
+        .catch(() => undefined);
       throw error;
     }
   });
@@ -994,18 +1583,33 @@ async function recordModelUsage(input: {
   context: JournalContext;
   attribution: EngineeringDebugModelAttribution | null;
   usage: RuntimeUsage | undefined;
+  reserveTokens?: number;
+  durationMs?: number | undefined;
 }): Promise<"TARGET" | "WARNING" | "HARD_LIMIT"> {
-  input.context.state.usage = addUsage(input.context.state.usage, input.usage);
+  const estimate = input.reserveTokens ?? engineeringModelCallTokenReserve(input.attribution?.role);
+  input.context.state.usage = addUsage(input.context.state.usage, input.usage, estimate);
   const totals = input.context.state.usage;
-  const comparison = usageComparison(totals.totalTokens);
+  const comparison = usageComparison(totals.totalTokens + totals.estimatedTokens);
   const responseInputTokens = tokenCount(input.usage?.inputTokens);
   const responseOutputTokens = tokenCount(input.usage?.outputTokens);
   const responseReportedTotal = tokenCount(input.usage?.totalTokens);
-  const responseTotalTokens =
-    responseReportedTotal ??
-    (responseInputTokens !== undefined && responseOutputTokens !== undefined
-      ? responseInputTokens + responseOutputTokens
-      : undefined);
+  const responseLowerBound = Math.max(
+    responseReportedTotal ?? 0,
+    (responseInputTokens ?? 0) + (responseOutputTokens ?? 0),
+    responseInputTokens ?? 0,
+    responseOutputTokens ?? 0,
+  );
+  const usageCompleteness =
+    input.usage === undefined
+      ? "MISSING"
+      : responseInputTokens !== undefined &&
+          responseOutputTokens !== undefined &&
+          responseReportedTotal !== undefined
+        ? "COMPLETE"
+        : "PARTIAL";
+  const responseTotalTokens = usageCompleteness === "MISSING" ? undefined : responseLowerBound;
+  const responseEstimatedTokens =
+    usageCompleteness === "COMPLETE" ? 0 : Math.max(0, estimate - responseLowerBound);
   await input.context.journal
     .append({
       event: "MODEL_USAGE",
@@ -1023,10 +1627,16 @@ async function recordModelUsage(input: {
       response_output_tokens: responseOutputTokens ?? null,
       response_total_tokens: responseTotalTokens ?? null,
       provider_reported: input.usage !== undefined,
+      usage_completeness: usageCompleteness,
+      response_estimated_tokens: responseEstimatedTokens,
+      response_reserved_tokens: estimate,
+      ...(input.durationMs === undefined ? {} : { response_duration_ms: input.durationMs }),
       responses: totals.responses,
       input_tokens: totals.inputTokens,
       output_tokens: totals.outputTokens,
       total_tokens: totals.totalTokens,
+      estimated_tokens: totals.estimatedTokens,
+      accounted_tokens: totals.totalTokens + totals.estimatedTokens,
       responses_without_usage: totals.responsesWithoutUsage,
       responses_with_partial_usage: totals.responsesWithPartialUsage,
       comparison,
@@ -1053,24 +1663,54 @@ export function createEngineeringDebugTransport(
   return {
     async converse(request, config) {
       const context = journalContext.getStore();
+      let activeReserve = engineeringModelCallTokenReserve(attribution?.role);
+      const modelStartedAt = context?.journal.clockNow().getTime();
       if (context !== undefined) {
         context.state.roundLimit = config.toolLimits.maxIterations;
         context.state.callLimit = config.toolLimits.maxCalls;
         context.state.mutationReserved = config.toolLoopPolicy?.mutationIterationsReserved ?? 0;
+        const reserveOverride =
+          context.modelCallBudget === undefined
+            ? undefined
+            : context.modelCallBudget.callsStarted === 0
+              ? context.modelCallBudget.initialReserveTokens
+              : context.modelCallBudget.tailReserveTokens;
+        const floorReserve = engineeringModelCallTokenReserve(attribution?.role, reserveOverride);
+        const requestReserve = engineeringModelRequestTokenReserve(request, floorReserve);
+        activeReserve = requestReserve.reserveTokens;
         try {
-          const reserveOverride =
-            context.modelCallBudget === undefined
-              ? undefined
-              : context.modelCallBudget.callsStarted === 0
-                ? context.modelCallBudget.initialReserveTokens
-                : context.modelCallBudget.tailReserveTokens;
           assertEngineeringModelCallBudget(
             context.state.usage.totalTokens,
             attribution?.role,
-            reserveOverride,
+            activeReserve,
+            context.state.usage.estimatedTokens,
           );
+          await context.journal
+            .append({
+              event: "MODEL_CALL_ADMISSION",
+              stage: context.stage,
+              role: attribution?.role ?? null,
+              request_bytes: requestReserve.requestBytes,
+              reserved_tokens: activeReserve,
+              accounted_tokens:
+                context.state.usage.totalTokens + context.state.usage.estimatedTokens,
+              decision: "RESERVED",
+            })
+            .catch(() => undefined);
           await appendDecision(context, "MODEL_CALL_RESERVED").catch(() => undefined);
         } catch (error) {
+          await context.journal
+            .append({
+              event: "MODEL_CALL_ADMISSION",
+              stage: context.stage,
+              role: attribution?.role ?? null,
+              request_bytes: requestReserve.requestBytes,
+              reserved_tokens: activeReserve,
+              accounted_tokens:
+                context.state.usage.totalTokens + context.state.usage.estimatedTokens,
+              decision: "REFUSED",
+            })
+            .catch(() => undefined);
           await appendDecision(context, "MODEL_CALL_REFUSED_BUDGET").catch(() => undefined);
           throw error;
         }
@@ -1085,6 +1725,11 @@ export function createEngineeringDebugTransport(
             context,
             attribution,
             usage: runtimeUsageFromError(error),
+            reserveTokens: activeReserve,
+            durationMs:
+              modelStartedAt === undefined
+                ? undefined
+                : Math.max(0, context.journal.clockNow().getTime() - modelStartedAt),
           });
           await context.journal
             .append({
@@ -1111,7 +1756,16 @@ export function createEngineeringDebugTransport(
         throw error;
       }
       if (context === undefined) return response;
-      const comparison = await recordModelUsage({ context, attribution, usage: response.usage });
+      const comparison = await recordModelUsage({
+        context,
+        attribution,
+        usage: response.usage,
+        reserveTokens: activeReserve,
+        durationMs:
+          modelStartedAt === undefined
+            ? undefined
+            : Math.max(0, context.journal.clockNow().getTime() - modelStartedAt),
+      });
       try {
         const batch = toolBatchEvent(response.content);
         if (batch !== null) {
@@ -1140,8 +1794,9 @@ export function createEngineeringDebugTransport(
         // turn an otherwise recoverable model result into an unknown external effect.
       }
       if (comparison === "HARD_LIMIT") {
-        throw new Error(
-          `Engineering model usage exceeded the ${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT)}-token hard limit`,
+        throw new EngineeringModelUsageLimitExceededError(
+          context.state.usage.totalTokens + context.state.usage.estimatedTokens,
+          ENGINEERING_MODEL_HARD_TOKEN_LIMIT,
         );
       }
       return response;
@@ -1305,6 +1960,27 @@ export interface EngineeringInvocationJournalRunner {
   run<T>(lease: JobLease, work: () => Promise<T>): Promise<T>;
 }
 
+function terminalReasonCodeFromResult(value: unknown): EngineeringRuntimeStopCode | null {
+  if (typeof value !== "object" || value === null || !("terminalReasonCode" in value)) return null;
+  const code = (value as { readonly terminalReasonCode?: unknown }).terminalReasonCode;
+  if (typeof code !== "string") return null;
+  const allowed: readonly EngineeringRuntimeStopCode[] = [
+    "COMPLETED",
+    "CANCELLED",
+    "DEADLINE_EXCEEDED",
+    "STAGE_LIMIT_EXHAUSTED",
+    "CALL_LIMIT_EXHAUSTED",
+    "NO_PROGRESS",
+    "OSCILLATION",
+    "APPROVAL_BLOCKED",
+    "SLICE_BLOCKED",
+    "GATE_CORRECTION_LIMIT_EXHAUSTED",
+  ];
+  return allowed.includes(code as EngineeringRuntimeStopCode)
+    ? (code as EngineeringRuntimeStopCode)
+    : null;
+}
+
 type ArtifactDiagnosticRow = {
   artifact_kind: string;
   stage: string;
@@ -1312,7 +1988,92 @@ type ArtifactDiagnosticRow = {
   commit_sha: string | null;
   review_decision: string | null;
   verification_decision: string | null;
+  terminal_reason: string | null;
 };
+
+type EngineeringCompletionOutcome =
+  "COMPLETED" | "BLOCKED" | "FAILED" | "CANCELLED" | "WAITING" | "INCOMPLETE" | "UNKNOWN";
+
+function engineeringOutcomeForArtifacts(
+  rows: readonly ArtifactDiagnosticRow[],
+  reason: string | null,
+): EngineeringCompletionOutcome {
+  switch (reason) {
+    case "CANCELLED":
+      return "CANCELLED";
+    case "NEEDS_CLARIFICATION":
+      return "WAITING";
+    case "BASELINE_FAILED":
+    case "FAILED":
+      return "FAILED";
+    case "BLOCKED":
+    case "EXHAUSTED":
+    case "AMBIGUOUS":
+      return "BLOCKED";
+    default:
+      break;
+  }
+  const hasCommit = rows.some((row) => row.commit_sha !== null);
+  const latestReview = [...rows]
+    .reverse()
+    .find((row) => row.review_decision !== null)?.review_decision;
+  const latestVerification = [...rows]
+    .reverse()
+    .find((row) => row.verification_decision !== null)?.verification_decision;
+  if (latestReview === "BLOCKED") return "BLOCKED";
+  if (latestVerification === "FAILED" || latestVerification === "INCONCLUSIVE") return "FAILED";
+  if (!hasCommit) return "INCOMPLETE";
+  if (latestReview !== "PASS" || latestVerification !== "VERIFIED") return "INCOMPLETE";
+  return "COMPLETED";
+}
+
+function engineeringOutcomeForSupervisorStop(
+  code: EngineeringRuntimeStopCode,
+  rows: readonly ArtifactDiagnosticRow[],
+  artifactReason: string | null,
+): EngineeringCompletionOutcome {
+  // COMPLETED is only a Supervisor intent; durable commit/review/verification evidence remains
+  // authoritative and must prove completion independently.
+  if (code === "COMPLETED") return engineeringOutcomeForArtifacts(rows, artifactReason);
+  if (code === "CANCELLED") return "CANCELLED";
+  return "BLOCKED";
+}
+
+function terminalTelemetry(
+  reason: string | null,
+  outcome: EngineeringCompletionOutcome,
+): Readonly<{
+  terminal_reason_code: string;
+  next_safe_step: "STOP" | "RETRY" | "RECONCILE" | "WAIT" | "INVESTIGATE";
+  reconciliation_required: boolean;
+}> {
+  const code =
+    reason === null
+      ? outcome === "COMPLETED"
+        ? "COMPLETED"
+        : "UNKNOWN"
+      : safeName(reason, "UNKNOWN");
+  const reconciliation_required =
+    reason === "AMBIGUOUS" ||
+    reason === "UNKNOWN" ||
+    outcome === "UNKNOWN" ||
+    outcome === "INCOMPLETE";
+  return {
+    terminal_reason_code: code,
+    next_safe_step: reconciliation_required
+      ? "RECONCILE"
+      : outcome === "COMPLETED"
+        ? "STOP"
+        : outcome === "WAITING"
+          ? "WAIT"
+          : outcome === "FAILED"
+            ? "INVESTIGATE"
+            : outcome === "CANCELLED"
+              ? "WAIT"
+              : "RETRY",
+    reconciliation_required,
+  };
+}
 
 export type EngineeringCompilerDiagnosticJournalRow = {
   gate_id: string;
@@ -1425,6 +2186,7 @@ export function createEngineeringInvocationJournalRunner(input: {
   db: Database;
   model: string;
   configDigest: string;
+  compatibilityDigest?: string;
   logger: StructuredLogger;
 }): EngineeringInvocationJournalRunner {
   const parsedConfigDigest = sha256Digest.parse(input.configDigest);
@@ -1440,6 +2202,15 @@ export function createEngineeringInvocationJournalRunner(input: {
       ) {
         throw new Error("Engineering invocation lacks an exact case/run binding");
       }
+      const campaignId = canonicalDigest({ case_id: caseId, run_id: runId });
+      const compatibilityDigest = input.compatibilityDigest ?? parsedConfigDigest;
+      const recovered = await recoverEngineeringCampaignUsage({
+        artifactRoot: input.artifactRoot,
+        caseId,
+        runId,
+        campaignId,
+        compatibilityDigest,
+      });
       const journal = await EngineeringDebugJournal.create({
         artifactRoot: input.artifactRoot,
         invocationId: `${lease.jobId}:${String(lease.fencingToken)}:${String(lease.attempts)}:${randomUUID()}`,
@@ -1450,36 +2221,61 @@ export function createEngineeringInvocationJournalRunner(input: {
         file_name: journal.fileName,
       });
       let failure: unknown;
+      let supervisorTerminalReasonCode: EngineeringRuntimeStopCode | null = null;
       try {
-        return await runWithEngineeringDebugJournal(journal, async () => {
-          await journal.append({
-            event: "RUN_STARTED",
-            case_id: caseId,
-            run_id: runId,
-            model: safeName(input.model, "UNKNOWN_MODEL"),
-            base_sha: null,
-            config_digest: parsedConfigDigest,
-          });
-          try {
-            return await work();
-          } catch (error) {
-            failure = error;
-            await journal
-              .append({
-                event: "STAGE_ERROR",
-                stage: "ENGINEERING_INVOCATION",
-                error_name: safeName(
-                  error instanceof Error ? error.name : undefined,
-                  "UnknownError",
-                ),
-                error_code: engineeringDebugErrorCode(error),
-                error_detail_code: engineeringDebugErrorDetailCode(error),
-                error_digest: engineeringDebugErrorDigest(error),
-              })
-              .catch(() => undefined);
-            throw error;
-          }
-        });
+        return await runWithEngineeringDebugJournal(
+          journal,
+          async () => {
+            await journal.append({
+              event: "RUN_STARTED",
+              case_id: caseId,
+              run_id: runId,
+              model: safeName(input.model, "UNKNOWN_MODEL"),
+              base_sha: null,
+              config_digest: parsedConfigDigest,
+              campaign_id: campaignId,
+              compatibility_digest: compatibilityDigest,
+              lease_deadline_at:
+                Number.isFinite(lease.leaseExpiresAtMs) && lease.leaseExpiresAtMs > 0
+                  ? new Date(lease.leaseExpiresAtMs).toISOString()
+                  : null,
+            });
+            if (recovered.priorJournalCount > 0)
+              await journal.append({
+                event: "CAMPAIGN_USAGE_RECOVERED",
+                prior_journal_count: recovered.priorJournalCount,
+                provider_reported_tokens: recovered.providerReportedTokens,
+                estimated_tokens: recovered.estimatedTokens,
+                accounted_tokens: recovered.accountedTokens,
+                usage_completeness: recovered.completeness,
+              });
+            try {
+              const result = await work();
+              supervisorTerminalReasonCode = terminalReasonCodeFromResult(result);
+              return result;
+            } catch (error) {
+              failure = error;
+              if (error instanceof CaseResumeUnresolvedError) {
+                supervisorTerminalReasonCode = terminalReasonCodeFromResult(error.runtimeResult);
+              }
+              await journal
+                .append({
+                  event: "STAGE_ERROR",
+                  stage: "ENGINEERING_INVOCATION",
+                  error_name: safeName(
+                    error instanceof Error ? error.name : undefined,
+                    "UnknownError",
+                  ),
+                  error_code: engineeringDebugErrorCode(error),
+                  error_detail_code: engineeringDebugErrorDetailCode(error),
+                  error_digest: engineeringDebugErrorDigest(error),
+                })
+                .catch(() => undefined);
+              throw error;
+            }
+          },
+          recovered,
+        );
       } finally {
         try {
           const [artifacts, operations, gateReceipts, gateFailureDiagnostics] = await Promise.all([
@@ -1490,7 +2286,9 @@ export function createEngineeringInvocationJournalRunner(input: {
                       CASE WHEN artifact_kind = 'ReviewDecision'
                            THEN payload->>'decision' ELSE NULL END AS review_decision,
                       CASE WHEN artifact_kind = 'VerificationDecision'
-                           THEN payload->>'decision' ELSE NULL END AS verification_decision
+                           THEN payload->>'decision' ELSE NULL END AS verification_decision,
+                      CASE WHEN artifact_kind = 'TerminalReason'
+                           THEN payload->>'reason' ELSE NULL END AS terminal_reason
                  FROM engineering_artifact_revisions
                 WHERE run_id = $1
                 ORDER BY revision`,
@@ -1603,13 +2401,34 @@ export function createEngineeringInvocationJournalRunner(input: {
           });
           const commitSha =
             artifacts.rows.find((row) => row.commit_sha !== null)?.commit_sha ?? null;
+          const artifactTerminalReason =
+            [...artifacts.rows].reverse().find((row) => row.terminal_reason !== null)
+              ?.terminal_reason ?? null;
+          const terminalReason = supervisorTerminalReasonCode ?? artifactTerminalReason;
+          const engineeringOutcome =
+            supervisorTerminalReasonCode === null
+              ? failure === undefined
+                ? engineeringOutcomeForArtifacts(artifacts.rows, terminalReason)
+                : "FAILED"
+              : engineeringOutcomeForSupervisorStop(
+                  supervisorTerminalReasonCode,
+                  artifacts.rows,
+                  artifactTerminalReason,
+                );
           await journal.append({
             event: "RUN_COMPLETED",
-            status: failure === undefined ? "SUCCEEDED" : "FAILED",
+            schema_version: 2,
+            status: engineeringOutcome === "COMPLETED" ? "SUCCEEDED" : "FAILED",
             commit_sha: commitSha,
             artifact_kinds: artifacts.rows.map((row) =>
               safeName(row.artifact_kind, "INVALID_ARTIFACT_KIND"),
             ),
+            handler_outcome: failure === undefined ? "SUCCEEDED" : "FAILED",
+            engineering_outcome: engineeringOutcome,
+            diagnostic_completeness: "COMPLETE",
+            ...terminalTelemetry(terminalReason, engineeringOutcome),
+            elapsed_ms: journal.elapsedMs(),
+            last_event_at: journal.clockNow().toISOString(),
           });
         } catch (error) {
           await journal
@@ -1625,9 +2444,16 @@ export function createEngineeringInvocationJournalRunner(input: {
           await journal
             .append({
               event: "RUN_COMPLETED",
-              status: failure === undefined ? "SUCCEEDED" : "FAILED",
+              schema_version: 2,
+              status: "FAILED",
               commit_sha: null,
               artifact_kinds: [],
+              handler_outcome: failure === undefined ? "SUCCEEDED" : "FAILED",
+              engineering_outcome: "UNKNOWN",
+              diagnostic_completeness: "INCOMPLETE",
+              ...terminalTelemetry("UNKNOWN", "UNKNOWN"),
+              elapsed_ms: journal.elapsedMs(),
+              last_event_at: journal.clockNow().toISOString(),
             })
             .catch(() => undefined);
           input.logger.warn("engineering debug journal final diagnostic failed", {
@@ -1663,6 +2489,10 @@ function renderEngineeringDebugSummary(events: readonly StoredEvent[]): string {
   const completed = [...events].reverse().find((event) => event.event === "RUN_COMPLETED");
   const diagnostic = [...events].reverse().find((event) => event.event === "RUN_DIAGNOSTIC");
   const usageEvents = events.filter((event) => event.event === "MODEL_USAGE");
+  const latestAdmission = [...events]
+    .reverse()
+    .find((event) => event.event === "MODEL_CALL_ADMISSION");
+  const recoveredUsage = events.find((event) => event.event === "CAMPAIGN_USAGE_RECOVERED");
   const attemptErrors = events.filter(
     (event): event is Extract<StoredEvent, { event: "MODEL_ATTEMPT_ERROR" }> =>
       event.event === "MODEL_ATTEMPT_ERROR",
@@ -1693,7 +2523,15 @@ function renderEngineeringDebugSummary(events: readonly StoredEvent[]): string {
     roundByScope.set(scope, round);
     return `| ${markdownCell(event.role)} | ${markdownCell(event.stage)} | ${markdownCell(event.slice_id)} | ${markdownCell(event.attempt)} | ${String(round)} | ${markdownCell(event.response_input_tokens)} | ${markdownCell(event.response_output_tokens)} | ${markdownCell(event.response_total_tokens)} |`;
   });
-  const lastUsage = usageEvents.at(-1);
+  const providerReportedTokens = usageEvents.reduce(
+    (total, event) => total + (event.response_total_tokens ?? 0),
+    0,
+  );
+  const latestUsage = usageEvents.at(-1);
+  const recoveredAccounted =
+    recoveredUsage?.event === "CAMPAIGN_USAGE_RECOVERED" ? recoveredUsage.accounted_tokens : 0;
+  const latestAccounted =
+    latestUsage?.event === "MODEL_USAGE" ? (latestUsage.accounted_tokens ?? 0) : 0;
   const toolRows = toolEvents.map(
     (event) =>
       `| ${markdownCell(event.stage)} | ${markdownCell(event.slice_id)} | ${markdownCell(event.attempt)} | ${markdownCell(event.kind)} | ${markdownCell(event.outcome)} | ${markdownCell(event.failure_code)} | ${markdownCell(event.changed_files.join(", "))} |`,
@@ -1755,15 +2593,56 @@ function renderEngineeringDebugSummary(events: readonly StoredEvent[]): string {
           .find((artifact) => artifact.verification_decision !== null)
       : undefined;
   const latestProgress = [...events].reverse().find((event) => event.event === "PROGRESS_SNAPSHOT");
+  const latestDecision = [...events].reverse().find((event) => event.event === "DECISION");
+  const latestStageEvent = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<StoredEvent, { stage: string | null }> =>
+        "stage" in event && event.stage !== null,
+    );
+  const stageDurations = events.filter(
+    (event): event is Extract<StoredEvent, { event: "DECISION" }> =>
+      event.event === "DECISION" && event.duration_ms !== undefined,
+  );
+  const modelUsageDurations = usageEvents.reduce(
+    (sum, event) => sum + (event.response_duration_ms ?? 0),
+    0,
+  );
+  const requestedTools = events
+    .filter((event) => event.event === "TOOL_BATCH")
+    .reduce((sum, event) => sum + event.tools.length, 0);
+  const toolOutcomes = events.filter(
+    (event): event is Extract<StoredEvent, { event: "TOOL_RESULT" }> =>
+      event.event === "TOOL_RESULT",
+  );
+  const changedPaths = new Set(toolOutcomes.flatMap((event) => event.changed_files));
+  const criterionCounts = events
+    .filter(
+      (event): event is Extract<StoredEvent, { event: "MODEL_OUTPUT_SHAPE" }> =>
+        event.event === "MODEL_OUTPUT_SHAPE",
+    )
+    .flatMap((event) => event.criterion_statuses)
+    .reduce((counts, status) => ({ ...counts, [status]: (counts[status] ?? 0) + 1 }), {
+      PASSED: 0,
+      FAILED: 0,
+      INCONCLUSIVE: 0,
+    });
   const lines = [
     "# Engineering invocation summary",
     "",
-    `- Result: **${markdownCell(completed?.event === "RUN_COMPLETED" ? completed.status : "INCOMPLETE")}**`,
+    `- Result: **${markdownCell(completed?.event === "RUN_COMPLETED" ? ("engineering_outcome" in completed ? completed.engineering_outcome : completed.status) : "INCOMPLETE")}**`,
     `- Case: ${markdownCell(started?.event === "RUN_STARTED" ? started.case_id : null)}`,
     `- Run: ${markdownCell(started?.event === "RUN_STARTED" ? started.run_id : null)}`,
+    `- Lease deadline: ${markdownCell(started?.event === "RUN_STARTED" ? (started.lease_deadline_at ?? null) : null)}`,
     `- Model route: ${markdownCell(started?.event === "RUN_STARTED" ? started.model : null)}`,
     `- Commit: ${markdownCell(completed?.event === "RUN_COMPLETED" ? completed.commit_sha : null)}`,
-    `- Provider-reported tokens: ${markdownCell(lastUsage?.event === "MODEL_USAGE" ? lastUsage.total_tokens : 0)} / target ${String(ENGINEERING_MODEL_TARGET_TOKEN_LIMIT)} / warning ${String(ENGINEERING_MODEL_WARNING_TOKEN_LIMIT)} / hard ${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT)}`,
+    `- Current stage: ${markdownCell(latestStageEvent?.stage)} / slice ${markdownCell(latestStageEvent !== undefined && "slice_id" in latestStageEvent ? latestStageEvent.slice_id : null)} / attempt ${markdownCell(latestStageEvent !== undefined && "attempt" in latestStageEvent ? latestStageEvent.attempt : null)}`,
+    `- Elapsed: ${markdownCell(completed?.event === "RUN_COMPLETED" && "elapsed_ms" in completed ? completed.elapsed_ms : null)} ms; last event: ${markdownCell(completed?.event === "RUN_COMPLETED" && "last_event_at" in completed ? completed.last_event_at : null)}; heartbeat: ${markdownCell(latestDecision?.event === "DECISION" ? latestDecision.decision_code : null)}`,
+    `- Stop reason: ${markdownCell(completed?.event === "RUN_COMPLETED" && "terminal_reason_code" in completed ? completed.terminal_reason_code : null)}; next safe step: ${markdownCell(completed?.event === "RUN_COMPLETED" && "next_safe_step" in completed ? completed.next_safe_step : null)}; reconciliation: ${markdownCell(completed?.event === "RUN_COMPLETED" && "reconciliation_required" in completed ? completed.reconciliation_required : null)}`,
+    `- Aggregates: stage durations ${String(stageDurations.reduce((sum, event) => sum + (event.duration_ms ?? 0), 0))} ms; model durations ${String(modelUsageDurations)} ms; tools requested ${String(requestedTools)}, succeeded ${String(toolOutcomes.filter((event) => event.outcome === "SUCCEEDED").length)}, refused ${String(events.filter((event) => event.event === "TOOL_INPUT_REFUSAL").length)}, ambiguous ${String(toolOutcomes.filter((event) => event.outcome === "AMBIGUOUS").length)}, changed paths ${String(changedPaths.size)}; criteria PASSED ${String(criterionCounts.PASSED)}, FAILED ${String(criterionCounts.FAILED)}, INCONCLUSIVE ${String(criterionCounts.INCONCLUSIVE)}`,
+    `- Provider-reported tokens: ${markdownCell(providerReportedTokens)} / target ${String(ENGINEERING_MODEL_TARGET_TOKEN_LIMIT)} / warning ${String(ENGINEERING_MODEL_WARNING_TOKEN_LIMIT)} / hard ${String(ENGINEERING_MODEL_HARD_TOKEN_LIMIT)}`,
+    `- Usage accounting: estimated ${markdownCell(latestUsage?.event === "MODEL_USAGE" ? latestUsage.estimated_tokens : 0)}, accounted ${markdownCell(latestUsage?.event === "MODEL_USAGE" ? latestUsage.accounted_tokens : 0)}, missing responses ${markdownCell(latestUsage?.event === "MODEL_USAGE" ? latestUsage.responses_without_usage : 0)}, partial responses ${markdownCell(latestUsage?.event === "MODEL_USAGE" ? latestUsage.responses_with_partial_usage : 0)}, current reserve ${String(latestAdmission?.event === "MODEL_CALL_ADMISSION" ? latestAdmission.reserved_tokens : ENGINEERING_MODEL_CALL_TOKEN_RESERVE)}`,
+    `- Campaign usage: prior journals ${String(recoveredUsage?.event === "CAMPAIGN_USAGE_RECOVERED" ? recoveredUsage.prior_journal_count : 0)}, prior accounted ${String(recoveredAccounted)}; current accounted ${String(Math.max(0, latestAccounted - recoveredAccounted))}; campaign accounted ${String(latestUsage?.event === "MODEL_USAGE" ? latestAccounted : recoveredAccounted)}`,
     "",
     "## Model usage by role, slice, attempt and round",
     "",
@@ -1850,9 +2729,23 @@ export class EngineeringDebugJournal {
   #handle: FileHandle;
   #events: StoredEvent[] = [];
   #sequence = 0;
+  #lastIntegrityDigest: string | null = null;
   #pending: Promise<void> = Promise.resolve();
   #closed = false;
   #now: () => Date;
+  #appendFile: (data: string) => Promise<void>;
+
+  /** The injected clock is also used by lifecycle telemetry and deterministic tests. */
+  clockNow(): Date {
+    return this.#now();
+  }
+
+  elapsedMs(): number {
+    const first = this.#events[0];
+    return first === undefined
+      ? 0
+      : Math.max(0, this.#now().getTime() - Date.parse(first.recorded_at));
+  }
 
   private constructor(input: {
     handle: FileHandle;
@@ -1861,6 +2754,7 @@ export class EngineeringDebugJournal {
     summaryFileName: string;
     summaryFilePath: string;
     now: () => Date;
+    appendFile?: (data: string) => Promise<void>;
   }) {
     this.#handle = input.handle;
     this.fileName = input.fileName;
@@ -1868,12 +2762,16 @@ export class EngineeringDebugJournal {
     this.summaryFileName = input.summaryFileName;
     this.summaryFilePath = input.summaryFilePath;
     this.#now = input.now;
+    this.#appendFile =
+      input.appendFile ??
+      ((data) => this.#handle.appendFile(data, { encoding: "utf8" }).then(() => undefined));
   }
 
   static async create(input: {
     artifactRoot: string;
     invocationId: string;
     now?: () => Date;
+    appendFile?: (data: string) => Promise<void>;
   }): Promise<EngineeringDebugJournal> {
     id.parse(input.invocationId);
     const root = await realpath(input.artifactRoot);
@@ -1897,36 +2795,54 @@ export class EngineeringDebugJournal {
       summaryFileName,
       summaryFilePath,
       now: input.now ?? (() => new Date()),
+      ...(input.appendFile === undefined ? {} : { appendFile: input.appendFile }),
     });
   }
 
   append(event: EngineeringDebugEvent): Promise<void> {
     if (this.#closed) return Promise.reject(new Error("engineering debug journal is closed"));
     const parsed = debugEvent.parse(event);
-    const stored: StoredEvent = {
-      schema_version: 1,
-      sequence: this.#sequence,
-      recorded_at: this.#now().toISOString(),
-      ...parsed,
+    const write = async () => {
+      const base: Omit<StoredEvent, "integrity"> = {
+        sequence: this.#sequence,
+        recorded_at: this.#now().toISOString(),
+        ...parsed,
+        schema_version:
+          parsed.event === "RUN_COMPLETED" && "schema_version" in parsed
+            ? parsed.schema_version
+            : 1,
+      };
+      const stored = {
+        ...base,
+        integrity: {
+          algorithm: "sha256",
+          previous_digest: this.#lastIntegrityDigest,
+          record_digest: recordDigest(base),
+        },
+      } as StoredEvent;
+      await this.#appendFile(`${JSON.stringify(stored)}\n`);
+      this.#sequence += 1;
+      this.#lastIntegrityDigest = stored.integrity!.record_digest;
+      this.#events.push(stored);
     };
-    this.#sequence += 1;
-    this.#events.push(stored);
-    this.#pending = this.#pending.then(async () => {
-      await this.#handle.appendFile(`${JSON.stringify(stored)}\n`, { encoding: "utf8" });
-    });
+    // A failed write must not poison the queue: subsequent appends get a chance to run.
+    this.#pending = this.#pending.catch(() => undefined).then(write);
     return this.#pending;
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    await this.#pending;
-    await this.#handle.close();
-    const summary = await open(this.summaryFilePath, "wx", 0o600);
     try {
-      await summary.writeFile(renderEngineeringDebugSummary(this.#events), { encoding: "utf8" });
+      await this.#pending;
+      const summary = await open(this.summaryFilePath, "wx", 0o600);
+      try {
+        await summary.writeFile(renderEngineeringDebugSummary(this.#events), { encoding: "utf8" });
+      } finally {
+        await summary.close();
+      }
     } finally {
-      await summary.close();
+      await this.#handle.close().catch(() => undefined);
     }
   }
 }

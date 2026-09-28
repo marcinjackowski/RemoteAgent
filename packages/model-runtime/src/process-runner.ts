@@ -168,6 +168,7 @@ export async function runSubscriptionControlCommand(input: {
     let settled = false;
     let terminalError: Error | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let childClosed = false;
     const cleanup = () => {
       clearTimeout(timeout);
       if (killTimer !== undefined) clearTimeout(killTimer);
@@ -185,8 +186,9 @@ export async function runSubscriptionControlCommand(input: {
       killProcessTree(child, "SIGTERM");
       killTimer = setTimeout(() => {
         killProcessTree(child, "SIGKILL");
+        killTimer = undefined;
+        if (childClosed && terminalError !== undefined) fail(terminalError);
       }, input.profile.kill_grace_ms);
-      killTimer.unref();
     };
     const onAbort = () => stop(new Error("subscription control command cancelled"));
     const timeout = setTimeout(
@@ -210,11 +212,16 @@ export async function runSubscriptionControlCommand(input: {
         stop(new Error("subscription control output exceeded limit"));
       }
     });
-    child.once("error", (error) => fail(error));
+    child.once("error", (error) => {
+      childClosed = true;
+      if (terminalError !== undefined && killTimer !== undefined) return;
+      fail(error);
+    });
     child.once("close", (exitCode) => {
+      childClosed = true;
       if (settled) return;
       if (terminalError !== undefined) {
-        fail(terminalError);
+        if (killTimer === undefined) fail(terminalError);
         return;
       }
       settled = true;
@@ -384,8 +391,13 @@ export async function runSubscriptionProcess(input: {
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let finished = false;
+    let pendingExit: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
     const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
       if (finished) return;
+      if (outcome !== null && killTimer !== undefined) {
+        pendingExit = { exitCode, signal };
+        return;
+      }
       finished = true;
       if (timeout !== undefined) clearTimeout(timeout);
       if (killTimer !== undefined) clearTimeout(killTimer);
@@ -417,8 +429,11 @@ export async function runSubscriptionProcess(input: {
       if (outcome !== null) return;
       outcome = reason;
       killProcessTree(child, "SIGTERM");
-      killTimer = setTimeout(() => killProcessTree(child, "SIGKILL"), input.profile.kill_grace_ms);
-      killTimer.unref();
+      killTimer = setTimeout(() => {
+        killProcessTree(child, "SIGKILL");
+        killTimer = undefined;
+        if (pendingExit !== undefined) finish(pendingExit.exitCode, pendingExit.signal);
+      }, input.profile.kill_grace_ms);
     };
     const child = spawn(input.profile.executable, argv, {
       cwd: input.cwd,

@@ -200,7 +200,7 @@ const authenticated: SubscriptionAuthPreflight = {
     status: "SUBSCRIPTION_AUTHENTICATED",
     provider: "codex_cli",
     profile_name: exact.profile_name,
-    client_version: "0.147.0",
+    client_version: "0.153.3",
     model: exact.model,
   }),
 };

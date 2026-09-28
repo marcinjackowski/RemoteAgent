@@ -93,6 +93,7 @@ describeIntegration(
 
     it("recovers before an immutable cancellation and starts no subsequent stage", async () => {
       const lease = await fixture.claimImplementer();
+      let executorCalls = 0;
       const executor: EngineeringStageExecutor = {
         configDigest: sha("5"),
         schemaDigest: () => sha("6"),
@@ -101,19 +102,22 @@ describeIntegration(
           allowedTestPaths: Object.freeze(["apps/agent-worker/src"]),
           requiredGateIds: Object.freeze(["gate-1"]),
         }),
-        execute: async () => ({
-          kind: "ARTIFACT",
-          artifact: planningArtifact(fixture),
-          modelCalls: 1,
-        }),
+        execute: async () => {
+          executorCalls += 1;
+          return {
+            kind: "ARTIFACT",
+            artifact: planningArtifact(fixture),
+            modelCalls: 1,
+          };
+        },
       };
-      const makePort = () =>
+      const makePort = (configDigest = executor.configDigest) =>
         createPostgresEngineeringRuntimePort({
           db: fixture.db,
           lease,
           jobs: fixture.jobs,
           readContext: async () => context(fixture),
-          executor,
+          executor: { ...executor, configDigest },
           writeDeploymentPolicy: Object.freeze({
             schema_version: 1,
             purpose: "ENGINEERING_WORKFLOW_WRITE_DEPLOYMENT_POLICY",
@@ -179,8 +183,12 @@ describeIntegration(
         fixture.ids.runId,
       ]);
 
-      const handler = fixture.implementerHandler(() => makePort());
+      // A restart may observe a changed profile/configuration, but an immutable
+      // cancellation must fail closed before it can dispatch that new route.
+      executorCalls = 0;
+      const handler = fixture.implementerHandler(() => makePort(sha("changed")));
       await handler(lease, async () => undefined);
+      expect(executorCalls).toBe(0);
 
       const operations = await fixture.db.query<{ stage: string }>(
         "SELECT stage FROM engineering_operations ORDER BY recorded_at, operation_id",

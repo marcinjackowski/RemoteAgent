@@ -59,6 +59,8 @@ import {
   deriveVerdict,
   evidenceVerdict,
   testRun,
+  testRunReceiptDigest,
+  testRunWithEvidence,
 } from "../src/index.js";
 import type {
   ArtifactReference,
@@ -175,6 +177,27 @@ describe("test evidence layer", () => {
   });
 
   describe("AC1: a model cannot record a PASS without a successful receipt", () => {
+    it("binds attached Xcode evidence into TestRun identity", async () => {
+      const built = await runner([entry("green", "process.exit(0)")]);
+      const run = await built.run({ command_name: "green" });
+      const evidence = {
+        kind: "XCODE_TEST_RESULT_V1" as const,
+        tool: "xcresulttool" as const,
+        schema_version: "0.1.0" as const,
+        executed_test_ids: ["Suite/test"],
+        executed_count: 1,
+        failed_test_ids: [],
+        expected_suite_ids: ["Suite"],
+        observed_suite_ids: ["Suite"],
+        result_digest: `sha256:${"e".repeat(64)}`,
+      };
+      const attached = testRunWithEvidence(run, evidence);
+      expect(attached.test_evidence).toEqual(evidence);
+      expect(attached.receipt_digest).not.toBe(run.receipt_digest);
+      const withoutDigest = { ...attached };
+      delete (withoutDigest as { receipt_digest?: unknown }).receipt_digest;
+      expect(testRunReceiptDigest(withoutDigest)).toBe(attached.receipt_digest);
+    });
     it("refuses to derive a verdict from zero runs", () => {
       // The degenerate case this criterion is really about: "nothing ran" must
       // never render as "everything is fine".

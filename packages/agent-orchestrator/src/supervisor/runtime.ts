@@ -15,6 +15,9 @@ import {
   evaluateEngineeringApproval,
   evaluateEngineeringFingerprintProgress,
   evaluateEngineeringProgress,
+  evaluateEngineeringGateCorrectionBudget,
+  evaluateCompilerDiagnosticProgress,
+  evaluateStableGateDiagnosticPersistence,
   type EngineeringRuntimePort,
   type EngineeringRuntimeStopCode,
   type EngineeringStageEvidence,
@@ -156,7 +159,14 @@ export interface RuntimePumpResult {
   readonly blocked: readonly string[];
   readonly waiting: readonly string[];
   readonly merges: readonly ReadOnlyMerge[];
+  /** Code-owned terminal stop selected by the engineering Supervisor, if any. */
+  readonly terminalReasonCode?: EngineeringRuntimeStopCode;
 }
+
+type EngineeringWorkflowCompletion = Readonly<{
+  readonly completion: unknown;
+  readonly terminalReasonCode?: EngineeringRuntimeStopCode;
+}>;
 
 export class RuntimeInvariantError extends Error {
   public constructor(message: string) {
@@ -446,6 +456,12 @@ export class SupervisorRuntime {
     }
     const merges: ReadOnlyMerge[] = [];
     for (const values of byCase.values()) merges.push(mergeReadOnlyResults(values));
+    const terminalReasonCode = results.find(
+      (
+        result,
+      ): result is ProcessResult & { readonly terminalReasonCode: EngineeringRuntimeStopCode } =>
+        result?.terminalReasonCode !== undefined,
+    )?.terminalReasonCode;
     return {
       progressed: results.filter((result) => result?.progressed === true).length,
       ambiguous: [
@@ -460,6 +476,7 @@ export class SupervisorRuntime {
       ].filter((unitId, index, all) => all.indexOf(unitId) === index),
       waiting: results.flatMap((result) => (result?.waiting ? [result.unitId] : [])),
       merges,
+      ...(terminalReasonCode === undefined ? {} : { terminalReasonCode }),
     };
   }
 
@@ -560,6 +577,15 @@ export class SupervisorRuntime {
         this.#engineering !== undefined && state.workUnit.role === "IMPLEMENTER"
           ? await this.runEngineeringWorkflow(runningState, writerFence!)
           : await this.invokeLegacyRole(runningState, writerFence);
+      const engineeringTerminalReasonCode =
+        rawCompletion !== null && typeof rawCompletion === "object" && "completion" in rawCompletion
+          ? (rawCompletion as { readonly terminalReasonCode?: EngineeringRuntimeStopCode })
+              .terminalReasonCode
+          : undefined;
+      const completionValue =
+        rawCompletion !== null && typeof rawCompletion === "object" && "completion" in rawCompletion
+          ? (rawCompletion as { readonly completion: unknown }).completion
+          : rawCompletion;
       if (rawCompletion === null) {
         this.#ambiguous.add(unitId);
         this.#blockedCases.add(state.workUnit.case_id);
@@ -580,7 +606,7 @@ export class SupervisorRuntime {
           completion: null,
         };
       }
-      const parsed = agentCompletion.safeParse(rawCompletion);
+      const parsed = agentCompletion.safeParse(completionValue);
       if (!parsed.success) throw new RuntimeInvariantError("role returned an invalid completion");
       const completion = parsed.data;
       if (completion.case_id !== state.workUnit.case_id || completion.run_id !== state.run.runId)
@@ -599,6 +625,9 @@ export class SupervisorRuntime {
         waiting: completion.status === "WAITING_FOR_USER",
         unit: state,
         completion,
+        ...(engineeringTerminalReasonCode === undefined
+          ? {}
+          : { terminalReasonCode: engineeringTerminalReasonCode }),
       };
     } catch (error) {
       if (completionPersistAttempted) {
@@ -681,19 +710,33 @@ export class SupervisorRuntime {
   private async runEngineeringWorkflow(
     state: RuntimeUnitState & { readonly run: RuntimeRun },
     writerFence: RuntimeWriterFence,
-  ): Promise<unknown | null> {
+  ): Promise<EngineeringWorkflowCompletion | null> {
     const port = this.#engineering;
     if (!port) throw new RuntimeInvariantError("engineering runtime port is not configured");
     const session = await port.open({ unit: state, run: state.run });
     const fingerprints = [...session.fingerprints];
     const gateFailureCycleFingerprints = [...(session.gateFailureCycleFingerprints ?? [])];
+    const gateFailureDiagnosticHistory = (session.gateFailureDiagnosticHistory ?? []).map((set) => [
+      ...set,
+    ]);
     const reviewCycleFingerprints = [...(session.reviewCycleFingerprints ?? [])];
     let stageCalls = session.stageCalls;
     let modelCalls = session.modelCalls;
     let cancelled = session.cancelled;
+    const gateCorrectionCounts = new Map(
+      (session.gateCorrectionCounts ?? []).map((entry) => [
+        entry.sliceId,
+        { ordinary: entry.ordinary, compiler: entry.compiler },
+      ]),
+    );
 
-    const stop = async (code: EngineeringRuntimeStopCode, detail: string): Promise<unknown> =>
-      port.completion({ unit: state, run: state.run, code, detail });
+    const stop = async (
+      code: EngineeringRuntimeStopCode,
+      detail: string,
+    ): Promise<EngineeringWorkflowCompletion> => ({
+      completion: await port.completion({ unit: state, run: state.run, code, detail }),
+      terminalReasonCode: code,
+    });
     const progress = (): ReturnType<typeof evaluateEngineeringProgress> =>
       evaluateEngineeringProgress({
         fingerprints,
@@ -707,7 +750,7 @@ export class SupervisorRuntime {
         deadlineMs: session.deadlineMs,
         cancelled,
       });
-    const stopForProgress = async (): Promise<unknown | undefined> => {
+    const stopForProgress = async (): Promise<EngineeringWorkflowCompletion | undefined> => {
       const control = await port.readControlState();
       cancelled ||= control.cancelled;
       const disposition = progress();
@@ -724,7 +767,7 @@ export class SupervisorRuntime {
       stage: import("@remoteagent/contracts").EngineeringStage,
       evidence: EngineeringStageEvidence,
       alreadyCounted: boolean,
-    ): Promise<unknown | undefined> => {
+    ): Promise<EngineeringWorkflowCompletion | undefined> => {
       if (stage === EngineeringStage.DESIGN_APPROVAL) {
         if (evidence.approval === undefined)
           return stop("APPROVAL_BLOCKED", "design approval lacks deterministic evidence");
@@ -754,10 +797,55 @@ export class SupervisorRuntime {
           }
         }
       } else if (
-        !alreadyCounted &&
         stage === EngineeringStage.GATE_EXECUTION &&
         evidence.slice.directive === "CORRECT_SLICE"
       ) {
+        const sliceId = evidence.slice.activeSliceId;
+        if (sliceId === null)
+          return stop("GATE_CORRECTION_LIMIT_EXHAUSTED", "gate correction lacks active slice");
+        const counts = gateCorrectionCounts.get(sliceId) ?? { ordinary: 0, compiler: 0 };
+        const mode = evidence.gateFailureMode === "COMPILER" ? "compiler" : "ordinary";
+        const budget = evaluateEngineeringGateCorrectionBudget({
+          counts,
+          mode: mode === "compiler" ? "COMPILER" : "ORDINARY",
+          alreadyCounted,
+          ...(session.maxGateCorrectionsPerSlice === undefined
+            ? {}
+            : { limit: session.maxGateCorrectionsPerSlice }),
+        });
+        gateCorrectionCounts.set(sliceId, { ...budget.counts });
+        if (budget.disposition === "EXHAUSTED")
+          return stop(
+            "GATE_CORRECTION_LIMIT_EXHAUSTED",
+            `gate correction limit exhausted: ${mode}`,
+          );
+        // Recovered durable evidence was already included in the persisted progress history;
+        // never append its fingerprints a second time during restart recovery.
+        if (alreadyCounted) {
+          if (
+            evaluateStableGateDiagnosticPersistence(gateFailureDiagnosticHistory) === "NO_PROGRESS"
+          )
+            return stop(
+              "NO_PROGRESS",
+              "engineering required-gate correction stopped: persistent diagnostic",
+            );
+          return undefined;
+        }
+        const stableDiagnostics = evidence.structuralState.stableGateDiagnosticFingerprints ?? [];
+        gateFailureDiagnosticHistory.push([...stableDiagnostics]);
+        if (
+          mode === "compiler" &&
+          evaluateCompilerDiagnosticProgress(gateFailureDiagnosticHistory) === "NO_PROGRESS"
+        )
+          return stop(
+            "NO_PROGRESS",
+            "engineering compiler correction stopped: unchanged diagnostics",
+          );
+        if (evaluateStableGateDiagnosticPersistence(gateFailureDiagnosticHistory) === "NO_PROGRESS")
+          return stop(
+            "NO_PROGRESS",
+            "engineering required-gate correction stopped: persistent diagnostic",
+          );
         const fingerprint = engineeringGateFailureFingerprint(evidence.structuralState);
         fingerprints.push(fingerprint);
         // Required-gate corrections share the same deterministic progress budget as review
@@ -787,7 +875,7 @@ export class SupervisorRuntime {
 
     type StageResult =
       | Readonly<{ kind: "COMPLETED"; evidence: EngineeringStageEvidence }>
-      | Readonly<{ kind: "RETURN"; completion: unknown }>
+      | Readonly<{ kind: "RETURN"; completion: EngineeringWorkflowCompletion }>
       | Readonly<{ kind: "AMBIGUOUS" }>;
     const runStage = async (
       stage: import("@remoteagent/contracts").EngineeringStage,
@@ -827,12 +915,12 @@ export class SupervisorRuntime {
       modelCalls += result.modelCalls;
       await writerFence.assertCurrent();
       if (result.status === "WAITING_FOR_USER" || result.status === "TERMINAL")
-        return { kind: "RETURN", completion: result.completion };
+        return { kind: "RETURN", completion: { completion: result.completion } };
       const terminal = await acceptEvidence(stage, result.evidence, false);
       if (terminal !== undefined) return { kind: "RETURN", completion: terminal };
       return { kind: "COMPLETED", evidence: result.evidence };
     };
-    const unwrap = (result: StageResult): unknown | null | undefined =>
+    const unwrap = (result: StageResult): EngineeringWorkflowCompletion | null | undefined =>
       result.kind === "RETURN" ? result.completion : result.kind === "AMBIGUOUS" ? null : undefined;
 
     for (const stage of session.plan.graph.design_stages) {
@@ -990,6 +1078,7 @@ interface ProcessResult {
   readonly waiting: boolean;
   readonly unit: RuntimeUnitState;
   readonly completion: AgentCompletion | null;
+  readonly terminalReasonCode?: EngineeringRuntimeStopCode;
 }
 
 function compareText(a: string, b: string): number {

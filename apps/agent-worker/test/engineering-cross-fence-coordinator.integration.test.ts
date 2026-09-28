@@ -1,3 +1,7 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { EngineeringStage } from "@remoteagent/contracts";
 import {
   EngineeringRecoveryRepository,
@@ -15,12 +19,42 @@ import { createStructuredPreCommitReviewSessionFactory } from "../src/engineerin
 import { createConfiguredEngineeringStageExecutor } from "../src/engineering-execution.js";
 import { createProductionEngineeringRecoveryCoordinator } from "../src/engineering-recovery.js";
 import {
+  EngineeringDebugJournal,
+  runWithEngineeringDebugJournal,
+} from "../src/engineering-debug-journal.js";
+import {
   createEngineeringQualificationFixture,
   EngineeringQualificationTransport,
   type EngineeringQualificationFixture,
 } from "./engineering-qualification-fixture.js";
 
 const available = await ensurePostgres();
+
+const stageDiagnosticsEnabled = process.env.RA_ENGINEERING_STAGE_DIAGNOSTICS === "1";
+const stageDiagnosticsStartedAt = Date.now();
+function stageDiagnostic(stage: string, transport?: EngineeringQualificationTransport): void {
+  if (!stageDiagnosticsEnabled) return;
+  process.stderr.write(
+    `${JSON.stringify({
+      stage,
+      elapsed_ms: Date.now() - stageDiagnosticsStartedAt,
+      ...(transport === undefined ? {} : { transport_requests: transport.requests.length }),
+    })}\n`,
+  );
+}
+
+async function aroundStage<T>(
+  stage: string,
+  operation: () => Promise<T>,
+  transport?: EngineeringQualificationTransport,
+): Promise<T> {
+  stageDiagnostic(`${stage}:start`, transport);
+  try {
+    return await operation();
+  } finally {
+    stageDiagnostic(`${stage}:end`, transport);
+  }
+}
 
 const largeRiskFacts = Object.freeze({
   authority: "SERVER_OWNED" as const,
@@ -49,7 +83,7 @@ function runtimeIdentity(fixture: EngineeringQualificationFixture) {
         authoritative_scope: {
           connection_ids: [],
           repo_allowlist: [fixture.ids.repositoryId],
-          can_write_workspace: true,
+          can_write_workspace: true as const,
         },
         run_id: fixture.ids.runId,
         created_at: "2026-08-26T00:00:00.000Z",
@@ -102,10 +136,18 @@ describeIntegration(
   "production engineering cross-fence coordinator",
   () => {
     let fixture: EngineeringQualificationFixture | null = null;
+    let diagnosticJournal: EngineeringDebugJournal | null = null;
 
     afterEach(async () => {
-      await fixture?.drop();
-      fixture = null;
+      try {
+        await aroundStage("fixture.drop", async () => fixture?.drop());
+      } finally {
+        fixture = null;
+        if (diagnosticJournal !== null) {
+          await diagnosticJournal.close();
+          diagnosticJournal = null;
+        }
+      }
     });
 
     it("parks an expired writer, claims one dedicated continuation, and completes through the existing handler", async () => {
@@ -131,9 +173,21 @@ describeIntegration(
         policy: { riskFacts: largeRiskFacts },
       });
       const discovery = discoveryBinding(fixture);
-      await crashed.port.open(runtimeIdentity(fixture));
-      await crashed.port.prepareContext(discovery);
-      await crashed.port.commitStarted(discovery);
+      await aroundStage(
+        "crashed.port.open",
+        () => crashed.port.open(runtimeIdentity(fixture!)),
+        transport,
+      );
+      await aroundStage(
+        "crashed.port.prepareContext",
+        () => crashed.port.prepareContext(discovery),
+        transport,
+      );
+      await aroundStage(
+        "crashed.port.commitStarted",
+        () => crashed.port.commitStarted(discovery),
+        transport,
+      );
       await fixture.db.query(
         "UPDATE jobs SET lease_expires_at=now()-interval '1 second' WHERE job_id=$1",
         [original.jobId],
@@ -167,16 +221,38 @@ describeIntegration(
         continuation: coordinator,
         claim: { owner: "cross-fence-worker", leaseMs: 120_000 },
         handler: async (lease, heartbeat) => {
+          stageDiagnostic("handler:enter", transport);
           const production = fixture!.makeProduction(lease, {
             transport,
             policy: { riskFacts: largeRiskFacts },
           });
-          await production.handler(lease, heartbeat);
+          try {
+            const runHandler = () => production.handler(lease, heartbeat);
+            if (diagnosticJournal !== null) {
+              await runWithEngineeringDebugJournal(diagnosticJournal, runHandler);
+            } else {
+              await runHandler();
+            }
+          } finally {
+            stageDiagnostic("handler:exit", transport);
+          }
         },
         relay: { aggregates: [] },
       });
 
-      const result = await scheduler.tick();
+      if (stageDiagnosticsEnabled) {
+        const journalRoot = await mkdtemp(join(tmpdir(), "ra055-cross-fence-journal-"));
+        diagnosticJournal = await EngineeringDebugJournal.create({
+          artifactRoot: journalRoot,
+          invocationId: "cross-fence-coordinator",
+        });
+      }
+      const result = await aroundStage(
+        "coordinator.prepare_claim.scheduler.tick",
+        () => scheduler.tick(),
+        transport,
+      );
+      stageDiagnostic("posttick.assertions:start", transport);
       expect(result).toMatchObject({
         claimedJobId: original.jobId,
         jobOutcome: "SUCCEEDED",
@@ -228,6 +304,7 @@ describeIntegration(
           },
         ),
       ).toBeNull();
+      stageDiagnostic("posttick.assertions:end", transport);
     });
 
     it("suspends a failed continuation into a child recovery instead of generic PENDING retry", async () => {

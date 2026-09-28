@@ -48,6 +48,7 @@ import {
 } from "@remoteagent/implementation-tools";
 import {
   executeFreshPreCommitReview,
+  ReviewContractError,
   type FreshPreCommitReviewResult,
   type PreCommitReviewSessionFactory,
 } from "@remoteagent/review-loop";
@@ -144,9 +145,12 @@ function normalizeImplementerReport(input: {
   if (
     // A fresh correction session may conservatively repeat a path from the
     // exact durable prior receipt. It still cannot invent a new path: any
-    // over-report must already be server-owned prior slice state, and the
-    // normalized receipt below contains only the fresh actual delta.
-    input.report.changed_files.some((path) => !actualPaths.has(path) && !priorPaths.has(path)) ||
+    // over-report must be backed by prior slice state or a successful mutation
+    // in this attempt (including a later restore). The normalized receipt
+    // below contains only the fresh actual delta, never the mutation history.
+    input.report.changed_files.some(
+      (path) => !actualPaths.has(path) && !priorPaths.has(path) && !receiptPaths.has(path),
+    ) ||
     input.actualChangedPaths.some((path) => !receiptPaths.has(path) && !reportedPaths.has(path))
   ) {
     throw new Error(
@@ -179,12 +183,16 @@ export type ExecuteVerticalSliceInput = Readonly<{
   implement: VerticalSliceImplementer;
   /** Code-owned prefetch budget; omitted callers retain the default model discovery ceiling. */
   discoveryCallLimit?: number;
+  /** Server-owned prefetch phase; discovery is sealed before the model is called. */
+  serverPrefetch?: boolean;
   /** Prior server-observed agent paths, never model supplied. */
   priorAgentPaths?: readonly string[];
   /** Prior durable attempt already satisfied the code-owned test-first mutation chronology. */
   testFirstAlreadySatisfied?: boolean;
   /** Exact blocking-correction paths that cannot be satisfied by whitespace-only edits. */
   requiredSubstantiveMutationPaths?: readonly string[];
+  /** Exact gate-correction candidates where one substantive mutation is sufficient. */
+  requiredSubstantiveMutationPathsAny?: readonly string[];
   /** Exact behavioral-test correction paths that cannot be satisfied by import/comment edits. */
   requiredBehavioralMutationPaths?: readonly string[];
   baselineStore?: BaselineWorkspaceStore;
@@ -366,6 +374,8 @@ export type VerticalSliceGateResult =
       reason: string;
       blockingGateIds: readonly string[];
       receipts: readonly VerificationGateReceipt[];
+      /** Digest of the server-owned catalog containing exactly this slice's gates. */
+      selectedGateCatalogConfigDigest: string;
       actual: VerticalSliceActualEvidence;
     }>;
 
@@ -867,6 +877,9 @@ export async function executeVerticalSlice(
     ...(input.requiredSubstantiveMutationPaths === undefined
       ? {}
       : { requiredSubstantiveMutationPaths: input.requiredSubstantiveMutationPaths }),
+    ...(input.requiredSubstantiveMutationPathsAny === undefined
+      ? {}
+      : { requiredSubstantiveMutationPathsAny: input.requiredSubstantiveMutationPathsAny }),
     ...(input.requiredBehavioralMutationPaths === undefined
       ? {}
       : { requiredBehavioralMutationPaths: input.requiredBehavioralMutationPaths }),
@@ -874,6 +887,7 @@ export async function executeVerticalSlice(
     ...(input.discoveryCallLimit === undefined
       ? {}
       : { maxDiscoveryCalls: input.discoveryCallLimit }),
+    ...(input.serverPrefetch === true ? { serverPrefetch: true } : {}),
     beforeMutation: assertCurrent,
     operationIdFor: operationIdFactory({
       caseId: input.caseId,
@@ -1337,6 +1351,7 @@ export async function executeVerticalSliceGates(
       reason: result.reason,
       blockingGateIds: result.blocking_gate_ids,
       receipts: result.receipts,
+      selectedGateCatalogConfigDigest: selectedCatalog.config_digest,
       actual: input.actual,
     };
   }
@@ -1365,6 +1380,7 @@ export async function executeVerticalSliceGates(
           : result.aggregate.status,
       blockingGateIds: result.aggregate.blocking_gate_ids,
       receipts: result.receipts,
+      selectedGateCatalogConfigDigest: selectedCatalog.config_digest,
       actual: input.actual,
     };
   }
@@ -1499,6 +1515,9 @@ export async function executeVerticalSliceReview(
     tree_digest: review.treeDigest,
     evidence_bundle_digest: review.evidenceBundleDigest,
   });
+  if (review.readiness === "CHANGES_REQUIRED" && review.requiredMutationPaths.length === 0) {
+    throw new ReviewContractError("pre-commit blocking findings have no valid mutation paths");
+  }
   const decision = engineeringReviewDecision.parse({
     schema_version: 1,
     artifact_kind: "ReviewDecision",
@@ -1517,6 +1536,7 @@ export async function executeVerticalSliceReview(
         (finding) =>
           `[${finding.finding_id}] ${finding.severity} ${finding.location?.relative_path ?? "unknown"}:${String(finding.location?.line ?? 0)} — ${finding.summary} Required: ${finding.required_fix}`,
       ),
+    required_mutation_paths: review.requiredMutationPaths,
     // This field is intentionally the exact reviewed patch bytes digest. The
     // composite digest remains the decision identity and binds tree/gates too.
     reviewed_digest: review.rawPatchDigest,

@@ -517,6 +517,30 @@ describe("independent review loop", () => {
       }
     });
 
+    it("deduplicates exact finding projections but keeps different fixes on one line", () => {
+      const first = finding({ finding_id: "f-first" });
+      const exactDuplicate = finding({ finding_id: "f-duplicate" });
+      const independent = finding({
+        finding_id: "f-independent",
+        required_fix: "Emit the audit event before returning from this branch.",
+      });
+      const merged = mergeReviewReports([
+        report([first, independent], { report_id: "r-first" }),
+        report([exactDuplicate], { report_id: "r-duplicate" }),
+      ]);
+      const reversed = mergeReviewReports([
+        report([exactDuplicate], { report_id: "r-duplicate" }),
+        report([first, independent], { report_id: "r-first" }),
+      ]);
+      expect(merged).toHaveLength(2);
+      expect(reversed.map((item) => item.finding_id)).toEqual(
+        merged.map((item) => item.finding_id),
+      );
+      expect(merged.map((item) => item.required_fix)).toEqual(
+        expect.arrayContaining([first.required_fix, independent.required_fix]),
+      );
+    });
+
     it("is order-independent for parallel reviewers", () => {
       const a = report(
         [finding({ finding_id: "fa", location: { relative_path: "a.ts", line: 1 } })],

@@ -164,6 +164,7 @@ class OneSliceTransport implements RuntimeTransport {
   public calls = 0;
   public implementationCalls = 0;
   public planningCalls = 0;
+  public reviewCalls = 0;
   #toolIssued = false;
   public constructor(
     private readonly caseId: string,
@@ -232,8 +233,10 @@ class OneSliceTransport implements RuntimeTransport {
       }
       return json({ schema_version: 1, changed_files: ["src/change.ts"] });
     }
-    if (name === "PreCommitReviewOutput_v1")
+    if (name === "PreCommitReviewOutput_v1") {
+      this.reviewCalls += 1;
       return json({ schema_version: 1, findings: [], lines_examined: 20 });
+    }
     if (name === "EngineeringMemoryUpdate_v1")
       return json({
         ...common,
@@ -300,6 +303,27 @@ class CrashOuterLocalCommitArtifactOnce extends EngineeringControlPlaneRepositor
       throw new Error("injected crash after local commit before outer artifact");
     }
     return super.appendArtifactRevision(...args);
+  }
+}
+
+class CrashAfterDurableArtifactOnce extends EngineeringControlPlaneRepository {
+  public crashed = false;
+  public constructor(
+    runtime: ConstructorParameters<typeof EngineeringControlPlaneRepository>[0],
+    private readonly artifactKind: string,
+  ) {
+    super(runtime);
+  }
+
+  public override async appendArtifactRevision(
+    ...args: Parameters<EngineeringControlPlaneRepository["appendArtifactRevision"]>
+  ): ReturnType<EngineeringControlPlaneRepository["appendArtifactRevision"]> {
+    const result = await super.appendArtifactRevision(...args);
+    if (!this.crashed && args[2].artifact.artifact_kind === this.artifactKind) {
+      this.crashed = true;
+      throw new Error(`injected crash after durable ${this.artifactKind}`);
+    }
+    return result;
   }
 }
 
@@ -692,6 +716,95 @@ describeIntegration(
         [fixture.ids.runId],
       );
       expect(after.rows[0]).toEqual({ intents: "1", starts: "1", artifacts: "1" });
+    });
+
+    it("recovers after a durable implementation receipt without repeating the side effect", async () => {
+      fixture = await createEngineeringQualificationFixture({
+        id: "implementation-receipt-recovery",
+      });
+      const lease = await fixture.claimImplementer();
+      const transport = new OneSliceTransport(fixture.ids.caseId, fixture.ids.runId);
+      const control = new CrashAfterDurableArtifactOnce(
+        productionRuntime(),
+        "SliceImplementationReceipt",
+      );
+      const first = fixture.makeProduction(lease, {
+        transport,
+        policy: { riskFacts: smallRiskFacts },
+        controlPlane: control,
+      });
+      await expect(first.handler(lease, async () => undefined)).rejects.toThrow(
+        /did not complete its work/,
+      );
+      expect(control.crashed).toBe(true);
+      const implementationCalls = transport.implementationCalls;
+      const before = await fixture.db.query<{ receipts: string; commits: string }>(
+        `SELECT
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='SliceImplementationReceipt') AS receipts,
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt') AS commits`,
+        [fixture.ids.runId],
+      );
+      expect(before.rows[0]).toEqual({ receipts: "1", commits: "0" });
+
+      const fresh = fixture.makeProduction(lease, {
+        transport,
+        policy: { riskFacts: smallRiskFacts },
+      });
+      await fresh.handler(lease, async () => undefined);
+      expect(transport.implementationCalls).toBe(implementationCalls);
+      const after = await fixture.db.query<{ receipts: string; commits: string }>(
+        `SELECT
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='SliceImplementationReceipt') AS receipts,
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt') AS commits`,
+        [fixture.ids.runId],
+      );
+      expect(after.rows[0]).toEqual({ receipts: "1", commits: "1" });
+    });
+
+    it("recovers after a durable review decision without repeating review", async () => {
+      fixture = await createEngineeringQualificationFixture({ id: "review-decision-recovery" });
+      const lease = await fixture.claimImplementer();
+      const transport = new OneSliceTransport(fixture.ids.caseId, fixture.ids.runId);
+      const control = new CrashAfterDurableArtifactOnce(productionRuntime(), "ReviewDecision");
+      const first = fixture.makeProduction(lease, {
+        transport,
+        policy: { riskFacts: smallRiskFacts },
+        controlPlane: control,
+      });
+      await expect(first.handler(lease, async () => undefined)).rejects.toThrow(
+        /did not complete its work/,
+      );
+      expect(control.crashed).toBe(true);
+      const reviewCalls = transport.reviewCalls;
+      const before = await fixture.db.query<{ reviews: string; commits: string }>(
+        `SELECT
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='ReviewDecision') AS reviews,
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt') AS commits`,
+        [fixture.ids.runId],
+      );
+      expect(before.rows[0]).toEqual({ reviews: "1", commits: "0" });
+
+      const fresh = fixture.makeProduction(lease, {
+        transport,
+        policy: { riskFacts: smallRiskFacts },
+      });
+      await fresh.handler(lease, async () => undefined);
+      expect(transport.reviewCalls).toBe(reviewCalls);
+      const after = await fixture.db.query<{ reviews: string; commits: string }>(
+        `SELECT
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='ReviewDecision') AS reviews,
+           (SELECT count(*)::text FROM engineering_artifact_revisions
+             WHERE run_id=$1 AND artifact_kind='LocalCommitReceipt') AS commits`,
+        [fixture.ids.runId],
+      );
+      expect(after.rows[0]).toEqual({ reviews: "1", commits: "1" });
     });
 
     it("re-enters with a fresh handler under the same current lease after the outer artifact append fails", async () => {
@@ -1292,6 +1405,17 @@ describeIntegration(
         "SELECT case_id FROM jobs WHERE status='LEASED' ORDER BY case_id",
       );
       expect(active.rows.map(({ case_id }) => case_id)).toEqual([fixture.ids.caseId, secondCaseId]);
+      const started = await fixture.db.query<{ case_id: string }>(
+        `SELECT DISTINCT case_id
+           FROM engineering_stage_events
+          WHERE event_type='STARTED' AND case_id IN ($1,$2)
+          ORDER BY case_id`,
+        [fixture.ids.caseId, secondCaseId],
+      );
+      expect(started.rows.map(({ case_id }) => case_id)).toEqual([
+        fixture.ids.caseId,
+        secondCaseId,
+      ]);
       releaseBarrier();
       expect(await firstRun).toMatchObject({ message: expect.stringMatching(/did not complete/) });
       expect(await secondRun).toMatchObject({ message: expect.stringMatching(/did not complete/) });

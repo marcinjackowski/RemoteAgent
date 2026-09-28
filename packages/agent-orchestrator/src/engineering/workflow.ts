@@ -210,6 +210,8 @@ export type EngineeringStructuralState = Readonly<{
   failedGateIds: readonly string[];
   /** Exact durable gate-log identities; absent only on legacy/runtime-only evidence. */
   failedGateEvidenceDigests?: readonly string[];
+  /** Content-free normalized diagnostics used only for persistent compiler/test failure checks. */
+  stableGateDiagnosticFingerprints?: readonly string[];
   unresolvedFindingIds: readonly string[];
   /** Deliberately excluded from the fingerprint. */
   narrative?: string;
@@ -301,6 +303,37 @@ export function engineeringGateFailureCycleFingerprint(state: EngineeringStructu
       ...new Set(state.failedGateIds.map((id) => identifier(id, "gate ID"))),
     ].sort(),
   });
+}
+
+/** Stop only when one normalized diagnostic survives three durable gate boundaries. */
+export function evaluateStableGateDiagnosticPersistence(
+  history: readonly (readonly string[])[],
+  consecutiveLimit = 3,
+): "CONTINUE" | "NO_PROGRESS" {
+  if (!Number.isSafeInteger(consecutiveLimit) || consecutiveLimit <= 0)
+    throw new EngineeringWorkflowPolicyError("diagnostic persistence limit must be positive");
+  if (history.length < consecutiveLimit) return "CONTINUE";
+  const tail = history.slice(-consecutiveLimit);
+  const shared = new Set(tail[0]);
+  for (const current of tail.slice(1))
+    for (const fingerprint of [...shared])
+      if (!current.includes(fingerprint)) shared.delete(fingerprint);
+  return shared.size > 0 ? "NO_PROGRESS" : "CONTINUE";
+}
+
+/** Compiler corrections must not spend another attempt when the complete diagnostic set is unchanged. */
+export function evaluateCompilerDiagnosticProgress(
+  history: readonly (readonly string[])[],
+): "CONTINUE" | "NO_PROGRESS" {
+  if (history.length < 2) return "CONTINUE";
+  const previous = [...new Set(history.at(-2) ?? [])].sort();
+  const latest = [...new Set(history.at(-1) ?? [])].sort();
+  return previous.length > 0 &&
+    latest.length > 0 &&
+    previous.length === latest.length &&
+    previous.every((item, index) => item === latest[index])
+    ? "NO_PROGRESS"
+    : "CONTINUE";
 }
 
 export function evaluateEngineeringFingerprintProgress(input: {
@@ -396,6 +429,7 @@ export type EngineeringStageEvidence = Readonly<{
   structuralState: EngineeringStructuralState;
   slice: EngineeringSliceLoopState;
   approval?: Parameters<typeof evaluateEngineeringApproval>[0];
+  gateFailureMode?: "COMPILER" | "ORDINARY";
 }>;
 
 export type EngineeringSliceDirective =
@@ -428,7 +462,8 @@ export type EngineeringRuntimeStopCode =
   | "NO_PROGRESS"
   | "OSCILLATION"
   | "APPROVAL_BLOCKED"
-  | "SLICE_BLOCKED";
+  | "SLICE_BLOCKED"
+  | "GATE_CORRECTION_LIMIT_EXHAUSTED";
 
 export type EngineeringRuntimeSession = Readonly<{
   plan: EngineeringWorkflowPlan;
@@ -437,6 +472,7 @@ export type EngineeringRuntimeSession = Readonly<{
   lastGateFailureFingerprint?: string;
   /** Restart-safe exact-tree history for gate-only A/B cycle detection. */
   gateFailureCycleFingerprints?: readonly string[];
+  gateFailureDiagnosticHistory?: readonly (readonly string[])[];
   /** Restart-safe exact-tree history for review A/B cycles with volatile finding sets. */
   reviewCycleFingerprints?: readonly string[];
   stageCalls: number;
@@ -445,9 +481,49 @@ export type EngineeringRuntimeSession = Readonly<{
   maxModelCalls: number;
   consecutiveRepeatLimit: number;
   oscillationLimit: number;
+  gateCorrectionCounts?: readonly Readonly<{
+    sliceId: string;
+    ordinary: number;
+    compiler: number;
+  }>[];
+  maxGateCorrectionsPerSlice?: number;
   deadlineMs: number;
   cancelled: boolean;
 }>;
+
+export type EngineeringGateCorrectionCounts = Readonly<{
+  ordinary: number;
+  compiler: number;
+}>;
+
+/** Apply one server-derived gate boundary without allowing a ninth same-mode correction. */
+export function evaluateEngineeringGateCorrectionBudget(input: {
+  readonly counts: EngineeringGateCorrectionCounts;
+  readonly mode: "ORDINARY" | "COMPILER";
+  readonly alreadyCounted: boolean;
+  readonly limit?: number;
+}): Readonly<{
+  disposition: "CONTINUE" | "EXHAUSTED";
+  counts: EngineeringGateCorrectionCounts;
+}> {
+  const limit = input.limit ?? 8;
+  if (!Number.isSafeInteger(limit) || limit <= 0)
+    throw new EngineeringWorkflowPolicyError("gate correction limit must be positive");
+  const current = input.counts[input.mode === "COMPILER" ? "compiler" : "ordinary"];
+  if (!Number.isSafeInteger(current) || current < 0)
+    throw new EngineeringWorkflowPolicyError("gate correction count must be non-negative");
+  if (current >= limit)
+    return Object.freeze({ disposition: "EXHAUSTED", counts: Object.freeze({ ...input.counts }) });
+  if (input.alreadyCounted)
+    return Object.freeze({ disposition: "CONTINUE", counts: Object.freeze({ ...input.counts }) });
+  const next = { ...input.counts };
+  next[input.mode === "COMPILER" ? "compiler" : "ordinary"] = current + 1;
+  return Object.freeze({
+    disposition:
+      next[input.mode === "COMPILER" ? "compiler" : "ordinary"] >= limit ? "EXHAUSTED" : "CONTINUE",
+    counts: Object.freeze(next),
+  });
+}
 
 /**
  * A single-stage durable port. It cannot choose transitions or run a workflow; SupervisorRuntime

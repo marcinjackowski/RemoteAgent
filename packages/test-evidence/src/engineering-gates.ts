@@ -32,10 +32,16 @@ import {
   TestPhase,
   testCommandManifest,
   testRun,
+  testRunReceiptDigest,
+  testEvidence,
 } from "./contracts.js";
 import type { TestRun } from "./contracts.js";
 import { runInDisposableWorkspace } from "./disposable-workspace.js";
 import { createTestRunner } from "./runner.js";
+import {
+  TRUSTED_EVALUATOR_UI_LAYOUT,
+  validateTrustedEvaluatorInputs,
+} from "./trusted-evaluator-inputs.js";
 
 /** The closed, policy-significant classes understood by the verification layer. */
 export const VerificationGateClass = {
@@ -135,6 +141,29 @@ const implementationContextEntry = z.discriminatedUnion("kind", [
     query: z.string().min(1).max(512),
   }),
 ]);
+const trustedEvaluatorInputsSchema = z
+  .object({
+    files: z.array(
+      z
+        .object({ relative_path: z.string(), content: z.string(), content_digest: z.string() })
+        .strict(),
+    ),
+    required_executed_test_ids: z.array(z.string()),
+    layout: z.literal(TRUSTED_EVALUATOR_UI_LAYOUT).optional(),
+  })
+  .strict()
+  .transform((value) => {
+    const snapshot = validateTrustedEvaluatorInputs(value);
+    return {
+      files: snapshot.files.map(({ relative_path, content, content_digest }) => ({
+        relative_path,
+        content,
+        content_digest,
+      })),
+      required_executed_test_ids: [...snapshot.required_executed_test_ids],
+      ...(snapshot.layout === undefined ? {} : { layout: snapshot.layout }),
+    };
+  });
 
 const verificationGateDefinitionSchema = versionedContract({
   gate_id: idString,
@@ -159,7 +188,102 @@ const verificationGateDefinitionSchema = versionedContract({
   required_mutation_paths: z.array(relativeRepositoryPath).max(16).default([]),
   implementation_guidance: z.string().min(1).max(4096).optional(),
   implementation_context: z.array(implementationContextEntry).min(1).max(24).optional(),
+  trusted_evaluator_inputs: trustedEvaluatorInputsSchema.optional(),
 }).superRefine((definition, ctx) => {
+  if (definition.trusted_evaluator_inputs !== undefined) {
+    try {
+      validateTrustedEvaluatorInputs(definition.trusted_evaluator_inputs);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["trusted_evaluator_inputs"],
+        message: error instanceof Error ? error.message : "invalid trusted evaluator inputs",
+      });
+    }
+    if (
+      definition.gate_class !== VerificationGateClass.TEST ||
+      definition.environment_profile !== "BUILD_TOOLCHAIN" ||
+      definition.network_profile !== "PLATFORM_MANAGED"
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["trusted_evaluator_inputs"],
+        message: "trusted evaluator inputs require a platform-managed Xcode TEST gate",
+      });
+    const selectors = definition.argv.filter((arg) => arg.startsWith("-only-testing:"));
+    const required = new Set(definition.trusted_evaluator_inputs.required_executed_test_ids);
+    const normalized = new Set(
+      selectors.map((arg) => arg.slice("-only-testing:".length).replace(/\(\)$/u, "")),
+    );
+    for (const id of required)
+      if (!normalized.has(id))
+        ctx.addIssue({
+          code: "custom",
+          path: ["trusted_evaluator_inputs"],
+          message: "every evaluator test ID must have an exact testing selector",
+        });
+    for (const file of definition.trusted_evaluator_inputs.files) {
+      const conflicts = [
+        ...definition.mutable_outputs,
+        ...definition.required_mutation_paths,
+        ...definition.required_test_paths,
+      ].some(
+        (candidate) =>
+          candidate === file.relative_path ||
+          candidate.startsWith(`${file.relative_path}/`) ||
+          file.relative_path.startsWith(`${candidate}/`),
+      );
+      if (conflicts)
+        ctx.addIssue({
+          code: "custom",
+          path: ["trusted_evaluator_inputs"],
+          message: "evaluator inputs must not intersect mutable or required mutation/test paths",
+        });
+    }
+    if (definition.trusted_evaluator_inputs.layout === TRUSTED_EVALUATOR_UI_LAYOUT) {
+      const projectFile = definition.trusted_evaluator_inputs.files.find((file) =>
+        file.relative_path.endsWith("RemoteAgentUIHarness.xcodeproj/project.pbxproj"),
+      );
+      const projectRoot = projectFile?.relative_path.slice(
+        0,
+        -"RemoteAgentUIHarness.xcodeproj/project.pbxproj".length,
+      );
+      const expectedProject =
+        projectRoot === undefined
+          ? undefined
+          : path.posix.relative(
+              definition.relative_cwd,
+              `${projectRoot}RemoteAgentUIHarness.xcodeproj`,
+            );
+      const projectFlags = definition.argv.filter((arg) => arg === "-project");
+      const schemeFlags = definition.argv.filter((arg) => arg === "-scheme");
+      const workspaceFlags = definition.argv.filter(
+        (arg) => arg === "-workspace" || arg.startsWith("-workspace="),
+      );
+      const projectIndex = definition.argv.indexOf("-project");
+      const schemeIndex = definition.argv.indexOf("-scheme");
+      const projectArgument = projectIndex >= 0 ? definition.argv[projectIndex + 1] : undefined;
+      const schemeArgument = schemeIndex >= 0 ? definition.argv[schemeIndex + 1] : undefined;
+      if (
+        projectFlags.length !== 1 ||
+        schemeFlags.length !== 1 ||
+        workspaceFlags.length !== 0 ||
+        definition.argv.some((arg) => arg.startsWith("-project=") || arg.startsWith("-scheme=")) ||
+        projectArgument !== expectedProject ||
+        projectArgument === undefined ||
+        path.isAbsolute(projectArgument) ||
+        projectArgument.split("/").includes("..") ||
+        schemeArgument !== "RemoteAgentUIHarness"
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["argv"],
+          message:
+            "XCODE_UI_HARNESS_V1 requires exact injected project and RemoteAgentUIHarness scheme binding",
+        });
+      }
+    }
+  }
   if (
     definition.environment_profile === "HERMETIC" &&
     definition.argv.some((argument) => {
@@ -225,6 +349,179 @@ const verificationGateDefinitionSchema = versionedContract({
 export const VerificationGateDefinition = verificationGateDefinitionSchema;
 export type VerificationGateDefinition = z.infer<typeof VerificationGateDefinition>;
 
+export type EngineeringGateOwnershipTarget = Readonly<{
+  target_id: string;
+  kind: "SOURCE" | "TEST" | "GENERATOR";
+  paths: readonly string[];
+}>;
+export type EngineeringGateOwnershipSlice = Readonly<{
+  slice_id: string;
+  mutation_target_ids: readonly string[];
+  required_read_context: readonly { relative_path: string; must_exist: boolean }[];
+}>;
+export type EngineeringGateOwnershipCriterion = Readonly<{
+  criterion_id: string;
+  owning_slice_id: string;
+  required_gate_ids: readonly string[];
+  related_target_ids: readonly string[];
+}>;
+export const EngineeringGateOwnershipViolationCode = Object.freeze({
+  DUPLICATE_TARGET: "DUPLICATE_TARGET",
+  DUPLICATE_SLICE: "DUPLICATE_SLICE",
+  DUPLICATE_CRITERION: "DUPLICATE_CRITERION",
+  FOREIGN_TARGET: "FOREIGN_TARGET",
+  FOREIGN_SLICE: "FOREIGN_SLICE",
+  MISSING_GATE: "MISSING_GATE",
+  CRITERION_TARGET_OUTSIDE_SLICE: "CRITERION_TARGET_OUTSIDE_SLICE",
+  FOREIGN_MUTATION_PATH: "FOREIGN_MUTATION_PATH",
+  FOREIGN_TEST_PATH: "FOREIGN_TEST_PATH",
+  READ_CONTEXT_ABSENT: "READ_CONTEXT_ABSENT",
+  READ_CONTEXT_NOT_REQUIRED: "READ_CONTEXT_NOT_REQUIRED",
+  UNCOVERED_SLICE: "UNCOVERED_SLICE",
+} as const);
+export type EngineeringGateOwnershipViolationCode =
+  (typeof EngineeringGateOwnershipViolationCode)[keyof typeof EngineeringGateOwnershipViolationCode];
+export type EngineeringGateOwnershipViolation = Readonly<{
+  code: EngineeringGateOwnershipViolationCode;
+  id: string;
+}>;
+export class EngineeringGateOwnershipError extends Error {
+  readonly violations: readonly EngineeringGateOwnershipViolation[];
+  readonly truncated: boolean;
+  constructor(violations: readonly EngineeringGateOwnershipViolation[], truncated = false) {
+    super("engineering gate ownership validation failed");
+    this.name = "EngineeringGateOwnershipError";
+    this.violations = Object.freeze(violations.map((violation) => Object.freeze({ ...violation })));
+    this.truncated = truncated;
+  }
+}
+export type EngineeringGateOwnershipResult = Readonly<{
+  criterion_ids: readonly string[];
+  gate_ids: readonly string[];
+  target_ids: readonly string[];
+}>;
+const covered = (allowed: readonly string[], candidate: string) =>
+  allowed.some((prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`));
+export function validateEngineeringGateOwnership(input: {
+  catalog: Pick<VerificationGateCatalog, "get">;
+  targets: readonly EngineeringGateOwnershipTarget[];
+  slices: readonly EngineeringGateOwnershipSlice[];
+  criteria: readonly EngineeringGateOwnershipCriterion[];
+}): EngineeringGateOwnershipResult {
+  const violations: EngineeringGateOwnershipViolation[] = [];
+  let truncated = false;
+  const targetMap = new Map(input.targets.map((target) => [target.target_id, target]));
+  const sliceMap = new Map(input.slices.map((slice) => [slice.slice_id, slice]));
+  const add = (code: EngineeringGateOwnershipViolationCode, id: string) => {
+    if (violations.length < 256) violations.push({ code, id });
+    else truncated = true;
+  };
+  const targetCounts = new Map<string, number>();
+  for (const target of input.targets)
+    targetCounts.set(target.target_id, (targetCounts.get(target.target_id) ?? 0) + 1);
+  for (const [id, count] of targetCounts) if (count > 1) add("DUPLICATE_TARGET", id);
+  const sliceCounts = new Map<string, number>();
+  for (const slice of input.slices)
+    sliceCounts.set(slice.slice_id, (sliceCounts.get(slice.slice_id) ?? 0) + 1);
+  for (const [id, count] of sliceCounts) if (count > 1) add("DUPLICATE_SLICE", id);
+  const criterionCounts = new Map<string, number>();
+  for (const criterion of input.criteria)
+    criterionCounts.set(
+      criterion.criterion_id,
+      (criterionCounts.get(criterion.criterion_id) ?? 0) + 1,
+    );
+  for (const [id, count] of criterionCounts) if (count > 1) add("DUPLICATE_CRITERION", id);
+  for (const slice of input.slices)
+    for (const targetId of slice.mutation_target_ids)
+      if (!targetMap.has(targetId)) add("FOREIGN_TARGET", targetId);
+  for (const criterion of input.criteria) {
+    const slice = sliceMap.get(criterion.owning_slice_id);
+    for (const targetId of criterion.related_target_ids)
+      if (!targetMap.has(targetId)) add("FOREIGN_TARGET", targetId);
+    if (slice === undefined) {
+      add("FOREIGN_SLICE", criterion.criterion_id);
+      for (const gateId of criterion.required_gate_ids)
+        if (input.catalog.get(gateId) === undefined)
+          add("MISSING_GATE", `${criterion.criterion_id}:${gateId}`);
+      continue;
+    }
+    for (const targetId of criterion.related_target_ids)
+      if (!slice.mutation_target_ids.includes(targetId))
+        add("CRITERION_TARGET_OUTSIDE_SLICE", `${criterion.criterion_id}:${targetId}`);
+    for (const gateId of criterion.required_gate_ids) {
+      const gate = input.catalog.get(gateId);
+      if (gate === undefined) {
+        add("MISSING_GATE", `${criterion.criterion_id}:${gateId}`);
+        continue;
+      }
+      const source = slice.mutation_target_ids.flatMap((id) => {
+        const t = targetMap.get(id);
+        return t?.kind === "SOURCE" || t?.kind === "GENERATOR" ? t.paths : [];
+      });
+      const tests = slice.mutation_target_ids.flatMap((id) =>
+        targetMap.get(id)?.kind === "TEST" ? targetMap.get(id)!.paths : [],
+      );
+      for (const evaluator of gate.trusted_evaluator_inputs?.files ?? []) {
+        const overlaps = input.targets.some((target) =>
+          target.paths.some(
+            (candidate) =>
+              candidate === evaluator.relative_path ||
+              candidate.startsWith(`${evaluator.relative_path}/`) ||
+              evaluator.relative_path.startsWith(`${candidate}/`),
+          ),
+        );
+        if (overlaps) add("FOREIGN_MUTATION_PATH", `${gateId}:${evaluator.relative_path}`);
+      }
+      for (const path of gate.required_mutation_paths)
+        if (!covered(source, path)) add("FOREIGN_MUTATION_PATH", `${gateId}:${path}`);
+      for (const path of gate.required_test_paths)
+        if (!covered(tests, path)) add("FOREIGN_TEST_PATH", `${gateId}:${path}`);
+      for (const context of gate.implementation_context ?? []) {
+        const declared = slice.required_read_context.find(
+          (entry) => entry.relative_path === context.relative_path,
+        );
+        if (declared === undefined) {
+          add("READ_CONTEXT_ABSENT", `${gateId}:${context.relative_path}`);
+        } else if (!declared.must_exist) {
+          const plannedOutput = slice.mutation_target_ids.some((targetId) => {
+            const target = targetMap.get(targetId);
+            return (
+              target !== undefined &&
+              (target.kind === "SOURCE" || target.kind === "TEST" || target.kind === "GENERATOR") &&
+              covered(target.paths, context.relative_path)
+            );
+          });
+          if (!plannedOutput)
+            add("READ_CONTEXT_NOT_REQUIRED", `${gateId}:${context.relative_path}`);
+        }
+      }
+    }
+  }
+  for (const slice of input.slices)
+    if (!input.criteria.some((criterion) => criterion.owning_slice_id === slice.slice_id))
+      add("UNCOVERED_SLICE", slice.slice_id);
+  if (violations.length > 0)
+    throw new EngineeringGateOwnershipError(
+      violations.sort((a, b) => {
+        const left = `${a.code}:${a.id}`;
+        const right = `${b.code}:${b.id}`;
+        return left < right ? -1 : left > right ? 1 : 0;
+      }),
+      truncated,
+    );
+  return Object.freeze({
+    criterion_ids: Object.freeze(
+      [...new Set(input.criteria.map((criterion) => criterion.criterion_id))].sort(),
+    ),
+    gate_ids: Object.freeze(
+      [...new Set(input.criteria.flatMap((criterion) => criterion.required_gate_ids))].sort(),
+    ),
+    target_ids: Object.freeze(
+      [...new Set(input.criteria.flatMap((criterion) => criterion.related_target_ids))].sort(),
+    ),
+  });
+}
+
 const verificationGateReceiptSchema = versionedContract({
   receipt_id: idString,
   case_id: idString,
@@ -242,6 +539,10 @@ const verificationGateReceiptSchema = versionedContract({
   duration_ms: z.int().nonnegative(),
   log_artifact: artifactReference.nullable(),
   log_digest: sha256Digest.nullable(),
+  test_evidence: testEvidence.optional(),
+  trusted_evaluator_binding: z
+    .strictObject({ evaluator_inputs_digest: sha256Digest, evaluated_tree_digest: sha256Digest })
+    .optional(),
 }).superRefine((receipt, ctx) => {
   if (receipt.outcome === VerificationGateOutcome.PASSED && receipt.exit_code !== 0) {
     ctx.addIssue({ code: "custom", path: ["exit_code"], message: "PASSED requires exit code 0" });
@@ -319,7 +620,81 @@ const verificationGateReceiptSchema = versionedContract({
       message: "a missing durable log must be classified as INFRASTRUCTURE",
     });
   }
+  if (
+    receipt.test_evidence !== undefined &&
+    receipt.outcome === VerificationGateOutcome.PASSED &&
+    receipt.test_evidence.failed_test_ids.length > 0
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["test_evidence", "failed_test_ids"],
+      message: "PASSED cannot contain failed tests",
+    });
+  }
+  if (
+    receipt.test_evidence !== undefined &&
+    receipt.outcome === VerificationGateOutcome.FAILED &&
+    receipt.test_evidence.failed_test_ids.length === 0
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["test_evidence", "failed_test_ids"],
+      message: "FAILED must contain a failed test",
+    });
+  }
 });
+
+export function assertTrustedEvaluatorReceiptEvidence(
+  definition: VerificationGateDefinition,
+  receipt: Pick<VerificationGateReceipt, "outcome" | "test_evidence" | "trusted_evaluator_binding">,
+): void {
+  const inputs = definition.trusted_evaluator_inputs;
+  if (inputs === undefined) {
+    if (receipt.trusted_evaluator_binding !== undefined)
+      throw new VerificationGateContractError("legacy gate cannot carry evaluator binding");
+    return;
+  }
+  const snapshot = validateTrustedEvaluatorInputs(inputs);
+  const binding = receipt.trusted_evaluator_binding;
+  const assertionOutcome =
+    receipt.outcome === VerificationGateOutcome.PASSED ||
+    receipt.outcome === VerificationGateOutcome.FAILED;
+  if (binding === undefined && !assertionOutcome) {
+    if (receipt.test_evidence !== undefined)
+      throw new VerificationGateContractError("unbound evaluator evidence cannot be retained");
+    return;
+  }
+  if (
+    binding === undefined ||
+    binding.evaluator_inputs_digest !== snapshot.digest ||
+    !sha256Digest.safeParse(binding.evaluated_tree_digest).success
+  )
+    throw new VerificationGateContractError("trusted evaluator binding mismatch");
+  if (receipt.outcome !== VerificationGateOutcome.PASSED && receipt.test_evidence === undefined)
+    return;
+  if (receipt.test_evidence === undefined)
+    throw new VerificationGateContractError("trusted evaluator evidence is missing");
+  const suites = new Map<string, string>();
+  for (const suite of receipt.test_evidence.expected_suite_ids) {
+    const parts = suite.split("/");
+    if (parts.length !== 2 || suites.has(parts[1]!))
+      throw new VerificationGateContractError("trusted evaluator suite mapping is ambiguous");
+    suites.set(parts[1]!, suite);
+  }
+  const observed = new Set<string>();
+  for (const raw of receipt.test_evidence.executed_test_ids) {
+    const parts = raw.replace(/\(\)$/u, "").split("/");
+    if (parts.length !== 2 && parts.length !== 3)
+      throw new VerificationGateContractError("trusted evaluator test identity is malformed");
+    const suite = parts.length === 2 ? suites.get(parts[0]!) : suites.get(parts[1]!);
+    if (suite === undefined || (parts.length === 3 && suite !== `${parts[0]}/${parts[1]}`))
+      throw new VerificationGateContractError("trusted evaluator test target cannot map");
+    observed.add(`${suite}/${parts.at(-1)!}`);
+  }
+  for (const required of snapshot.required_executed_test_ids)
+    if (!observed.has(required))
+      throw new VerificationGateContractError("trusted evaluator required test is missing");
+}
 
 /** Durable facts for exactly one gate, target tree and operation. */
 export const VerificationGateReceipt = verificationGateReceiptSchema;
@@ -366,11 +741,30 @@ function verificationGateFreezeDefinition(
     mutable_outputs: [...definition.mutable_outputs],
     required_test_paths: [...definition.required_test_paths],
     required_mutation_paths: [...definition.required_mutation_paths],
+    ...(definition.trusted_evaluator_inputs === undefined
+      ? {}
+      : {
+          trusted_evaluator_inputs: {
+            files: definition.trusted_evaluator_inputs.files.map((file) => ({ ...file })),
+            required_executed_test_ids: [
+              ...definition.trusted_evaluator_inputs.required_executed_test_ids,
+            ],
+            ...(definition.trusted_evaluator_inputs.layout === undefined
+              ? {}
+              : { layout: definition.trusted_evaluator_inputs.layout }),
+          },
+        }),
   };
   Object.freeze(snapshot.argv);
   Object.freeze(snapshot.mutable_outputs);
   Object.freeze(snapshot.required_test_paths);
   Object.freeze(snapshot.required_mutation_paths);
+  if (snapshot.trusted_evaluator_inputs !== undefined) {
+    snapshot.trusted_evaluator_inputs.files.forEach((file) => Object.freeze(file));
+    Object.freeze(snapshot.trusted_evaluator_inputs.files);
+    Object.freeze(snapshot.trusted_evaluator_inputs.required_executed_test_ids);
+    Object.freeze(snapshot.trusted_evaluator_inputs);
+  }
   return Object.freeze(snapshot);
 }
 
@@ -385,6 +779,13 @@ function verificationGateCommandDigest(definition: VerificationGateDefinition): 
     environment_profile: definition.environment_profile,
     network_profile: definition.network_profile,
     mutable_outputs: definition.mutable_outputs,
+    ...(definition.trusted_evaluator_inputs === undefined
+      ? {}
+      : {
+          evaluator_inputs_digest: validateTrustedEvaluatorInputs(
+            definition.trusted_evaluator_inputs,
+          ).digest,
+        }),
   });
 }
 
@@ -591,6 +992,13 @@ export function VerificationGateDeriveAggregate(
         `receipt references non-required gate: ${receipt.gate_id}`,
       );
     }
+    assertTrustedEvaluatorReceiptEvidence(definition, receipt);
+    if (definition.trusted_evaluator_inputs !== undefined) {
+      const { schema_version: _version, receipt_id: identity, ...fields } = receipt;
+      void _version;
+      if (identity !== verificationGateReceiptId(fields))
+        throw new VerificationGateContractError("evaluator aggregate receipt identity mismatch");
+    }
     if (receipt.target === VerificationGateTarget.BASELINE && !definition.baseline) {
       throw new VerificationGateContractError(
         `gate ${receipt.gate_id} does not permit a baseline receipt`,
@@ -708,12 +1116,12 @@ export function VerificationGateDeriveAggregate(
   });
 }
 
-const VERIFICATION_GATE_SCHEMA_DIGEST = canonicalDigest({
+export const VERIFICATION_GATE_SCHEMA_DIGEST = canonicalDigest({
   contract: "VerificationGateReceipt",
   schema_version: 1,
 });
 
-const verificationGateDescriptor = z
+export const verificationGateDescriptor = z
   .object({
     kind: z.literal("verification.gate.v1"),
     case_id: idString,
@@ -794,11 +1202,13 @@ export type VerificationGateExecutionResult =
       receipt: null;
     }>;
 
-function verificationGateOperationId(input: z.infer<typeof verificationGateDescriptor>): string {
+export function verificationGateOperationId(
+  input: z.infer<typeof verificationGateDescriptor>,
+): string {
   return `verification-gate-${canonicalDigest(input).slice("sha256:".length)}`;
 }
 
-function verificationGateReceiptId(
+export function verificationGateReceiptId(
   receipt: Omit<VerificationGateReceipt, "schema_version" | "receipt_id">,
 ): string {
   return `verification-receipt-${canonicalDigest(receipt).slice("sha256:".length)}`;
@@ -851,19 +1261,7 @@ export function VerificationGateValidateTestRun(
   ) {
     throw new VerificationGateContractError("platform run binding mismatch");
   }
-  const expectedReceiptDigest = canonicalDigest({
-    run_id: run.run_id,
-    scope: run.scope,
-    command_name: run.command_name,
-    phase: run.phase,
-    manifest_digest: run.manifest_digest,
-    outcome: run.outcome,
-    exit_code: run.exit_code,
-    signal: run.signal,
-    tree_digest_before: run.tree_digest_before,
-    tree_digest_after: run.tree_digest_after,
-    artifact_digest: run.artifact?.digest ?? null,
-  });
+  const expectedReceiptDigest = testRunReceiptDigest(run);
   if (run.receipt_digest !== expectedReceiptDigest) {
     throw new VerificationGateContractError("platform run receipt digest mismatch");
   }
@@ -985,6 +1383,10 @@ function assertDurableGateReceipt(
     duration_ms: receipt.duration_ms,
     log_artifact: receipt.log_artifact,
     log_digest: receipt.log_digest,
+    test_evidence: receipt.test_evidence,
+    ...(receipt.trusted_evaluator_binding === undefined
+      ? {}
+      : { trusted_evaluator_binding: receipt.trusted_evaluator_binding }),
   };
   if (receiptId !== verificationGateReceiptId(receiptFields)) {
     throw new VerificationGateContractError("durable gate receipt identity mismatch");
@@ -1051,6 +1453,10 @@ async function recoverDurableGateReceipt(
     throw new VerificationGateContractError("gate completion observation is not durable");
   }
   const receipt = VerificationGateReceipt.parse(recovered.completion.receipt);
+  const definition = input.catalog.get(receipt.gate_id);
+  if (definition === undefined)
+    throw new VerificationGateContractError("recovered gate is foreign");
+  assertTrustedEvaluatorReceiptEvidence(definition, receipt);
   assertDurableGateReceipt(receipt, expected);
   return {
     status: "RECORDED",
@@ -1133,6 +1539,8 @@ export async function executeVerificationGate(
   const now = input.now ?? (() => Date.now());
   const startedAt = now();
   let run: TestRun | null = null;
+  let evaluatedTreeDigest: string | undefined;
+  let evaluatorInputsDigest: string | undefined;
   let boundaryFailed = false;
   let boundaryErrorObserved = false;
   let commitError: unknown;
@@ -1161,8 +1569,15 @@ export async function executeVerificationGate(
         {
           authoritativeRoot: input.authoritative_root,
           mutableOutputs: definition.mutable_outputs,
+          ...(definition.trusted_evaluator_inputs === undefined
+            ? {}
+            : { trustedEvaluatorInputs: definition.trusted_evaluator_inputs }),
         },
-        async (disposableRoot) => {
+        async (disposableRoot, context) => {
+          if (context.authoritativeTreeDigest !== treeDigest)
+            throw new VerificationGateContractError("disposable source context mismatch");
+          evaluatedTreeDigest = context.disposableTreeDigest;
+          evaluatorInputsDigest = context.evaluatorInputsDigest;
           try {
             await control.commitOperationStarted(input.db, input.lease, { operationId });
           } catch (error) {
@@ -1198,7 +1613,7 @@ export async function executeVerificationGate(
             parsed = VerificationGateValidateTestRun(candidate, definition, {
               case_id: input.case_id,
               workspace_id: input.workspace_id,
-              tree_digest: treeDigest,
+              tree_digest: context.disposableTreeDigest,
             });
           } catch (error) {
             observeBoundaryError("RECEIPT_VALIDATION", error);
@@ -1209,10 +1624,39 @@ export async function executeVerificationGate(
         },
       );
       run = disposable.value;
+      if (definition.trusted_evaluator_inputs !== undefined) {
+        const expectedInputDigest = validateTrustedEvaluatorInputs(
+          definition.trusted_evaluator_inputs,
+        ).digest;
+        if (
+          disposable.evidence.evaluatorInputsDigest !== expectedInputDigest ||
+          evaluatorInputsDigest !== expectedInputDigest ||
+          evaluatedTreeDigest !== disposable.evidence.disposableTreeDigestBefore
+        ) {
+          boundaryFailed = true;
+          observeBoundaryError(
+            "DISPOSABLE_EVIDENCE",
+            new VerificationGateContractError(
+              "trusted evaluator binding or selected tests mismatch",
+            ),
+          );
+        }
+        if (!boundaryFailed)
+          assertTrustedEvaluatorReceiptEvidence(definition, {
+            outcome: gateOutcomeFor(run),
+            test_evidence: run.test_evidence,
+            trusted_evaluator_binding: {
+              evaluator_inputs_digest: expectedInputDigest,
+              evaluated_tree_digest: disposable.evidence.disposableTreeDigestBefore,
+            },
+          });
+      }
       if (
         disposable.evidence.authoritativeTreeDigestBefore !== treeDigest ||
         disposable.evidence.authoritativeTreeDigestAfter !== treeDigest ||
-        disposable.evidence.disposableTreeDigestBefore !== treeDigest
+        (definition.trusted_evaluator_inputs === undefined
+          ? disposable.evidence.disposableTreeDigestBefore !== treeDigest
+          : disposable.evidence.evaluatorInputsDigest === undefined)
       ) {
         boundaryFailed = true;
         observeBoundaryError(
@@ -1249,12 +1693,27 @@ export async function executeVerificationGate(
     duration_ms: run?.duration_ms ?? Math.max(0, now() - startedAt),
     log_artifact: logArtifact,
     log_digest: logArtifact?.digest ?? null,
+    test_evidence:
+      definition.trusted_evaluator_inputs !== undefined && boundaryFailed
+        ? undefined
+        : run?.test_evidence,
+    ...(boundaryFailed || definition.trusted_evaluator_inputs === undefined
+      ? {}
+      : evaluatorInputsDigest === undefined || evaluatedTreeDigest === undefined
+        ? {}
+        : {
+            trusted_evaluator_binding: {
+              evaluator_inputs_digest: evaluatorInputsDigest,
+              evaluated_tree_digest: evaluatedTreeDigest,
+            },
+          }),
   };
   const receipt = VerificationGateReceipt.parse({
     schema_version: 1,
     receipt_id: verificationGateReceiptId(receiptFields),
     ...receiptFields,
   });
+  assertTrustedEvaluatorReceiptEvidence(definition, receipt);
 
   try {
     const completionId = await input.jobs.recordCompletion(input.db, {

@@ -21,7 +21,7 @@ export async function discoverAllowedConfig(port: PlannerReadPort): Promise<Plan
       const result = await port.config({ relative_path: relativePath });
       entries.push(...result.entries);
     } catch (error) {
-      if (error instanceof DiscoveryPolicyError && error.code === "DISCOVERY_FAILED") continue;
+      if (error instanceof DiscoveryPolicyError && error.code === "FILE_NOT_FOUND") continue;
       throw error;
     }
   }
@@ -29,7 +29,11 @@ export async function discoverAllowedConfig(port: PlannerReadPort): Promise<Plan
   try {
     workflowEntries = await port.tree({ relative_path: ".github/workflows" });
   } catch (error) {
-    if (!(error instanceof DiscoveryPolicyError && error.code === "DISCOVERY_FAILED")) throw error;
+    if (!(
+      error instanceof DiscoveryPolicyError &&
+      (error.code === "DISCOVERY_FAILED" || error.code === "FILE_NOT_FOUND")
+    ))
+      throw error;
   }
   const workflowPaths = (workflowEntries?.entries ?? [])
     .filter(
