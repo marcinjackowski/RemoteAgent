@@ -1,6 +1,5307 @@
 # RA-055 — work units
 
+Checkpoint 2026-09-28: właściciel jawnie autoryzował commit wszystkich zmian
+i push do repo. Aktualny stan oraz następne kroki iOS:
+[ENGINEERING_CURRENT_STATUS](../../ENGINEERING_CURRENT_STATUS.md).
+To checkpoint pracy, nie zamknięcie RA-055. Starsze zakazy częściowego commita
+i snapshoty dirty tree poniżej są historią sprzed tej zgody.
+
 Baseline: `b4fb467e929fa06193d6bb881856a1d4c0daf9a0`.
+
+## Aktualna nawigacja — 2026-09-09
+
+### Najnowszy wynik wiring i następny krok
+
+#### Aktywny cel — kontrolowany pilot (ADR-0030)
+
+**CEL PILOTA OSIĄGNIĘTY 2026-09-15: LIVE07 COMPLETED, exit0/session37610.**
+Nie uruchamiać następnego automatycznego smoke'a; przechodzimy do świadomego
+użycia pilota i logowania kolejnych zadań zgodnie z runbookiem. To nie DONE
+RA-055 ani zgoda na testy iOS/UI/głosu, push lub częściowy root commit.
+
+run_9cf5c936-a393-4e2d-92a0-c0829c8096be,
+case_0f2e8d2c-a580-4ecd-9614-1fcc73d6edb0,
+database ra_pilot_157fbfda12fc40898071cc6f94cbddb9,
+job_82da6d2e-8d14-4e5b-92df-04c176e4a77d.
+Commit0515c519e5a8d41335df5588c7f3c843ae9b0184, parent9ea6192d08196345c94c2466da928afa8dc7c47c.
+Root /Users/marcinjackowski/.remoteagent/engineering-pilot-smoke-Ph1BPS;
+worktree workspaces/case_0f2e8d2c-a580-4ecd-9614-1fcc73d6edb0/engineering-42bc92e9523a3d308b40ff7e244dbfa4;
+result runs/pilot-live-07/result.json; journal basename
+engineering-e591624df7677c290bef27276dd000d6970ba17bd469a1729608f79339b8933b.
+Gate PASSED/exit0, reviewPASS, finalVERIFIED,1localcommit, źródło niezmienione.
+128826tokens/9responses,111.266s, wszystkie4role gpt-5.6-sol subscription.
+Estymata100k–300k zachowana; kampania687053tokens/7prób/1ukończone.
+
+Primary odczytał pełny2plikowy diff, stanGit/rodzica/sourceHEAD, rzeczywisty
+VerificationDecision i LocalCommitReceipt z DB. Własny tsx odczytał trwałe
+rows/operationcompletion, uruchomił projectAcceptedLocalCommit oraz
+observeEngineeringLiveCommit, następnie niezmieniony oracle5assertions oraz
+clamp.test.mjs przez produkcyjny runProcess/networkDENY: exit0/session93538.
+Log: prywatny pilot-live-07-primary-verification.log;1accepted slice,
+1commandreceipt, exact provenance/Gittrue, oracle/regressions exit0.
+CLI status również exit0; jego UNPROJECTED i stare PENDING checklisty nie są
+werdyktem końcowym (jawna uwaga runbooku). Wszystkie wyniki zachowane.
+
+Przed07 primary125tests execution exit0/11.30s, /tmp/pilot07-primary-focused.log.
+PEŁNA bramka44066 exit0:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`.
+3846passed/2jawne opt-in skips,273pliki,241.13s,build29/typecheck46 Cached0,
+workflow55OK. Log /tmp/pilot07-primary-full-gate.log.
+Execution SHA256b1a4dcf2921ee65445e047d607294fa303a5653b2b408c0effce43343838e0a2.
+Wszystkie starsze instrukcje 'następny live' poniżej są historyczne.
+
+Zamierzony stan WIP przy końcu celu pilota: poniższe pliki obejmują wcześniejszą
+pracę RA-055 i nowe naprawy. Zachować wszystkie; nie są śmieciami do cleanupu.
+Nie wykonano częściowego root commita ani push. Snapshot2026-09-15:
+
+```text
+ M apps/agent-worker/src/engineering-debug-journal.ts
+ M apps/agent-worker/src/engineering-execution.ts
+ M apps/agent-worker/src/engineering-live-qualification.ts
+ M apps/agent-worker/src/engineering-workflow.ts
+ M apps/agent-worker/src/handlers.ts
+ M apps/agent-worker/src/vertical-slice-executor.ts
+ M apps/agent-worker/src/worker.ts
+ M apps/agent-worker/src/xcode-gate-adapter.ts
+ M apps/agent-worker/test/context.integration.test.ts
+ M apps/agent-worker/test/engineering-cross-fence-coordinator.integration.test.ts
+ M apps/agent-worker/test/engineering-debug-journal.test.ts
+ M apps/agent-worker/test/engineering-execution.integration.test.ts
+ M apps/agent-worker/test/engineering-live-ios.integration.test.ts
+ M apps/agent-worker/test/engineering-live-qualification.test.ts
+ M apps/agent-worker/test/engineering-qualification-adversarial.integration.test.ts
+ M apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts
+ M apps/agent-worker/test/engineering-qualification-control.integration.test.ts
+ M apps/agent-worker/test/engineering-qualification-fixture.ts
+ M apps/agent-worker/test/engineering-qualification-recovery.integration.test.ts
+ M apps/agent-worker/test/engineering-workflow.integration.test.ts
+ M apps/agent-worker/test/role-context.test.ts
+ M apps/agent-worker/test/vertical-slice-e2e.integration.test.ts
+ M apps/agent-worker/test/vertical-slice-executor.integration.test.ts
+ M apps/agent-worker/test/xcode-gate-adapter.integration.test.ts
+ M docs/audits/CROSS_TASK_FINDINGS.md
+ M docs/decisions/README.md
+ M docs/work-units/RA-055/WORK_UNITS.md
+ M package.json
+ M packages/agent-orchestrator/src/engineering/workflow.ts
+ M packages/agent-orchestrator/src/supervisor/runtime.ts
+ M packages/agent-orchestrator/test/engineering-workflow-runtime.test.ts
+ M packages/bedrock-runtime/test/tool-loop.test.ts
+ M packages/contracts/src/engineering-workflow.ts
+ M packages/contracts/src/planner-port.ts
+ M packages/contracts/test/__snapshots__/schema-snapshot.test.ts.snap
+ M packages/contracts/test/engineering-workflow.test.ts
+ M packages/implementation-tools/src/read-tools.ts
+ M packages/implementation-tools/src/toolset.ts
+ M packages/implementation-tools/test/read-tools.test.ts
+ M packages/implementation-tools/test/toolset.integration.test.ts
+ M packages/model-provider-codex-cli/src/invocation.ts
+ M packages/model-provider-codex-cli/test/preflight.test.ts
+ M packages/model-provider-codex-cli/test/transport.test.ts
+ M packages/model-runtime/src/process-runner.ts
+ M packages/model-runtime/src/tool-loop.ts
+ M packages/model-runtime/test/process-runner.test.ts
+ M packages/repository-planner/src/config-discovery.ts
+ M packages/repository-planner/src/discovery-policy.ts
+ M packages/repository-planner/src/index.ts
+ M packages/repository-planner/src/read-tools.ts
+ M packages/repository-planner/test/config-discovery.test.ts
+ M packages/repository-planner/test/read-tools.test.ts
+ M packages/review-loop/src/contracts.ts
+ M packages/review-loop/src/pre-commit.ts
+ M packages/review-loop/test/pre-commit.integration.test.ts
+ M packages/review-loop/test/review.integration.test.ts
+ M packages/test-evidence/src/contracts.ts
+ M packages/test-evidence/src/disposable-workspace.ts
+ M packages/test-evidence/src/engineering-gates.ts
+ M packages/test-evidence/src/index.ts
+ M packages/test-evidence/test/disposable-workspace.integration.test.ts
+ M packages/test-evidence/test/engineering-gates.integration.test.ts
+ M packages/test-evidence/test/engineering-gates.test.ts
+ M packages/test-evidence/test/evidence.integration.test.ts
+ M packages/workspace-runner/src/network-policy.ts
+ M packages/workspace-runner/test/network-policy.test.ts
+ M test/engineering-approval-ingress/engineering-approval-ingress.integration.test.ts
+?? apps/agent-worker/src/engineering-accepted-commit.ts
+?? apps/agent-worker/src/engineering-commit-observation.ts
+?? apps/agent-worker/src/engineering-context-fragments.ts
+?? apps/agent-worker/src/engineering-pilot.ts
+?? apps/agent-worker/src/engineering-repair-context.ts
+?? apps/agent-worker/test/engineering-commit-provenance.test.ts
+?? apps/agent-worker/test/engineering-context-fragments.test.ts
+?? apps/agent-worker/test/engineering-final-verification-stage.test.ts
+?? apps/agent-worker/test/engineering-live-accepted-commit.test.ts
+?? apps/agent-worker/test/engineering-live-accepted-commit.ts
+?? apps/agent-worker/test/engineering-live-accepted-gates.test.ts
+?? apps/agent-worker/test/engineering-live-accepted-gates.ts
+?? apps/agent-worker/test/engineering-live-accepted-slice-gates.test.ts
+?? apps/agent-worker/test/engineering-live-accepted-slice-gates.ts
+?? apps/agent-worker/test/engineering-live-commit-observation.test.ts
+?? apps/agent-worker/test/engineering-live-commit-observation.ts
+?? apps/agent-worker/test/engineering-live-full-flow-common-contract.test.ts
+?? apps/agent-worker/test/engineering-live-full-flow-common-contract.ts
+?? apps/agent-worker/test/engineering-live-full-flow-evaluators.test.ts
+?? apps/agent-worker/test/engineering-live-full-flow-evaluators.ts
+?? apps/agent-worker/test/engineering-live-full-flow-precheck.test.ts
+?? apps/agent-worker/test/engineering-live-full-flow-precheck.ts
+?? apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts
+?? apps/agent-worker/test/engineering-live-full-flow-profile-contract.ts
+?? apps/agent-worker/test/engineering-live-full-flow-repair-authority.test.ts
+?? apps/agent-worker/test/engineering-live-legacy-contract.test.ts
+?? apps/agent-worker/test/engineering-live-legacy-contract.ts
+?? apps/agent-worker/test/engineering-live-profile.test.ts
+?? apps/agent-worker/test/engineering-live-profile.ts
+?? apps/agent-worker/test/engineering-live-text-profile.test.ts
+?? apps/agent-worker/test/engineering-model-usage-limit.test.ts
+?? apps/agent-worker/test/engineering-pilot.integration.test.ts
+?? apps/agent-worker/test/engineering-pilot.test.ts
+?? apps/agent-worker/test/engineering-planning-feasibility.test.ts
+?? apps/agent-worker/test/engineering-planning-test-scope.test.ts
+?? apps/agent-worker/test/engineering-request-budget.test.ts
+?? apps/agent-worker/test/engineering-stage-error.test.ts
+?? apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts
+?? docs/architecture/ENGINEERING_LOOP_DIAGRAM.pdf
+?? docs/audits/ENGINEERING_LOOP_TECHNICAL_AUDIT_2026-09-05.md
+?? docs/decisions/ADR-0017-engineering-evidence-identity-and-outcomes.md
+?? docs/decisions/ADR-0018-typed-engineering-gate-failures.md
+?? docs/decisions/ADR-0019-non-vacuous-xcode-test-evidence.md
+?? docs/decisions/ADR-0020-benchmark-bound-slices-and-planned-context.md
+?? docs/decisions/ADR-0021-gate-correction-candidate-authority.md
+?? docs/decisions/ADR-0022-typed-review-correction-target-authority.md
+?? docs/decisions/ADR-0023-failed-mutation-recovery-target-continuity.md
+?? docs/decisions/ADR-0024-measured-compiler-repair-context-budget.md
+?? docs/decisions/ADR-0025-xcode-qualification-evidence-boundary.md
+?? docs/decisions/ADR-0026-trusted-evaluator-disposable-inputs.md
+?? docs/decisions/ADR-0027-isolated-xcode-ui-harness-inputs.md
+?? docs/decisions/ADR-0028-explicit-full-flow-benchmark-profile.md
+?? docs/decisions/ADR-0029-text-alert-qualification-scope.md
+?? docs/decisions/ADR-0030-controlled-engineering-pilot.md
+?? docs/work-units/RA-055/ENGINEERING_COMPLETION_PLAN.md
+?? docs/work-units/RA-055/ENGINEERING_FINISH_PLAN.md
+?? docs/work-units/RA-055/ENGINEERING_PILOT_RUNBOOK.md
+?? packages/test-evidence/src/trusted-evaluator-inputs.ts
+?? packages/test-evidence/test/trusted-evaluator-inputs.test.ts
+?? scripts/docs/render-engineering-loop-pdf.swift
+?? scripts/engineering/pilot.ts
+?? test/engineering-evals/behavioral-oracle.test.ts
+?? test/engineering-evals/behavioral-oracle.ts
+?? test/engineering-evals/budget-recovery.test.ts
+?? test/engineering-evals/catalog.test.ts
+?? test/engineering-evals/fixtures/synthetic-manifest.json
+?? test/engineering-evals/lexical-oracle-regression.test.ts
+?? test/engineering-evals/repair-context.test.ts
+```
+
+LIVE06 session6398 exit1/BLOCKED, run_ba9d1c83-26d6-4411-ab0a-5eff20a2ff21,
+case_4f4ef2bb-c2c3-416f-8d82-32786174601f,
+database ra_pilot_6afdc71ba02e43548f2c91c74a59c476.
+65112tokens/4responses,42.190s, model zakończył po samym teście. Oracle
+słusznie FAILED (-5 !=0), zero review/commit. Kampania558227tokens/6prób.
+Nie repurpose required_mutation_paths: schema definiuje je jako kandydatów
+KOREKTY po diagnostyce, nie initial all-of. Primary odrzucił taki pomysł.
+W promptcie 'After first patch ... or return' oraz odmowa tylko pustego reportu
+nie wyjaśniają dostatecznie, że test-first nie kończy source-fix objective.
+Następny bounded fix: precyzyjne initial completion guidance w
+engineering-execution.ts (prompt+version), actual request-capture test,
+bez nowych guardów/authority i bez zmian compiler correction semantics.
+Następnie focused/full gate i nowy LIVE07, wszystkie06artefakty zachować.
+
+Przed06 primary:63tests/3files exit0 i strict nowego testu exit0;
+/tmp/pilot06-primary-focused.log i /tmp/pilot06-primary-strict.log.
+PEŁNA bramka10280 exit0,3846passed/2opt-in skips,273pliki,245.67s,
+build29/typecheck46 Cached0,workflow55OK; /tmp/pilot06-primary-full-gate.log.
+Workflow SHA25644ff55d989168151853b3cd71c0b2751f5983b6a02c2a9e7674ac0b046b5d6fb.
+
+LIVE05 session77829 exit1, run_0db17894-189f-46cf-897f-f238ada98690,
+case_155d0681-b6f2-4fcf-8a11-40d87dfcc96d,
+database ra_pilot_c11734359f0a4b6f9bfe0271aeb59a9b.
+128725tokens/9responses,114.418s. Gate PASSED exit0, review PASS;
+FINAL_VERIFICATION INCONCLUSIVE: verifier wymagał przyszłego localcommit
+oraz niezależnego dowodu test-first mutation chronology. Primary odczytał
+rzeczywisty VerificationDecision z DB. Test-first-evidence w EvidenceBundle
+oznacza baseline/current gates, nie chronologię mutacji; chronologię wymusza
+tool boundary. Następny krok: prompt final verifier określa etap PRE-COMMIT,
+oddziela code-owned lifecycle od kryteriów produktu; bez autoVERIFIED i bez
+pomijania brakujących wymaganych dowodów produktu. Allowed source prompt/version
+w engineering-workflow.ts i nowy engineering-final-verification-stage.test.ts;
+gate request-capture + zachowanie INCONCLUSIVE, pełna bramka, nowy LIVE06.
+Kampania493115tokens/5prób/0commit, nadal brak zielonego pilota.
+
+Przed05 sandbox fix primary: realny import ESM + ordinary positive controls
+dla sibling read/stat i ancestor listing,2/2 exit0. Mutacje: brak metadata,
+ancestor read-data, metadata subpath — każda exit1; przywrócono literal params.
+Logi /tmp/pilot05-{metadata,ancestor-data,ancestor-scope}-red.log. Rzeczywisty
+sandbox oracle: seed exit1, zachowany candidate04 exit0 (diagnostic only),
+/tmp/pilot05-primary-sandbox-oracle.log. PEŁNA bramka85134 exit0:3845testów,
+2jawne opt-in skips,230.30s,build29/typecheck46 Cached0,workflow55OK.
+Log /tmp/pilot05-primary-full-gate.log. Sandbox source SHA256
+2f8e0c0994ece81cfd6b90a16b75d9935b17e29793b4667c998fa9f6ad02c8e5.
+
+LIVE04 BLOCKED (CLI exit1/session18445):107573tokens/6responses,70.822s,
+run_d5f6bd65-12a8-476c-8e68-309aef812abe, case_dfa344a7-8c7f-4a76-9c14-eaf388ed5d84,
+database ra_pilot_6a5a96797d6b47efb272645adc71bb50.
+Prawidłowy test-first i2zmienione pliki; gate exit1 przez Node ESM EPERM lstat,
+nie błąd funkcji. Primary przeczytał cały diff, uruchomił identyczny5-assertion
+oracle oraz dodany clamp.test.mjs POZA sandboxem diagnostycznie: exit0.
+To nie zastępuje produkcyjnej bramki ani nie kwalifikuje pilota. Kandydat,
+źródło i logi niezmienione. Journal basename
+engineering-f7ebae93b0a16b870ccc1e2c4188c6bd5a09d6537ee2dddceda458dedae770b0.
+Kampania364390tokens/4próby/0commit. Następny krok: realny reproducer Node
+import w sandboxie i ograniczona naprawa metadata ancestors, bez poszerzania
+file-read-data/network. Allowed paths: workspace-runner/src/network-policy.ts
+oraz jego test; gate realny network-policy test + mutation + pełna bramka.
+
+2026-09-15: LIVE03 FAILED, session4640 exit1, run
+`run_78616599-f13a-4275-9d7b-331e561a763c`, case
+`case_d8c1c63b-beec-424d-85eb-1294d41468e3`, database
+`ra_pilot_cd22d3e8e2eb48ad971707fca2c61001`. 103472 tokens/7 responses,
+81.765s, dwa TEST_FIRST_MUTATION_REQUIRED, zero mutations/gates/commit.
+Journal basename engineering-22d97f0c9b20089fdde997eca2a361f3ffc6a742d90d2537e8a49a12c297d431.
+Sprzeczność przygotowanego smoke taska: source-only kontra globalny test-first.
+Nowy task-v2.md zezwala na source+istniejący test już obecne w config scope,
+wymaga zachowania merytorycznych regresji. Bez zmian runtime ani oracle.
+To korekta własnego smoke fixture, nie zmiana zadania SonderMind. Stary task
+i wszystkie próby zachowane. Kampania dotąd256817 tokens/3FAILED/0commit.
+
+Przed03 primary: 23testy integracyjne exit0; usunięcie allowance receiptPaths
+dało2 failures, a zastąpienie receiptPaths przez reportedPaths dało ghost-claim
+failure (oba exit1). Restore i PEŁNA bramka session59962 exit0:
+3844passed/2jawne opt-in skips,272pliki,247.90s, build29/typecheck46 Cached0,
+workflow55OK. Log /tmp/pilot03-primary-full-gate.log; mutation logs
+/tmp/pilot03-restoration-red.log i /tmp/pilot03-ghost-red.log.
+Vertical source SHA25648ee98b2c20b1cfeb726b54a2d7acdbe1112bafe82a5e806da5c5e1864d4cf0f.
+Następny krok: nowy admission/live04 z task-v2, nie ponawiać03 w miejscu.
+
+LIVE02 FAILED, session `39522` exit1: 131242 tokeny/9 odpowiedzi, bez gates,
+review i commita. Poprawny końcowy diff obejmuje tylko clamp.mjs. Model
+zmienił test i przywrócił jego oryginalne bajty; receipt-backed report zachował
+historię obu ścieżek, którą normalizacja odrzuciła. Naprawa w toku: dopuścić
+nadmiarowy claim wyłącznie z udanym receiptem tej samej próby, a wynik nadal
+ograniczyć do rzeczywistego delta. Wymagana regresja restore+source, mutation
+RED/GREEN, pełna bramka i nowy LIVE03. Kampania pilota dotąd153345 tokenów,
+2 FAILED,0 commitów; nie jest jeszcze gotowa. Wszystkie stare dane zachowane.
+
+Tożsamość LIVE02 po naprawie prompt v5:
+run `run_dde4dd48-4e88-437d-8a4a-57bf0ad1065a`,
+case `case_0ddc14d1-5d10-4c46-976e-5e9f3faf58d1`,
+database `ra_pilot_c04d9d2dd94c4abbbbe2f1f51c27a17d`.
+Ten sam prywatny root, `runs/pilot-live-02`, frozen pilot-live-02-admission.json.
+Journal basename `engineering-b5518cf9409f8d492d46f1a0c6cb12d2c32d422ea25082556bf3459479d55692`.
+Kod/config/model/task/source zamrożone podczas live; nie interweniować w worktree.
+
+Primary po odrzuceniu source-text testu Luny wykonał rzeczywiste capture
+requestu dla SLICE_PLANNING i PROGRAM_DESIGN oraz odtworzenie dokładnego błędu
+LIVE01 bez automatycznego poszerzenia scope. Focused gate exit0:65 testów/3pliki,
+17.04s, `/tmp/pilot02-primary-planning-green.log`; strict nowego testu exit0.
+Następnie PEŁNA bramka taska session11846 exit0, bez skrótów:
+3842passed/2 opt-in live skipped,272pliki passed/2skipped,230.51s.
+Build29/typecheck46 Cached0; workflow55 OK; `/tmp/pilot02-primary-full-gate.log`.
+Workflow source SHA256 `92d9bb971a254215c01c83800c72b40806e4abe2ecb9cb4e7f97a375406fbdcb`.
+Seed nadal czysty; wszystkie raw hash config/task/models ponownie identyczne.
+
+Najnowszy wynik: pilot LIVE01 zakończył się exit `1`, FAILED, bez mutations,
+gates, review i commita. 22103 provider-reported tokens,2 odpowiedzi DESIGNER,
+33.153s. Scope zachowany, source nadal czysty, baza/journal/result zachowane.
+Nowe logowanie ujawniło dokładną przyczynę:
+`SLICE_PLANNING / StructuredContractOutputError / TRANSPORT_ERROR /
+STRUCTURED_SCHEMA_INVALID:custom:test_paths.0`.
+To nie jest brak loginu ani quota. `validateSliceScope` wymaga test_paths
+zawartych w allowed_paths, ale prompt mówił wybierać tylko modyfikowane pliki,
+a objective wymagał edycji tylko clamp.mjs. Oddzielny istniejący test plik
+clamp.test.mjs wymaga wymienienia w scope, nie edycji.
+Naprawa: doprecyzować tę istniejącą regułę w promptach obu etapów planowania,
+bump prompt v4→v5, test requestu z rozłącznym source/test file i zachowana
+odmowa niepoprawnego kontraktu. Bez zmiany schematu, automatycznego rozszerzania
+scope ani usuwania historii. Po lokalnej weryfikacji i pełnej bramce nowy
+izolowany run02; nie powtarzać01 w miejscu. Pilot nadal bez zielonego światła.
+
+LIVE pilot01 uruchomiony po pełnej bramce: session `72082`,
+run `run_7d3b4f93-9817-46a1-9886-6172dd3683b5`,
+case `case_cf8b6c8d-bd98-4b63-9fe9-d7cf7bfeb1ff`.
+Root `/Users/marcinjackowski/.remoteagent/engineering-pilot-smoke-Ph1BPS`,
+run-dir `runs/pilot-live-01`; frozen `pilot-live-01-admission.json`.
+Journal `artifacts/engineering-debug/engineering-344ec16ff9c7fa336882ba2566f2c1468203763172d81f857b6c08b2441cae4e.jsonl`.
+CLI status podczas działania exit `0`, stage SLICE_PLANNING, cancel=false.
+Pierwsza odpowiedź potwierdza Codex0.153.3/gpt-5.6-sol, usage10689; bez fallback.
+Nie zmieniać kodu ani konfiguracji podczas tej próby; zachować wszystkie artefakty.
+
+Pełna bramka primary session `66344`, exit `0`:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force &&
+pnpm workflow:validate && git diff --check`.
+3839 passed/2 jawne opt-in live skipped; 271 plików passed/2 skipped,255.67s.
+Build29/typecheck46, Cached0; workflow55 OK. Log od formatowania:
+`/tmp/pilot-primary-full-gate.log`. Pierwsza próba bramki zatrzymała się na
+unused `_signal` w nowym request-budget test; naprawiono samą asercję testu,
+potem wykonano CAŁĄ bramkę powyżej. Nie jest to flaky test ani pominięcie lint.
+Przed live canonical config validation i seed oracle wykonane ponownie:
+preflight exit0, rzeczywisty niepoprawny seed oracle exit1.
+
+Checkpoint pilota: primary przywrócił wszystkie mutacje i wykonał
+`RA_REQUIRE_POSTGRES=1 pnpm exec vitest run` dla engineering-pilot(.integration),
+engineering-debug-journal, engineering-model-usage-limit, engineering-request-budget,
+engineering-execution.integration, engineering-live-accepted-commit,
+engineering-live-commit-observation i engineering-stage-error: exit `0`,
+236 testów/9 plików, 16.70 s; `/tmp/pilot-primary-restored-all-green.log`.
+Strict tsc ES2023/NodeNext/noEmit/strict/exactOptionalPropertyTypes dla nowych
+testów i CLI exit `0`; `/tmp/pilot-primary-restored-strict.log`.
+Nowy alias `pnpm engineering:pilot`; instrukcja w ENGINEERING_PILOT_RUNBOOK.md.
+Pełna bramka i prawdziwy live nadal wymagane; nie deklarować zielonego pilota.
+
+Własne mutation checks primary (wszystkie exit `1`, następnie restore i
+powyższy GREEN): brak approval/source/scope/observation — 7 czerwonych testów,
+w tym 6 wywołań modelu zamiast0 bez approval i fałszywe ukończenie bez Git
+observation; `/tmp/pilot-primary-admission-observation-red.log`. Lock wx→w:
+2 dispatch zamiast1, `/tmp/pilot-primary-lock-red.log`. Stop bez trwałego zapisu:
+cancel flag false zamiasttrue, `/tmp/pilot-primary-stop-red.log`. URL kierowany
+do postgres zamiast ra_pilot: `/tmp/pilot-primary-db-red.log`; ta mutacja była
+uruchamiana wyłącznie w unit test bez operacji DB. Restored pilot source SHA256
+`16f0dcfac45fbcd1cabd5459833a7ef3840ce419acf5ee4e33efede6c8449472`.
+
+Primary domknął niepełne zmiany Luny: outer DB lifecycle, fizyczne ścieżki,
+blokada pojedynczego pilota per workspace root, heartbeat i job completion,
+aktualny status z authoritative control/trace zamiast pustej lub starej
+projekcji, raport błędu z prawdziwym runId i zweryfikowanym rodzicem commita.
+Testy obejmują aktywny stop/oba sygnały, brak modelu przy odmowie, symlink scope,
+setup failure, zachowanie źródła i dokładne Git observation. Nowy stage error
+journal zachowuje kod przyczyny zamiast tylko zewnętrznego wyjątku handlera.
+Nie zapisuje message/stack/CoT. Tiny pilot używa SMALL dla pojedynczego modułu;
+nie udaje wielomodułowego projektu, nie omija wymogów jego klasy.
+
+Rzeczywista przyczyna początkowego zatrzymania: bare UUID nie spełniał reguły
+opaque ID zaczynającego się literą; użyto case_/owner_ prefix. Następnie fixture
+SMALL dopasowano do tiny single-module policy; MEDIUM wymaga co najmniej2
+blueprints. Sugestia dodania drugiego writer lease była błędna: produkcyjny
+createImplementerHandler już przekazuje istniejący lease przez resume(true).
+Wszystkie tymczasowe console diagnostics zostały usunięte i package przebudowany.
+
+Aktualny prywatny seed SHA `9ea6192d08196345c94c2466da928afa8dc7c47c`, source
+czysty. Raw config SHA256 c5cabde83a987f15a3722e0dd901a0c91808395f0d839a3dd941e5d98b49ad93;
+task SHA256 663aa3f1c77708cdd0aa760ee4cde68372820438e549d20fdd0be3667b238314.
+Plan nowego tiny live: jedna próba, estymata 100k–300k tokenów (szacunek, nie
+gwarancja), limity bez zmian. Modele nadal jawne gpt-5.6-sol/subskrypcja.
+Nie wykonano jeszcze żadnego nowego provider call. WIP nadal zamierzony;
+bez root commit/push, bez naruszania źródeł iOS.
+
+Właściciel zaakceptował wykonanie planu pilota bez dalszych potwierdzeń.
+HEAD nadal `ce9b2ff62e3c947c72c0fafca47d192af983ce98`; zachować cały istniejący
+dirty WIP i wszystkie wyniki iOS. Pilot to oddzielna bramka użytkowa, nie
+przepisanie wcześniejszych porażek MOBL-2023 ani deklaracja DONE RA-055.
+
+Kroki:
+
+1. Request-aware admission: pełny serializowalny request, konserwatywna rezerwa
+   co najmniej jak obecna rola/korekta, liczby w journalu bez content, brak
+   dispatch przy niewystarczającym budżecie. Allowed paths:
+   `apps/agent-worker/src/engineering-debug-journal.ts` i jego celowane testy.
+   Gate po env.sh: `RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+   apps/agent-worker/test/engineering-debug-journal.test.ts
+   apps/agent-worker/test/engineering-model-usage-limit.test.ts` oraz nowy test
+   request budget; strict tsc, własne mutation RED/restore/GREEN primary.
+2. Minimalny uruchamialny pilot na istniejącym production composition.
+   Allowed paths osobnego implementera: nowe
+   `apps/agent-worker/src/engineering-pilot.ts`, `scripts/engineering/pilot.ts`,
+   `apps/agent-worker/test/engineering-pilot.test.ts`; primary owns package.json
+   i dokumentację. Nie dotyka równoległego writer scope debug-journal.
+   CLI run/status/stop: deployment config i model config są owner-controlled,
+   task-file jako OWNER/UNTRUSTED_DATA. Osobna zachowana baza ra_pilot_UUID,
+   repository APIs/approval ingress grant/exact job lease, produkcyjny handler
+   i runtime port, istniejący invocation journal runner. Stop przez istniejący
+   EngineeringStopIngressRepository; brak zewnętrznych integracji.
+   Gate: po env.sh `RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+   apps/agent-worker/test/engineering-pilot.test.ts`, strict tsc i własne
+   negatywne kontrole primary przed live. Pilot dopuszcza wyłącznie wymagane
+   HERMETIC/DENY Node gates; nie zastępuje profilu Xcode.
+3. Własna weryfikacja stop/error/report i pełna forced bramka; rzeczywisty
+   smoke dopiero po lokalnej kwalifikacji. Udokumentowana komenda uruchomienia
+   użytkownika i jawne ograniczenia. Nie wracać do voice ani poprawiania UI.
+
+Step1 locally VERIFIED: primary command after env.sh:
+`RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-debug-journal.test.ts
+apps/agent-worker/test/engineering-model-usage-limit.test.ts
+apps/agent-worker/test/engineering-request-budget.test.ts
+apps/agent-worker/test/engineering-execution.integration.test.ts`, exit `0`,
+173 tests/4 files, 11.69 s; `/tmp/pilot-primary-budget-restored.log`.
+Strict tsc nowego testu (ES2023/NodeNext, strict/exactOptionalPropertyTypes) `0`.
+Primary uzupełnił brakujące po raporcie Luny positive delegate control,
+120000-remaining correction floor refusal, duże tools/schema i invalid floors.
+Mutation: helper zwracał tylko floor, a realny delegate został wywołany1
+zamiast0; exit `1`, `/tmp/pilot-primary-budget-mutation-red.log`. Restore
+SHA256 debug-journal `1a2cf52085d9766f857dc4a1d1e38ffb24b22c83ad9ce181e0a564c546372df3`.
+W journalu dokładnie jedna admission decision z rzeczywistymi liczbowymi
+request_bytes/reserved_tokens/accounted_tokens; summary pokazuje jej rezerwę.
+Bez zmiany limitów, bez raw request content i bez obietnicy dokładnego hard cap.
+
+Step2 doprecyzowanie allowed paths: czyste funkcje odbioru commita przenoszone
+z test/engineering-live-accepted-commit.ts i test/engineering-live-commit-observation.ts
+do src/engineering-accepted-commit.ts i src/engineering-commit-observation.ts
+w apps/agent-worker; stare pliki są re-export wrappers. Pilot nie importuje
+test code ani nie duplikuje słabszego kryterium sukcesu. Dodatkowy integration
+test pod apps/agent-worker/test/engineering-pilot.integration.test.ts użyje
+wyłącznie fake model transport przy realnym PG/runtime/Git/gate/review.
+Primary owns engineering-pilot.test.ts; osobny worker integration test,
+osobny worker pilot src/CLI, brak nakładających się writerów.
+
+Przygotowany przez primary seed (bez model calls):
+`/Users/marcinjackowski/.remoteagent/engineering-pilot-smoke-Ph1BPS`.
+Prywatny `prepare.mjs` po env.sh/tsx exit `0`; jednorazowy nowy seed commit
+`062ba1a2ec5401d3161353631c86a83ccd654cdf`. Objective: naprawić clamp dla
+skończonych liczb, włącznie z equal bounds i RangeError przy minimum>maximum.
+Jedyny writable path `src/clamp.mjs`; pięć asercji w immutable Node gate argv.
+Primary wykonał oracle na seed: oczekiwany exit `1`, rzeczywista porażka;
+nie wstrzyknięto gotowego rozwiązania. Config schema3, osobne roots, wymagane
+1 GiB dla tiny non-Xcode smoke. Wszystkie stare źródła/worktree nietknięte.
+
+Korekta przygotowania przed live: loader odmówił pustego test_path_allowlist
+(exit `1`). Bez osłabiania schematu dodano do prywatnego seeda widoczny
+`src/clamp.test.mjs`, nowy seed commit `9ea6192` (pełny SHA w Git).
+Config ma allowed source+test path, objective nadal wymaga tylko naprawy
+clamp.mjs; immutable oracle5 pozostaje poza write authority. Loader exit `0`:
+config digest `sha256:caab7852a453e55a68e8b704564592d79e8485000d9794e6ba9b02f6d9348bc7`.
+Historyczny seed-evidence.json dotyczy pierwszego commita; przed live zapisać
+nowy frozen seed/digest wraz z admission, nie używać starego jako aktualnego.
+
+#### Profil tekstowy — checkpoint 2026-09-14
+
+Zakres zaakceptowany przez właściciela: tylko alert rozmowy tekstowej.
+Nowe rozłączanie głosu nie jest wymaganiem MOBL-2023. Obowiązuje ADR-0029;
+historyczny plan rozszerzania kontekstu voice poniżej jest nieaktualny.
+
+Primary przygotował osobny prywatny pakiet:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-text-flow-040PkD`.
+Po `. scripts/dev/env.sh` komenda `pnpm exec tsx` z prywatnym skryptem
+`diagnostics/prepare-text-flow-benchmark.mjs` zakończyła się exit `0`:
+realny profile factory wywołany raz, trzy kontrole zamiany identity odrzucone,
+pozostałe pliki evaluatorów byte-identical, stare trzy pliki pakietu NLZRRp
+zachowały SHA256. Nowy pakiet ma dziewięć testów modelu i cztery testy UI.
+To weryfikacja konfiguracji, nie wykonanie testów Xcode ani przyjęcie live.
+
+Niezależna komenda `pnpm exec tsx` z
+`diagnostics/verify-text-flow-benchmark.mjs` również exit `0`: poprawny factory
+wywołany raz; siedem negatywnych kontroli (selector, test ID, input, foreign
+scope i trzy zamiany identity) odrzuconych przed factory. Oba skrypty mają
+`providerCalls: 0`, `admitted: false`; nie tworzą live launchera.
+
+Nowe canonical digests:
+
+- manifest: `sha256:29e12ca1dc35eeec319539356298527d6141905665616efa52074aa70e6bcb94`;
+- config: `sha256:d87b3c8ce4e96e9e8d2b29530682a586816773461892bd568775609bbeaad612`;
+- catalog: `sha256:d2b857c71172f88799c3d9528e5b537cc99290d5770aefe438321132ff26344a`;
+- mapping: `sha256:fc491c3241f9ae1516c1dfb8999bf9bccb5b20f1c753279bda6fe4eb9d7aa843`;
+- overlay: `sha256:1364577d2c69fd23339f2e45e602dff8f07d3442d9ba030a4043556d888affe9`.
+
+Preflight nowego pakietu uruchomiony przez `pnpm exec tsx <bundle>/preflight.mjs`
+zakończył się exit `1`: `live qualification disk space is below the bounded
+minimum`. Log `/tmp/text-flow-primary-preflight.log`; `df -k .` wskazał
+40 004 560 KiB dostępnego miejsca (~38.15 GiB), poniżej progu 40 GiB.
+Nie obniżać progu, nie usuwać zachowanych worktree. Nowe testy Xcode i live
+pozostają niewykonane. Nie powtarzać LIVE09.
+
+Pierwsza niezależna bramka pięciu plików testowych exit `1`, choć 49 testów
+było zielonych: repair-authority suite nie załadowała się, ponieważ jej mock
+nie zawierał nowego profilu text. Log `/tmp/text-flow-primary-focused.log`.
+Primary wykrył też brak odmowy reserved text ID przy legacy `evaluation: v1`;
+Luna poprawiła selector. Nie traktować raportu „49 passed” jako dowodu całej bramki.
+Po trzech nieudanych próbach uzupełnienia fixture primary odebrał Lunie ownership
+testów i dokończył tę ograniczoną korektę. Fixture używa prawdziwych walidatorów,
+metadanych katalogu, argv, ID i paths (także dawnych 11/4); podstawia wyłącznie
+prywatne treści evaluatorów/digests i trzy fixture argv digests common gates.
+Poprawny text factory ma jeden call; siedem negatywnych wariantów zaczyna od
+poprawnego dodatniego control i ma zero wywołań odrzuconego factory.
+
+Primary focused: `RA_REQUIRE_POSTGRES=1 pnpm exec vitest run` z pięcioma plikami
+`apps/agent-worker/test/engineering-live-{profile,full-flow-evaluators,full-flow-profile-contract,full-flow-repair-authority,text-profile}.test.ts`
+(jawne pięć argumentów, nie rozwijanie tego zapisu przez skrypt), exit `0`,
+81 testów/5 plików. Log końcowy `/tmp/text-flow-primary-restored-green.log`.
+Strict tsc tych pięciu plików, z `--noEmit --strict --exactOptionalPropertyTypes
+--skipLibCheck --target ES2023 --module NodeNext --moduleResolution NodeNext
+--esModuleInterop --types node`: exit `0`, `/tmp/text-flow-primary-strict.log`.
+Pierwszy strict wskazał brak jawnego typu optional layout oraz stare zbędne pola
+fixture manifest; poprawione przed zielonym przebiegiem.
+
+Mutation checks primary:
+
+- Usunięcie blokady reserved text ID przy legacy `v1`: focused text-profile
+  exit `1`, brak oczekiwanego throw. Log
+  `/tmp/text-flow-primary-selector-mutation-red.log`.
+- Wymuszenie dawnego model evaluator dla nowego text profile: realny dodatni
+  factory test exit `1`; szuka nieobecnego starego gate. Log
+  `/tmp/text-flow-primary-wiring-mutation-red.log`.
+- Dokładne przywrócenie obu plików, focused 81/5 exit `0`, realny prywatny
+  verifier 1 positive/7 negative exit `0`. SHA256 przywróconego selectora
+  `b06c2091ee3862677c5564f5c883eb58235ec57d7b06c00b80a4abab407aada7`,
+  profile contract `b6ba3f10a0e1560ab8ce7efbcdf6117ce405e0cd44f470ebf4825b588e3000e9`.
+
+Pełna bramka session 85126 zakończona exit `0`, jeden pełny przebieg,
+`/tmp/text-flow-primary-full-gate.log`: 3797 passed, 2 jawne opt-in skipped;
+267 passed files/2 skipped, 241.19 s. Pominięte są wyłącznie live-subscription
+i engineering-live-ios; nie stanowią dowodu testów live. Build 29/29 i
+typecheck 46/46, oba Cached 0; strict 14 plików i workflow 55 tasków exit `0`.
+Komenda po `. scripts/dev/env.sh`:
+
+```sh
+pnpm lint && pnpm format && pnpm run build --force &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force &&
+pnpm exec tsc --noEmit --strict --exactOptionalPropertyTypes --skipLibCheck \
+  --target ES2023 --module NodeNext --moduleResolution NodeNext --esModuleInterop --types node \
+  apps/agent-worker/test/engineering-live-full-flow-common-contract.test.ts \
+  apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts \
+  apps/agent-worker/test/engineering-live-full-flow-repair-authority.test.ts \
+  apps/agent-worker/test/engineering-live-full-flow-evaluators.test.ts \
+  apps/agent-worker/test/engineering-execution.integration.test.ts \
+  packages/test-evidence/test/engineering-gates.test.ts \
+  apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts \
+  apps/agent-worker/test/engineering-cross-fence-coordinator.integration.test.ts \
+  apps/agent-worker/test/context.integration.test.ts \
+  apps/agent-worker/test/engineering-context-fragments.test.ts \
+  apps/agent-worker/test/role-context.test.ts \
+  apps/agent-worker/test/engineering-model-usage-limit.test.ts \
+  apps/agent-worker/test/engineering-live-profile.test.ts \
+  apps/agent-worker/test/engineering-live-text-profile.test.ts &&
+pnpm workflow:validate && git diff --check
+```
+
+Końcowy preflight po pełnej bramce ponownie exit `1`, ten sam disk minimum;
+log `/tmp/text-flow-primary-final-preflight.log`. Ostatni `df -k .`:
+39 745 008 KiB (~37.90 GiB). To realna blokada zewnętrzna nowych Xcode/live,
+nie powód do usuwania zachowanych wyników. Potrzebne zwolnienie miejsca przez
+właściciela (praktycznie 5–10 GB zapasu), potem nowy preflight i dalsza
+kwalifikacja dokładnego pakietu. Nie ma aktywnego mutanta, live ani writera.
+Usunięcie voice nie naprawia 4 UI failures ani request-aware token reservation.
+
+Stan pozostaje `IN_PROGRESS`; wszystkie wcześniejsze WIP, nowe pliki profilu,
+ADR-0029 i prywatny pakiet są celowo zachowane bez częściowego commita.
+`pnpm workflow:validate` i `git diff --check` uruchomione: exit `0`, 55 tasków.
+
+OWNER SCOPE CORRECTION2026-09-14: voice disconnect OUT OF SCOPE for MOBL2023;
+latest continue authorizes implementation of text-only qualification. ADR0029
+supersedes previous proposal to add voice dependency context. RA055 IN_PROGRESS,
+HEAD ce9b2ff62e3c947c72c0fafca47d192af983ce98; all old bundles/worktrees preserved.
+Step1: new reserved full-flow-text-v1/MOBL-2023-full-flow-text-v1 profile,9existing
+nonvoice model IDs/3unchanged protectedinputs and4unchangedUI IDs/5inputs. New
+model gate ios-text-flow-model-tests-final; oldfull-flow-v1 remains exact11/4.
+Allowed: engineering-live-profile.ts/test, engineering-live-full-flow-evaluators.ts/test,
+engineering-live-full-flow-profile-contract.ts/test and new bounded text-profile
+test fixture if needed under apps/agent-worker/test; no production/iOS manual edits.
+Sole Luna implements; primary owns ADR/WU/finish plan and private bundle assembly.
+Gate: env.sh then RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-live-profile.test.ts
+apps/agent-worker/test/engineering-live-full-flow-evaluators.test.ts
+apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts
+apps/agent-worker/test/engineering-live-full-flow-repair-authority.test.ts plus
+new text-profile tests; strict tsc changed tests, primary mutation/restore.
+Step2: new separate private bundle from NLZRRp, exclude only voice evaluator
+selectors/input and explicit voice-disconnect objective clause; bind all digests,
+read-only real profile/factory positive+negatives, preserve old identities.
+Step3: full noncached gate and canonical preflight before any new live. No
+LIVE10 admitted. Removing voice does not repair UI or pre-call reserve sizing.
+
+Post09 latest: full gate40965 EXIT0, /tmp/live09-primary-full-gate.log:
+3785passed/2explicit opt-in skips,266passedfiles/2skipped,206.38s;
+build29/typecheck46 Cached0, strict12tests/workflow55/diff0. Command: task's
+full gate plus strict tsc list from66367 with new engineering-model-usage-limit
+test added (ES2023/NodeNext/strict/exactOptionalPropertyTypes/skipLibCheck).
+No live followed; no formal PASS/audit/commit or status change.
+
+Accepted bounded source change: EngineeringModelUsageLimitExceededError,
+code ENGINEERING_MODEL_USAGE_LIMIT_EXCEEDED, replaces generic post-response
+throw. NOT a subclass of pre-dispatch EngineeringModelBudgetError; cannot
+be turned into receipt-backed finalization. Accounting and limit unchanged.
+Luna's initial negative tool counter was unwired despite correction requests;
+primary revoked test ownership and wired real runToolLoop executor in BOTH
+positive/negative cases. Provider proposal executes1 belowlimit/0 afteroverrun.
+Primary59967 GREEN0, mutation76620 RED1 (actual toolCalls1 vs expected0),
+exactrestore31752 GREEN0:162tests/3files10.68s+strict/workflow/diff0.
+Second mutation86255 RED1: letting overrun error enter receipt finalization
+produced no rethrow; exactrestore50000 GREEN0. Read both assertion failures.
+Restored hashes: debug-journal b31b91e0016af5fcf1dd9767fde0d96645c7b0a96819f07db52321950e3b6980;
+execution b40fab53c820e0ec80f6d33c22653541f260f1db5e42962fb50f9aedd8668deb.
+Final test-only cleanup isolates control journal and closes negative journal
+before assertions; own59212 focused/strict/prettier EXIT0 while full gate ran.
+Logs /tmp/live09-{usage-guard,finalization}-mutation-red.log and
+/tmp/live09-primary-guard-green.log. No active mutant/source writer/live.
+
+PAUSE BOUNDARY: next full live needs changed frozen context, outside the exact
+same-NLZRRp repeat grant. Owner decision required for proposed new bundle in
+ENGINEERING_FINISH_PLAN: add2read-only voice dependencies, narrow oversized
+test/localization context while preserving obligations, request-aware admission
+and unchanged gates/seed/source scope/models/hard1.8M. Do not launch10 on old
+inputs or claim that typed-error fix solves reservation overshoot. Further safe
+work resumes from this concrete plan after decision, not a restart of09.
+RA055 IN_PROGRESS. Intentional new uncommitted path:
+apps/agent-worker/test/engineering-model-usage-limit.test.ts; existing dirty
+paths remain preserved RA055 WIP (no partial commit authorization). This turn
+also changed debug-journal.ts and WU/finish plan; private replay preserved.
+
+Primary provider-free09 semantic replay EXIT0, /tmp/live09-primary-semantic-context.log:
+29realreads/cap42 (global48),18planentries/27evidenceentries,330986evidencebytes,
+368877promptbytes lower bound (real objective/guidance; omitted compiled task
+packet and correction/history). Candidate snapshot unchanged; providercalls0.
+Primary corrected Luna's empty gatePaths reconstruction to exact11 SOURCE
+candidates from actual failed gate definitions; these read-plan inputs match
+semantic attempt7. Mapping absence on raw config does not make catalog paths
+unavailable. Full admission/mapping itself is NOT rerun/proved by this replay.
+Actual voice_dependency_evidence=[]: neither VoiceChatViewModel.swift nor
+AIMultiAgentVoiceCoordinator.swift is in supplied context. Generic pause word
+matches in other files are NOT declaration evidence. Runtime seals discovery
+after prefetch (engineering-execution.ts3390), exposes mutation tools only and
+instructs no further reads. This is a concrete context/input gap, not a reason
+to manually patch iOS. Configured whole tests/localization still dominate input.
+Exact next live cannot proceed just from typed-error correction: must resolve
+missing dependency context and reserve-sizing cost without silently changing
+frozen bundle/objective/gates. New frozen input changes require exact approval
+per existing live protocol; no10admitted. Primary owns private replay henceforth.
+
+Post09 bounded safety correction planned (not DONE): distinguish a provider
+response that already exceeded accounting limit from pre-dispatch budget refusal.
+Allowed paths: apps/agent-worker/src/engineering-debug-journal.ts,
+apps/agent-worker/test/engineering-debug-journal.test.ts, and a focused new
+apps/agent-worker/test/engineering-model-usage-limit.test.ts if needed.
+Use a separate typed code ENGINEERING_MODEL_USAGE_LIMIT_EXCEEDED, NOT the
+EngineeringModelBudgetError accepted by receipt-backed finalization. Preserve
+accounting, current caps and thrown-before-tool execution. Regression must run
+real executeTransport with proposed patch tool and prove zero tool executions,
+one provider response, exact usage retained, typed diagnostic and no fallback
+finalization. Primary mutation: remove post-response guard -> RED; restore GREEN.
+Gate: after env.sh, RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-debug-journal.test.ts
+apps/agent-worker/test/engineering-model-usage-limit.test.ts
+apps/agent-worker/test/engineering-execution.integration.test.ts; strict tsc
+new test separately, workflow/diff. This fixes classification/safety evidence,
+NOT reserve sizing or costly context; no live admission from this step alone.
+
+Post09 local baseline48716 EXIT0:161tests/2files11.50s after env.sh and
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-debug-journal.test.ts
+apps/agent-worker/test/engineering-execution.integration.test.ts.
+Log /tmp/live09-budget-context-baseline.log. These existing tests do NOT prove
+the newly observed admission overshoot is fixed. No runtime edits yet.
+Concrete next bounded probe: real read-tools prefetch of actual09 receipt6/
+GateFailure6 and preserved candidate6, with numeric per-path/prompt byte counts,
+zero provider calls and before/after candidate snapshot. Sole Luna owns private
+diagnostics/replay-live09-semantic-context.mjs; primary owns docs. Then choose
+minimal qualified runtime fix, not arbitrary budget increase or context deletion.
+Source review confirms post-limit response is thrown before tools execute, but
+uses generic Error (not a typed budget signal). Do NOT reuse finalization-capable
+EngineeringModelBudgetError for post-response overrun without checking fallback.
+
+LIVE09 TERMINAL2026-09-14T14:48:08.615Z, launcher12276 EXIT1, FAILED during
+implementation7 before a seventh mutation receipt.18responses COMPLETE:
+1831657input+24805output=1856462tokens. Last response261949 was reserved128000
+with205487remaining; observed overrun56462 beyond hard1.8M. Investigate admission
+and terminal classification before another live; do not hide the overshoot.
+Campaign INCLUDING09 exactly once=11501473tokens/0delivered. This attempt is
+4.13x original450k upperestimate,1.24x empirical1.5M,103.14% hardlimit.
+Elapsed4602130ms; six completed implementations, six failed Xcode model+UI rounds,
+no review/verifier/LocalCommitReceipt. Last model11executed/2voice failures;
+last UI4executed/4failures in74.417s (legacy row, new event re-presentation,
+normal message visibility). UI log42982125997c2f7a8025ec1bb61a8724fc1fa8055499c8143389c91e06bc1812.
+Private export evidence-537a5979cee133dba6e61584cef31ce7c2ab8ef6eb9aaa414a7f90acb45fb487.json
+identity independently read. Primary read FULL final13path277+/28- diff,
+candidate HEAD remains seedcd46c82de01d6ec4c5e614bcab9dc15f07560642; diffcheck0.
+Preserve candidate. Primary verified voice onDisappear only disables microphone,
+whereas pause disconnects room; candidate calls former in both flows. Also
+visual layout remains centered/not bottom anchored. No manual iOS repair.
+Next: bounded read-only runtime context/token-admission diagnosis, concrete
+local reproducer, delegated correction, own mutations/gates before any10.
+No active live or source writer. RA055 IN_PROGRESS; no formal PASS/audit/commit.
+
+LIVE09 checkpoint2026-09-14T14:45:34Z ACTIVE/session12276,1594513tokens
+(1571643input+22870output)/17responses COMPLETE;205487remain under hard1.8M.
+Sixth implementation completed14:34:43Z; primary read event-ID dedup changes,
+voice onDisappear/onLeaveVoice tasks and retained hidden inline event afterClose.
+Sixth model log84f4b5ac9df99d524f11d35d4169d6e0268f736815155ddb59447aea8be4b34e
+at14:43:21Z still11executed/2failures: same single/multi voice pause assertions.
+Nine model cases pass; this is NOT full gate success. Sixth UI Xcode42214 active
+at14:46Z. No review/verifier/commit or terminal outcome yet. Read-only diagnosis
+delegated; no runtime/candidate writes. Do not relaunch09 or count provisional
+usage twice. Campaign BEFORE09 remains9645011tokens/0delivered.
+
+LIVE09 fifth model gate log6fdfda298c9a2ac64bcc53f57ef31f0f2e435735f7a802d17095bc9d3fe57846
+at14:29:07Z:11tests executed, only2failures now (previous26). Both remaining
+failures are single/multi voice room not paused. Prior-state restoration and
+resource-action assertions no longer fail in this model log. Overall gate
+still FAILED; fifth UI gate/result pending. No review/commit or terminal result.
+Primary also read SafetyAlert view: centered heading/paragraphs and no bottom
+Spacer/button anchoring differ from owner screenshots; retain for final visual
+inspection even if executable gates later pass. Do not infer visual acceptance.
+
+LIVE09 checkpoint2026-09-14T14:23:08Z ACTIVE/session12276; fifth implementation
+completed14:20:25Z,1302096tokens(1281546input+20550output)/15responses COMPLETE.
+Fourth model gate actually EXECUTED11tests with26 assertion failures (not26
+separate tests), logdff39f35372164d67acc255e0d42c93b5d86a0594d128e4c41e153684d38288d:
+wrong resources URL, prior blocking/activation restoration and voice disconnect.
+Loop entered semantic correction5 autonomously and patched ChatViewModel,
+AgentAIFlow,AIMultiAgentChatViewModel,SafetyAlert. Primary read actual prior-state
+capture/restore now present. Fifth model Xcode gate active13918; no gate PASS,
+review/verifier/commit yet. Same candidate/journal, no manual iOS/runtime changes.
+Do not restart09 or add this provisional usage to campaign repeatedly.
+
+LIVE09 checkpoint2026-09-14T14:11:47Z ACTIVE/session12276; correction4 completed
+14:05:57Z,1011188tokens(992660input+18528output)/13responses COMPLETE. Model
+first got REPLACEMENT_MISMATCH (no write), then patched ChatViewModel public
+setter successfully; primary read actual result. Fourth Xcode model gate still
+active95005. Prior third UI log bebed145f5f030e8c0f792ec67873dc2eb5cab56cee08f6e0da9aaddddd7552e
+shows4executed/4failed in122.84s: first legacy-card visibility assertion, three
+application-not-running errors. Do NOT claim UI qualification. Primary also
+read actual setSafetyAlertPresented: it assigns blocking flags from isPresented,
+not their prior state; only keyboard is restored by flows (explorer's initial
+restore claim was wrong). Existing model gate covers previously blocked state.
+No manual candidate or runtime fixes, no review/commit yet; same09 continues.
+
+LIVE09 checkpoint2026-09-14T14:04:34Z ACTIVE/session12276; third implementation
+completed13:53:12Z,896535tokens(878715input+17820output)/10responses COMPLETE.
+Second compile exposed EmergencyResources scope/nil errors (log8a03ae58...b4f7);
+third correction reached model gate compiler diagnostics at immutable evaluator
+sites: isSendingBlocked setter inaccessible. Latest model log
+verification-log-4054d57e3d6a9b8d389b8246b3cc9cb9b194ccb1d95730b0ddff467ca33012b8.log.
+UI gate for same third candidate is still running (xcodebuild87208 atcheckpoint),
+no fourth implementation yet. No manual/runtime changes; don't preempt live to
+patch diagnostic handling. Preserve same journal/candidate; continue to terminal.
+
+LIVE09 checkpoint2026-09-14T13:46:37Z ACTIVE/session12276,794303tokens
+(776963input+17340output),8responses,COMPLETE accounting. Initial attempt
+completed with747015tokens; first Xcode log995140ba...b36bf contains Swift
+unwrap-condition error at AIMultiAgentSession.swift180. Loop autonomously
+completed correction2 at13:45:34Z; primary read corrected optional unwrap,
+no manual patch. Second model Xcode gate running. Candidate preserved under
+NLZRRp/workspaces/ra045_4e5f7fc8-a739-4c7c-ab30-83404139fa08-case/
+engineering-69560a6b0c92cad9eb31c9e5a0e07ef4. No review/verifier/commit yet.
+Primary read initial13path254+/28- stat and critical wiring: both fullscreen
+views, event propagation and sharing selection now present. Nonterminal
+read-only concerns to check against final candidate: resource-value dedup can
+suppress distinct events; multi session action doesn't check activeSession
+before alert; single-agent tests only. No formal acceptance or manual repair.
+Keep runtime/candidate frozen, monitor same09 to terminal; never restart it.
+
+LIVE09 ADMITTED ONCE, session12276, invocation
+mobl-2023-precheck-repair-20260914-09. Same preserved NLZRRp bundle; new
+RUN_STARTED2026-09-14T13:31:26.327Z; case
+ra045_4e5f7fc8-a739-4c7c-ab30-83404139fa08-case,
+run_1599b6d3-b695-4c15-b9ae-99c88346ff48; journal
+engineering-578f3a7adc85fcfc699bbec9ed424c0e6188224cee48f58b653fb63d584adaca.jsonl.
+launch/status-live-09.mjs differ from08 only invocation/log/admission/exit names.
+Primary syntax checks0 and full launcher diff read. Canonical preflight0 and
+subscription auth0; all4roles codex_cli/gpt-5.6-sol/CLI0.153.3, seed clean at
+cd46c82de01d6ec4c5e614bcab9dc15f07560642, Xcode26.1.1/17B100, PGSELECT1,
+45091319808bytes available, frozen digests/caps/objective unchanged.
+Full gate66367 EXIT0 before admission:3784passed/2explicit opt-in skipped,
+265passedfiles/2skipped,225.14s,build29/typecheck46 Cached0,strict11/workflow55/diff0.
+Log /tmp/v6-primary-full-gate.log. Exact source mutation hashes rechecked.
+Freeze runtime/bundle/candidate until terminal. NEVER relaunch09. Monitor
+session12276 and NLZRRp/status-live-09.mjs; preserve all worktrees. Campaign
+BEFORE09=9645011tokens/0delivered. Hard1.8M, no API/Bedrock/Jira/Discord/push.
+RA055 remains IN_PROGRESS; no review/commit/success result yet.
+
+Post-restore3274 EXIT0:162tests,strict,07/08replays,diff. Source exact hashes
+at mutation checkpoint retained; no active writer/mutant. Full task command
+plus strict11 now session66367 RUNNING, /tmp/v6-primary-full-gate.log. Wait actual
+exit0, then canonical same-NLZRRp preflight and at most one09 admission; no
+manual iOS repair, frozen config changes or cap increase. Current RA055
+IN_PROGRESS and campaign9645011tokens/0delivered. No09script created yet.
+
+Post08 V6 qualification: primary47498 EXIT0 (162tests/2files11.29s, strict0,
+actual08replay43calls/cap48/18entries26895bytes6724tokens,07replay20calls6607bytes,
+candidate snapshots unchanged/modelcalls0,diff0). Afterward narrowed finalizer
+domain to exact file equality; no prefix domain. Primary performed FOUR actual
+mutations and inspected failures: first-file early acceptance, READ envelope
+bypass, retained member-domain bypass, omission of multiline ending anchor.
+Each exit1 for expected assertion/REQUIRED_DECLARATION_UNRESOLVED, logs
+/tmp/v6-primary-mut-{first-file,read-envelope,member-domain,member-span}-red.log.
+Exact source hashes restored after EVERY mutation:
+execution b40fab53c820e0ec80f6d33c22653541f260f1db5e42962fb50f9aedd8668deb;
+repair713a45456c1c3d4448025ff93a2a9b550c24fb6b39b3d2eda17a94f12f820f91.
+Own post-restore gate3274 RUNNING (execution+toolset,strict,07/08replays,diff),
+/tmp/v6-primary-restored-green.log. No source writer/mutant/live. Require actual
+restoreGREEN then full gate; no09preparation/admission yet. First19 real-read
+cases replaced obsolete unrelated-failure mocks; execution now125tests.
+
+V6 primary review/reproduction checkpoint: Luna source changes alone were NOT
+accepted; claimed real filesystem tests were absent and obsolete mock tests
+failed for unrelated empty-read reasons. Primary took test-file ownership and
+replaced those cases with real createImplementationReadTools/filesystem tests.
+Initial own93182 exit1:3positive finalizer failures exposed a real member gap
+(resolver only recognized types; prior test bypassed unresolved=[]), plus one
+fixture mistake (plan.diagnostics is compact metadata, not compiler inputs).
+Source member resolver now requires exact retained declaration READ inside its
+declared domain, not usage SEARCH; generic type path unchanged. Multiline member
+anchors preserve keyword/name span or fail closed. Own44626 exit1 thereafter
+was3fixture assertion errors (bounded evidence is plain Swift, not JSON), now
+fixed without weakening requirements. Strict91290 exit0. Current own focused
+gate47498 RUNNING: execution+toolset, strict, actual07/08replays,diff; logs
+/tmp/v6-primary-focused-v2.log and /tmp/v6-primary-{strict,replay07,replay08}.log.
+No09/live; caps unchanged. Require own mutation checks after focused GREEN,
+then full gate. Prior worker claims are not qualification evidence.
+
+Primary fullgate1664 EXIT0, /tmp/live08-primary-full-gate-v3.log:
+3769passed/2explicit opt-in skipped,265passedfiles/2skipped,215.70s,
+build29/typecheck46 Cached0, strict11/workflow55/diff0. This does NOT admit09:
+primary review discovered global searchSafeText returns the FIRST matching file,
+not a complete corpus, and literal `var name` omits let/alternate whitespace.
+The prior V5 mocked search tests did not prove real uniqueness. No live started.
+
+Bounded correction IN_PROGRESS: member lookup only must inspect EVERY trusted
+source FILE in its declared domain through complete exact READs, not global
+search success. Parse full masked bytes for var/let/func; no candidate/ambiguous,
+failed/malformed/truncated read or unenumerated directory fails closed. Keep
+caps, generic type lookup, source-write/evaluator fences and frozen bundle.
+Allowed paths: engineering-execution.ts, engineering-repair-context.ts, their
+execution integration test; primary owns ADR0024/WU/finish plan. Sole Luna writer.
+Require a real filesystem/read-tools regression (var+let in distinct files,
+let/whitespace/newline, outside domain, late read failure), mutation of premature
+first-match acceptance RED/restoredGREEN, actual07/08 provider-free replays,
+strict test compile and full task gate. Command for focused gate remains
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts
+packages/implementation-tools/test/toolset.integration.test.ts after env.sh.
+Do not rerun08 or admit09 before this concrete defect is qualified.
+
+Recovery: post08 full gate v2 finished; log /tmp/live08-primary-full-gate-v2.log
+records3769passed/2opt-in skipped,265passedfiles/2skipped,225.50s, forced
+build29/typecheck46 Cached0, strict11 reached workflow55OK. Its terminal session
+ID/exit receipt was lost at compaction, so this is NOT the admission evidence.
+Primary repeats identical full command as session1664, RUNNING, log
+/tmp/live08-primary-full-gate-v3.log. No live09 prepared/admitted; no provider
+calls. Wait for actual session1664 exit0 before canonical preflight. The only
+source change after mutation hashes is the documented TS6133 maskedLines fix.
+RA055 remains IN_PROGRESS; all dirty paths are intentional preserved WIP.
+
+Full gate20843 TERMINAL exit2 at forced build: TS6133 unused line variable in
+repair-context member anchors. No full-suite result from this gate. Luna fixes
+only iteration over maskedLines (same line positions/semantics); repeat full gate
+from start after source compiles. No09/live. Earlier running20843 entries history.
+
+Post08 mutation qualification inspected by primary: cost/domain/ambiguity/
+implicit-compaction mutations each RED1 in /tmp/live08-mut-{cost,domain,
+ambiguity,compaction}-red.log. Restored focused3GREEN perworker; own full gate
+now20843 RUNNING, /tmp/live08-primary-full-gate.log (same full command below
+including strict11tests). Execution source restoration initially differed only
+in indentation after worker mutation restore; primary formatter restored EXACT
+prehash c22140181ff41a3310a0bc06d768daaf2da6fce8bc70d3ab75dccb13b63bed6e.
+Repair source exactprehash670834b5e0b93a42058da1274dfaa9b3caa4ac6fff2a6a6bd0fa37ce6ba266b9.
+Own shasum -a256 -c /tmp/live08-mut-pre.sha256 returned bothOK before admission
+of fullgate. No other source writer/mutant/live active. Do not infer live09
+permission from incomplete fullgate: wait exit0, canonical same-bundle preflight,
+then at most one sequential launcher. RA055 remains IN_PROGRESS.
+
+Post08 primary qualification67713 EXIT0: execution+toolset EXACT2files147tests,
+11.85s, strict targeted test0,07/08read-only replays0,diff0. Primary implemented
+missing real executor fixture after repeated bounded delegation did not deliver
+it: separate failing test site -> source-prefetch -> actual patch+source receipt;
+negative patch outside slice -> PATH_OUTSIDE_ALLOWED, unchanged workspace/source
+bytes. Added conservative lookup-cost, global domain and mixed implicit/explicit
+regressions. Initial fixture digest/manifest mistakes were corrected; no fake
+PASS. Final explicit scope test+strict21478 exit0(3tests) before full focused.
+Own08 replay now34reads/cap48,18entries26895bytes6724tokens,both member names and
+sources retained, candidate unchanged/modelcalls0. Own07 unchanged20reads6607bytes.
+Conservative roots accounting initially exposed >48 required cost; generic
+implicit-member classification (no builtin denylist) now avoids a spurious
+inferred receiver lookup. Mixed diagnostic regression first RED, compactor fixed
+to preserve implicit/explicit distinction, then full focusedGREEN. ADR0024 records
+decision. Worker now performs bounded mutations of cost/domain/failclosed/
+compaction, exact restoration required. Full task gate pending; no09admission.
+
+Post08 member review latest: worker104tests/strict/07+08replays exit0, but
+primary has NOT accepted. Remaining exact corrections: filter every member
+declaration hit (global/scoped) to declared domain with segment containment;
+when configured source READ list is empty use existing allowed source roots;
+new real createEngineeringExecution source-patch receipt/out-of-scope refusal
+test still absent. Authorized formatting of the3ownedfiles (previous
+prettier-check exit1) and complete revalidation required. Sole worker remains
+unknown_mutation_outcome_probe; no live/commits. Do not report R6 qualified yet.
+
+Post08 member review iteration: added3 prefetch/finalizer tests,103tests0 per
+worker; own acceptance pending. Strict global failclosed exposes genuine
+global func-member search OVERSIZE in actual08 replay (exit1), so ADR0024 now
+defines narrow clean-OVERSIZE fallback over ALL trusted declared source roots,
+with complete coverage and fixed worst-case budget. Malformed/truncated success
+and any incomplete scoped lookup remain fatal. No arbitrary failure bypass.
+Worker continues targeted fallback corpus and missing real source-repair receipt
+regression. No live running/admitted; do not run09 before own complete gate.
+
+Post08 first member implementation NOT ACCEPTED on primary review. Worker
+reports both replay0 (08:40calls/cap48) and270focusedtests0, but diff contains
+only one new planner test, not required member boundary/executor regressions.
+Member lookup still treats invalid/truncated global result as a possible scoped
+fallback, which may hide ambiguity. Focused correction: fail closed before that
+fallback, add executed prefetch/finalizer negative corpus + real separate-source
+mutation receipt/scope refusal, mutation RED/restoredGREEN, formatting, both
+replays and full focused suite. Same sole writer/allowedpaths; no next live yet.
+
+Post08 source-member context step planned (same sole Luna writer): allowed
+engineering-repair-context.ts, engineering-execution.ts and execution integration
+test. Generic obligations, not benchmark spellings: read-only/get-only property
+diagnostic identifies member; argument-conversion excerpt identifies called member.
+Use bounded source-backed var/let/func declaration lookup via existing read broker;
+ambiguous/missing/truncated required declaration fails closed, no guessed target.
+Return anchored exact declaration evidence with provenance; existing diagnostic,
+48call/24entry/48000byte/12000token, write and evaluator boundaries remain.
+Policy version must identify selection change. Synthetic renamed-member corpus,
+negative ambiguity/scope/budget tests and actual08 replay GREEN required before
+next full gate/live. Gate remains execution+toolset command below plus strict
+targeted tsc and mutation RED/restoredGREEN. No frozen evaluator changes.
+
+Post08 primary provider-free replay65247 EXIT1 (expected missing-declaration RED):
+diagnostics/replay-live08-context.mjs uses actual08 exportdd9d0f...c902,
+receipt3 + logf9a4db...dd50c, rawhash21987f27ce26441e33e574e58dc27ffa9d67272281ec70b7c0f30bf3840d1917.
+Final candidate is read-only approximation after attempt4; prior path list is
+the real receipt3.26reads/cap45,18entries26243bytes6561tokens; no source evidence
+for ChatViewModel.swift, neither isSendingBlocked nor presentSafetyAlert retained.
+Snapshot unchanged/modelcalls0. Cumulative edit receipts DO NOT establish context
+visibility in a subsequent correction/epoch. Actual diagnostic shape is get-only
+assignment and argument conversion at injected test sites; planner currently
+falls back to irrelevant first-path/localization/changelog usage searches.
+Next investigate generic source-backed member declaration lookup under existing
+read/call/byte limits, not per-benchmark symbol rules. Prompt fix alone does not
+qualify another live; actual08 replay must become GREEN first.
+
+Post08 bounded correction plan IN_PROGRESS: align compiler-repair prompt with
+existing source-write authority. Current instruction restricts patches to literal
+diagnostic paths while simultaneously asking for root declaration repairs; compiler
+locations can point into immutable evaluator tests. Allowed paths for this step:
+apps/agent-worker/src/engineering-execution.ts and corresponding integration test.
+Keep deterministic slice/tool/generator/evaluator fences, budgets and retry limits
+unchanged. Explain that diagnostics identify failures, not authority; source-backed
+related declarations inside existing allowed paths may be patched. Test real
+production execution with failing test location and separate source declaration,
+plus out-of-scope refusal and mutation of misleading instruction RED/restoredGREEN.
+Gate: . scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-execution.integration.test.ts
+packages/implementation-tools/test/toolset.integration.test.ts && git diff --check.
+Actual08 read-only context replay remains a separate diagnostic, not yet proof.
+
+LIVE08 TERMINAL 2026-09-14T12:04:58.605Z, launcher62782 CLOSED exit1.
+FAILED / BLOCKED / NO_PROGRESS, 4 completed implementation attempts; no
+review/verifier/commit. 13 responses, COMPLETE usage:1197027 input +16795 output
+=1213822 tokens. Campaign including08 exactly once:9645011 tokens/0delivered.
+Comparison:08 uses 67.4% of hard1.8M and 2.70x original450k upper estimate;
+within empirical800k–1.50M band, but no delivery, so not an efficiency success.
+13 responses are not13 independent tasks; input includes repeated context.
+Same NLZRRp preserved; case ra045_22494443-f779-4c9e-87bd-6804f09db8ee-case,
+workspace engineering-1879feb0b49ddfca7357d8fb97b6fb60, journal
+engineering-9d3e17104f73f242458690563a9a7232cd41548e554e0c44fbc4924c22070554.jsonl.
+Primary read full candidate diff:10 staged paths,241 insertions/6 deletions,
+no manual changes. Asset/source-precheck/changelog receipts PASSED exit0 in
+all4 rounds; both Xcode gates FAILED65 in all4. Initial missing import fixed;
+attempt3/4 model gates repeat get-only isSendingBlocked assignment, incompatible
+EmergencyResources/ViewModel, missing EmergencyResources test scope and cascade.
+Latest model log f732b17a5323c10a8a6ae56661a9a7f2f7265d54ce5cdcfc72bbbda5a506e827,
+raw digest sha256:dfc06d3666d015e0d7a2d63fac6125a6e589a7ddd55dc6957027ea6abfccd7b3.
+Unlike07, candidate now changes AgentAIFlow/ChatViewModel, but incomplete:
+single-agent alert never assigned, multi-agent variant always generalHelp,
+no full-screen presentation wiring, centered layout differs from owner design.
+These are failed-candidate observations, not a formal task audit or acceptance.
+Next bounded READ-ONLY diagnosis: exact diagnostic provenance versus frozen
+evaluator inputs/candidate authority and correction context; no blind09, no
+increased caps or weakened guards. No live process remains; preserve all WIP.
+
+LIVE08 ADMITTED, session62782, invocation mobl-2023-precheck-repair-20260914-08.
+NLZRRp/launch-live-08.mjs run ONCE after full gate0, exact restoration0,
+own99tests/replay0 and canonical preflight/subscription auth0. Same approved
+NLZRRp manifest/config/objective/seed/models/hard1.8M; changed runtime policyV4
+and safe tool-limit detail codes only. 48.8GB available, PGSELECT1, clean seed,
+four Codex subscription gpt-5.6-sol identities verified. No other live running.
+Freeze runtime/bundle/iOS candidate until terminal; monitor session62782 and
+NLZRRp/status-live-08.mjs. NEVER restart08. Campaign BEFORE08=8431189/0delivered.
+No push/Jira/Discord/manual iOS patch. RA055 remains IN_PROGRESS.
+
+Final post07 full gate73020 exit0:3758passed/2explicit opt-in skipped,
+265passedfiles/2skipped,242.13s,build29/29,typecheck46/46 Cached0,
+strict11tests0,workflow55OK,diff0. Additional fallback mutation AFTER fullgate:
+remove receiverDiagnostics.length===0 condition → required lookup becomesfalse,
+dedicated test RED1 (/tmp/live07-receiver-fallback-mutant-red.log). Restored
+EXACT source SHA25620158b416d761fd5015ddc06249b0d071f54ad9ac768502094b10b8866671792.
+Primary independently recomputed removed-condition mutant hashc17863...14efb,
+matching transient observed mutant, and inspected restored condition. Own
+restored99tests+actualreplay+workflow+diff session87759 exit0,8.29s. Replay still
+20reads6607bytes1652tokens,both receivers,candidate unchanged,zero model calls.
+No permanent code change after fullgate; source restored byte-for-byte.
+
+Primary post07 receiver review/focused qualification complete: session62470
+exit0,184tests/3files8.74s + strict execution.test0 + actual07read-only replay0
+and git diff check0. Replay log live07-receiver-qualification-zJDsAF/
+receiver-replay.log:32actual diagnostics,20/20reads,19entries6607bytes1652tokens,
+both AgentAIFlow.swift and SharedLibrary/Sources/Chat/ChatViewModel.swift,
+candidate_unchanged=true,model_calls=0. Primary read generic/test/configured
+selection diffs and regression assertions; fuzzy-test and generic mutant logs
+show real RED, current source restored. Corrected generic argument extraction
+also in CamelCase fallback and preserved prior source-diagnostic test exclusion.
+Trusted configured reads outside WRITE slice remain valid READ-only evidence;
+no mutation authority was added. V4 changes stage context-policy identity only.
+
+Full gate now session73020, live07-receiver-qualification-zJDsAF/full-gate.log:
+lint/format/build--force/realPG Vitest/typecheck--force/strict11tests/workflow/diff.
+Result pending. No live running, no08admission. Historic campaign8431189/0delivered.
+Do not restart07; another live needs this full gate0 plus canonical preflight.
+
+Receiver-context first implementation NOT ACCEPTED: focused3/strict exit0
+and fuzzy mutant RED, but actual07 replay exit1 REQUIRED_DECLARATION_TRUNCATED.
+Exact configured READ lacked symbol provenance, so finalizer retained whole
+source file instead of its existing source-backed declaration fragment.
+Primary review also requires malformed/nested generic controls, preserving
+source-diagnostic test exclusions, required receiver fallback and full focused
+suite instead of only3tests. Luna continues same two allowed files, no caps/
+authority changes. Replay now prints structural PREFETCHED entry sizes and
+provenance before finalization (no raw source). No08 launcher prepared/admitted.
+
+Diagnostic-code bounded step verified: primary session46582 exit0,
+forced model-runtime build + focused loop/journal85tests + package typecheck
+(src and test tsconfigs) + diff check. Primary inspected all3 throw-site
+changes and focused assertions, read mutation log /tmp/live07-detail-mutant-red.log
+(missing iteration detailCode causes RED1), restored GREEN0. Journal regression
+retains exact safe detail while excluding private error prose. Broad ad-hoc
+strict over whole legacy journal fixture still exit2 (/tmp/live07-strict.log:
+older missing retryPolicy/readonly mutation fixtures); no claim that command
+passed, no suppression added. Full RA055 gate pending receiver-context repair.
+
+Provider-free actual07 receiver replay prepared (not yet executed):
+`diagnostics/replay-live07-receiver-context.mjs`. Primary read/reused existing
+replay patterns, binds actual export328e6a...d88 and log9801d9...9ec09 hash
+9b9613...4a67, prior6receipt and20path slice. Uses production parser/plan/read
+prefetch/finalization, requires both AgentAIFlow.swift and ChatViewModel.swift
+evidence within unchanged limits, verifies candidate Git snapshot unchanged.
+No provider, Xcode, candidate write or new receipt creation. Run only after
+Luna receiver fix is stable; failure means no next live until diagnosed.
+
+Next bounded repair IN_PROGRESS, allowed paths engineering-repair-context.ts
+and engineering-execution.integration.test.ts only, Luna sole writer. Primary
+pure buildEngineeringRepairContext reproduction exit0 confirms a failing
+AgentAIFlowTests receiver diagnostic + prior test dependency produces no source
+declaration lookup: fuzzy filename match suppresses it. Generic ChatViewModel
+receiver also misses specific recognition. Plan: precise receiver declaration
+selection, retain legitimate test helpers, use exact configured source READs
+within scope and required receiver evidence, generic parser regression, real
+prefetch/finalization evidence, mutation RED/restore GREEN. Caps/authority/
+policy guard unchanged; gate focused execution suite then strict/full RA055.
+Actual attribution: these are deterministic context defects consistent with07,
+not proof of an exclusive cause for every model choice. Gate correction uses
+ANY of11 source candidates, not a requirement to edit all11 or the failing test.
+
+Post07 bounded diagnostic repair IN_PROGRESS: existing ToolLimitError.detailCode
+is not populated for zero tools/max iterations/max calls, so journal loses the
+precise reason despite its supported field. Luna owns only model-runtime/src/
+tool-loop.ts, bedrock-runtime/test/tool-loop.test.ts and agent-worker/test/
+engineering-debug-journal.test.ts. Add stable TOOL_EXECUTION_DISABLED,
+TOOL_ITERATION_LIMIT_EXCEEDED, TOOL_CALL_LIMIT_EXCEEDED at existing throw sites;
+no limit/ordering/policy/guard changes. Gate: `. scripts/dev/env.sh && pnpm exec
+vitest run packages/bedrock-runtime/test/tool-loop.test.ts
+apps/agent-worker/test/engineering-debug-journal.test.ts`; strict and primary
+review follow. Mutation removes one code → assertion RED, restored GREEN.
+Independent read-only investigation of actual correction context continues.
+No provider invocation is authorized by this diagnostic-only repair itself.
+
+LIVE07 TERMINAL2026-09-14T10:45:22.374Z: session92591 exit1,
+2375.50s runner /2374055ms journal; FAILED/FAILED,COMPLETE,
+next_safe_stepINVESTIGATE,reconciliation_required=false,commitnull.
+17responses1490964=1473542input+17422output. Campaign now8431189tokens/
+0delivered (07 added exactly once). Do NOT relaunch07 or start blind08.
+Primary read full final staged diff:7paths180insertions/15deletions,
+candidate preserved at NLZRRp/workspaces/ra045_cb191010-476b-48ac-bce2-737d40cab67b-case/
+engineering-070707b55efe44a133bd3cae21737fca. No manual iOS patch or commit.
+Copy is now exact; precheck and changelog have PASS0 receipts. Three rounds
+of both Xcode gates failed65. Latest UI log a4470f73...8b5bc contains four
+actual scenario assertion failures: expected safety heading did not appear.
+Latest model-test log9801d9fd...9ec09 retains missing AgentAIFlow/ChatViewModel
+members. Candidate never implemented those integration surfaces; MultiAgent
+has a partial presentation API, but no complete event wiring/UI binding.
+
+Terminal attempt7: two patch results CORRECTION_SUBSTANTIVE_MUTATION_REQUIRED
+(journal699/716), followed by STAGE_ERROR LIMIT_EXCEEDED with null detail.
+This is an exhausted bounded tool loop, NOT exhausted1.8M budget, provider
+authentication, or missing source-precheck authority. Handler error is only
+the outer failed-work-unit report. Before any next live, read-only diagnosis
+must compare latest correction required paths and actual compiler repair
+context against missing source integration; do not increase limits or weaken
+substantive-mutation guard. No new live approval/bundle change inferred.
+RA055 remains IN_PROGRESS; full local gate before07 was exit0 as recorded below.
+
+LIVE07 checkpoint10:41UTC: still session92591, NOT terminal. After attempt5,
+Xcode verification-log-6594bb3444a73d65ac5b888da76c894b81e9ca3c33a303a247d7c297870721d9
+reported missing AgentAIFlow.safetyAlert/closeSafetyAlert and
+ChatViewModel.isSendingBlocked/shouldRenderItem. Attempt6 model correction
+ran and completed; cumulative14responses1333108=1318525input+14583output,
+COMPLETE. Last journal event10:32:52.220UTC MUTATION_RESULT_RECORDED.
+Actual xcodebuild and Swift compiler processes are active in disposable
+verification workspace; no timeout/terminal yet. Monitor, do not relaunch,
+edit runtime/bundle/candidate, or infer success from model correction.
+
+LIVE07 checkpoint2026-09-14T10:20:53UTC: session92591 still running.
+Journal engineering-8c4e87076d07a4038ebf987938a1ddf69874acfeb1a5fb70ae7620f5ccefa291.jsonl;
+case ra045_cb191010-476b-48ac-bce2-737d40cab67b-case;
+candidate engineering-070707b55efe44a133bd3cae21737fca under NLZRRp/workspaces.
+Attempt1 completed365965tokens; source-precheck6missing. Attempt2 cumulative
+616320,source-precheck4missing. Subsequent correction reached TestFlight
+release-note check and actual Xcode. Attempt4 cumulative1117356. Xcode log
+0cde5cc...2743c reports SafetyAlertPresentation.swift:42 missing EmergencyResources
+and cascading nil typing. Attempt5 compiler correction completed10:20:53.236UTC,
+12responses1213107=1200118input+12989output COMPLETE. Warning1.2M exceeded,
+hard1.8M unchanged. No final result/commit yet; no edits to runtime or candidate.
+Read-only context review confirms OWNER objective4618chars survives query,
+redaction and protected latest-owner selection; no upstream clipping found.
+
+LIVE07 ACTIVE: session92591, invocation mobl-2023-precheck-repair-20260914-07,
+RUN_STARTED2026-09-14T10:05:48.145Z. NLZRRp/launch-live-07.mjs admitted once
+after canonical preflight and subscription auth; status-live-07.mjs is read-only.
+Same approved frozen inputs/model/hard1.8M, no new scope. Historical campaign
+before07 remains6940225/0delivered. Runtime, bundle and iOS candidate MUST remain
+unchanged until terminal. No manual iOS fix, concurrent provider run or push.
+Do not restart launcher07; monitor session92591 to terminal and inspect receipts.
+
+Final qualification session98087 exit0:3753passed/2explicit opt-in skipped,
+265passedfiles/2skipped,209.28s; build29/29 and typecheck46/46 Cached0,
+strict11tests0,workflow55OK,diff0. Final log context-final-qualification-WUS6Yf.
+Primary read source/test diffs, verified URL-config focused4 + strict4 exit0,
+reviewed both packet-loss mutation RED/restored GREEN proofs. Source packet
+retention is qualified locally, not yet an autonomous delivery proof.
+
+Final fixture review: no suppression remains. Package Database is opened against
+the harness-created name, with explicit URL pathname rewrite and a real
+current_database() identity assertion before any truncation; both connections
+are closed by teardown. Primary URL-config focused4/strict4 session80538 exit0,
+123passed/9.26s. Previous discrete focused4/strict4 session2244 exit0,123passed.
+Epoch-growth review resolved without code change: handoff messages are computed
+once and reused (tool-loop compactToolHistory), never re-embedded each epoch.
+Final full gate now session98087,
+`diagnostics/context-final-qualification-WUS6Yf/full-gate.log`, same full command
+above plus context.integration, engineering-context-fragments and role-context
+in direct strict checking (11 files total). Result pending. No provider call.
+
+Context continuity: primary own focused gate exit0 (103 tests / 3 files),
+strict engineering-execution test exit0. Inspected both production loss points
+and regression; mutation removal of correction packet and epoch packet each
+returned RED1 (`/tmp/live06-owner-correction-mutant.log`,
+`/tmp/live06-owner-epoch-mutant.log`), restored focused GREEN0.
+Full gate session76102 exit0:3753passed/2explicit live opt-in skipped,
+265passedfiles/2skipped,229.27s; build29/29 and typecheck46/46 with Cached0,
+strict8tests0,workflow55OK,diff0. Log
+`diagnostics/context-continuity-qualification-HeHDk5/full-gate.log`.
+This is preliminary for the final fixture state: direct strict checking of
+additional context suites exposed a source/dist Database identity and readonly
+JSON fixture mismatch. Luna owns ONLY context.integration.test.ts and
+role-context.test.ts for a surgical typed fix; suppression was rejected in
+review. After correction: primary diff review, strict4/focused4, then full gate
+including these context tests in direct strict checking. No live is running.
+Launcher/status07 prepared in NLZRRp, NOT_STARTED, no admission or token usage.
+Same approved frozen bundle/model/hard1.8M; no scope or objective change.
+RA055 remains IN_PROGRESS; campaign remains6940225tokens/0delivered.
+
+Po terminalu06 bounded repair context continuity IN_PROGRESS. Allowed paths:
+apps/agent-worker/src/engineering-execution.ts i jego integration.test.ts;
+Luna jest jedynym writerem tych plików, primary docs/review/verification.
+ADR0020 zapisuje minimalną decyzję: preserve already compiled/redacted/bounded
+case packet w korekcie i epoch, nadal compact prefetched repo/toolhistory.
+Gate: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-execution.integration.test.ts
+apps/agent-worker/test/context.integration.test.ts apps/agent-worker/test/role-context.test.ts`;
+potem strict i pełna RA055. Oddzielne mutation RED dla obu loss points.
+Bez nowego providera ani ręcznego iOS patch; decyzji modelu nie wyjaśniać
+samą hipotezą. Zachowany06 nadal nie jest delivery.
+
+LIVE06 TERMINAL2026-09-14T09:41:24.674Z, sesja90829 exit1,
+616.35s; FAILED/engineeringBLOCKED/NO_PROGRESS. 3implementations i3fastgate
+boundaries,10responses1201956=1183354input+18602output COMPLETE.
+Kampania6940225tokens/0delivered (06 doliczony raz). Asset3×PASS0;
+source-precheck3×FAILED1,74/78/81ms,identyczny log2823f0...80e: cztery braki
+copy. Xcode/review/verifier/commit nie osiągnięte. Runtime może znów być
+lokalnie naprawiany; NIE restartować launcher06 ani uruchamiać blind07.
+Candidate preserved NLZRRp/workspaces/ra045_5531e116-9128-48f6-a57b-9743bf900e27-case/
+engineering-23ef4a6b3695a1128a7b5ae49485e76f:10stagedpaths,191+/20-,brakcommita.
+Private export evidence-41e2d170ba8bedca89697e1744cf6e1ac71d08427d9e4fa77b6c42e34fb2505f.json.
+Końcowytree9b262f64ac8bc251f00391ed4404d14a6358fc9cb79612f941681196bfb1569b.
+
+Primary/explorer potwierdzili rzeczywistą niezgodność copy, nie oraclebug:
+Localizable.strings ma "Your safety matters" i inne body niż exact objective.
+Overlay zawiera wszystkie wymagane teksty, bez braków. Zidentyfikowana luka:
+ingress OBJECTIVE jest generic; task content pochodzi z case OWNER transcript.
+engineeringImplementationContextPacket(...,true) zastępuje cały compiled
+packet digestem; epochHandoff także wyrzuca packet i zostawia generic objective.
+Własna pure sonda tsx exit0 potwierdza utratę requirement canary: inputHasRequiredCopy
+true,correctionHasRequiredCopy false (126bytes→403bytes),zero model calls.
+To dowód utraty kontekstu, nie dowód wyłącznej przyczyny decyzji modelu.
+Następna lokalna naprawa: zachować już redacted/bounded packet32KiB na korektach
+i epochach, nadal kompresować duże repo prefetched bytes. Wymagane regression
+z generic objective + exact OWNER copy, mutation RED/restore GREEN i pełna
+bramka przed jakimkolwiek kolejnym live. Brak ręcznej naprawy iOS.
+
+LIVE06 checkpoint09:38UTC: pierwsza implementacja completed09:36:50.870UTC,
+6responses731154=718515input+12639output COMPLETE. Fast-gate failure przeszedł
+do SLICE_IMPLEMENTATION attempt2/MODEL_CALL_RESERVED09:37:38.448UTC — realny
+dowód odblokowania korekty, nie jeszcze jej skuteczności. Journal
+engineering-eeb0953a1af0ebc66c3496a79cbb975c45211a929eda4b0fda2d23f2bd04b5cd.jsonl.
+Sesja90829 nadal działa; nie zmieniać runtime/bundle/candidate ani restartować.
+
+LIVE06 AKTYWNY: sesja90829,NLZRRp/launch-live-06.mjs,
+invocation mobl-2023-precheck-repair-20260914-06,
+RUN_STARTED2026-09-14T09:31:09.692Z, SYSTEM_DESIGN/MODEL_CALL_RESERVED.
+Canonical preflight i subscription auth wykonane przed exclusive admission.
+Nie uruchamiać launchera drugi raz; runtime, bundle, iOS candidate zamrożone
+do terminalu. Status wyłącznie `NLZRRp/status-live-06.mjs`. Usage jeszcze
+nieznane,hard1.8M,historyczna kampania przed06=5738269/0delivered.
+Primary ma kontynuować monitoring, odebrać terminal i receipts; nie kończyć
+na samym starcie testu. Bez innych provider calls/push/Jira/Discord.
+
+2026-09-14 własna pełna73413 exit0:3752passed/2jawne opt-in live skipped,
+265passedfiles/2skipped,202.33s; build29/29,typecheck46/46,Cached0,strict8tests0,
+workflow55OK,diff0. Log `live06-qualification-gRQTNo/full-gate.log`.
+Canonical NLZRRp preflight przez tsx exit0: clean seedcd46c82,Xcode26.1.1/17B100,
+PGSELECT1,51.86GB,role4×Codexsubscription/gpt-5.6-sol/CLI0.153.3,
+manifest/config/catalog/schema/overlay/mapping zgodne. Model calls nadal0.
+Następna autoryzowana operacja: NLZRRp/launch-live-06.mjs JEDNORAZOWO;
+invocation mobl-2023-precheck-repair-20260914-06,hard1.8M,historycznie5738269.
+Po admission zamrozić runtime/config/candidate do terminalu. Bez ręcznych
+iOS poprawek, zmiany modeli, push/Jira/Discord. RA055 nadal IN_PROGRESS.
+
+2026-09-14 09:26UTC: primary own focused3 + strict3 sesja33690 exit0,
+65passed/717ms. Odczytano wszystkie4zmienione pliki, skorygowano brak realnego
+source-precheck factory0 i negatyw resolvera (empty catalog, nie empty slice).
+Mutation log `/tmp/live05-repair-mutation2.eLUvDQ/mutation-disabled.log`:
+wyłączenie exact candidate validation → 7failed, malformed inputs resolved
+przez factory zamiast rejection; exit1. Guard przywrócony,65GREEN. Pierwszy
+mutation `/tmp/live05-mutation.DiwrM5/mutation-disabled.log` także realny RED1,
+ale pokrywał wyłącznie common validator. Runtime resolver/oracle bez zmian.
+
+NOWY BUNDLE PRZYGOTOWANY, NIE ADMITTED:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-precheck-repair-NLZRRp`.
+Generator `diagnostics/prepare-live06-precheck-authority.mjs` przez tsx exit0;
+primary przeczytał źródło i actual launcher/preflight diff, explorer niezależnie
+przejrzał generator. Pełne normalized config/manifest/overlay equality checks
+potwierdzają tylko approved exact3 + nowe roots + bindings; stare3rawhashes
+hcakTA niezmienione. Realny live05 GateFailure: starycatalog UNCLASSIFIED,
+nowycatalog AUTHORIZED exact3, ten sam mapping i activeSlice; zero model calls,
+wyłącznie diagnostic replay, nie nowy receipt/PASS.
+Manifest53e9ce4f76266fc4b0e61c58f2eb29cb995ef1a8279723a126b6cc8a030e28c9,
+config19b4bce2ae4cf7592afa83cfca98badc1aed0355364bfe2fa6c4388e6c620e17,
+catalogfd155c0e2f0fb13deb3505609459b5e404fdffe8a72f233ee1da100349a66f4d,
+overlay98c6674781b1dd4ea3a1ab0e5631c4f9e1bdc3437e70604a8f98c683798377aa;
+wszystkie sha256. Mappingf425cf13...3856 bez zmian. Pełne wartości preparation.json.
+Launcher06/status06 syntax0, status NOT_STARTED09:26:51UTC. Żadnego admission.
+
+Własna pełna bramka rozpoczęta sesja73413,
+`diagnostics/live06-qualification-gRQTNo/full-gate.log`: pełna komenda RA055
+z --force + strict8helpers/tests (w tym3zmienione contract suites). Wynik
+jeszcze nieznany. Dopiero exit0 → canonical NLZRRp preflight/auth → launch06
+jednorazowo. Nie uruchamiać ponownie generatora ani starego launch05.
+
+2026-09-14 wznowienie po jawnym pytaniu: właściciel odpowiedział `continue`,
+zatwierdzając opisane exact3 candidates i nowy live do1.8M. Poprzednia blokada
+zgody rozwiązana; brak zgody na inne modele/scope/push. ADR0028 zapisuje decyzję.
+HEAD nadalce9b2ff, poprzedni WIP zachowany. Luna implementuje tylko common
+contract i zależne test fixtures; primary docs/bundle preparation/review.
+Plan wykonania: exact3 preflight + real GateFailure mapping replay → mutation
+RED/restore GREEN → własna pełna bramka RA055 → osobny rebound bundle,
+canonical preflight → jednorazowy live06. Nie modyfikować hcakTA ani iOS.
+Komenda bounded gate: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec
+vitest run apps/agent-worker/test/engineering-live-full-flow-common-contract.test.ts
+apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts
+apps/agent-worker/test/engineering-live-full-flow-repair-authority.test.ts`.
+Wynik jeszcze nieznany, nic nie oznaczone DONE/PASS.
+
+LIVE05 TERMINAL 2026-09-14 09:02:27.620UTC, sesja36010 exit1.
+Ten checkpoint zastępuje poniższe historyczne ACTIVE. Nie restartować launchera05.
+FAILED/FAILED/FAILED, diagnostic COMPLETE, reconciliation_required=false,
+next_safe_step=INVESTIGATE, commit=null. Usage6responses731306=719118input+12188output;
+kampania 5738269 tokens / 0delivered (05 doliczone dokładnie raz).
+Help-asset gate PASS0/51ms; source-precheck FAILED1/84ms: missing general
+heading/body oraz sharing heading/body. Xcode/review/verifier nie wykonane.
+SLICE_IMPLEMENTATION attempt2 rozpoczęty, następnie wyjątek przed modelem.
+
+Primary ustalił dokładną przyczynę, nie hipotezę: wywołanie
+`engineeringDebugErrorDigest(new Error("UNCLASSIFIED_GATE_FAILURE: correction authority is unavailable"))`
+przez `pnpm exec tsx -e` exit0 daje sha256:20e8ee107d445e02a36ee7c5b83fd4e1fea8817e7478d4d64b5bd8f93926a96b,
+identyczne z STAGE_ERROR. W hcakTA/engineering.json source-precheck ma puste
+required_mutation_paths i required_test_paths. ADR0021 wymaga wtedy odmowy;
+nie zmieniać resolvera ani nie wyprowadzać authority z tekstu błędu.
+Common-contract validator również wymaga dziś pustych ścieżek tego gate'a:
+to luka konfiguracji/preflight, nie błąd fail-closed runtime.
+
+Własna weryfikacja po diagnozie: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1
+pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts
+-t 'empty candidate authority' --reporter=verbose && pnpm exec vitest run
+apps/agent-worker/test/engineering-live-full-flow-repair-authority.test.ts
+--reporter=verbose` — sesja5542 exit0; 1 wybrany resolver test oraz15 profile
+tests. Pozostałe integration cases odfiltrowane, nie pełna bramka. Te testy
+potwierdzają obecną odmowę; NIE kwalifikują naprawy source-precheck ani live.
+Ostatnia pełna bramka pozostaje56012 exit0/3735passed/2opt-in skipped.
+
+Zachowany05: hcakTA/workspaces/ra045_73b231a1-a6dd-4f92-ab03-7702eeb3ea64-case/
+engineering-cb04653b73b2b7e199f1bb33c8251b7d; 8stagedfiles,209insertions/6deletions,
+bez zmiany Localizable.strings i bez ręcznej naprawy iOS. SafetyAlert.swift
+odwołuje się do nowych agent-ai.safety-alert.* keys, których primary nie
+znalazł w en.lproj/Localizable.strings. Failed gate log preserved pod tym
+case/workspace w artifacts; digest2823f0d72ecf6cff5111394a839c00c4e6d171c1c23761c17947bcd8bc30d80e.
+
+Następny bounded plan wymaga decyzji o NOWEJ konfiguracji frozen benchmarku:
+1. Jawne candidate-ANY dla source-precheck: SafetyAlert.swift,
+   SafetyAlertPresentation.swift i Resources/en.lproj/Localizable.strings,
+   wszystkie pod SonderClient/SonderClientLibrary/Sources/Shared (pierwsze2
+   w AgentAI). To istniejący write scope, nie nowe uprawnienia repozytoryjne.
+   Nie dodawać generator output/testów ani zmieniać orakla/gate argv.
+2. Allowed paths implementacji: full-flow-common-contract.ts/.test.ts,
+   full-flow-profile-contract.test.ts, full-flow-repair-authority.test.ts oraz
+   fixture zależne od tego dokładnego kontraktu. Nie zmieniać resolvera.
+   Wymagać exact3 już przed factory i odtwarzać valid GateFailure przez
+   rzeczywisty mapping: positive AUTHORIZED, empty/foreign/generator/test RED.
+3. Mutation check: usunięcie preflight guard musi czerwienić test factory0;
+   restore GREEN, własna pełna bramka RA055 z --force.
+4. Przygotować NOWY bundle (nie nadpisywać hcakTA), ponownie związać digests,
+   zachować objective/model/seed/evaluatory i limit1.8M. Dopiero zatwierdzony
+   nowy bundle/preflight0 pozwala na live06. Dotychczasowe zatwierdzenie
+   dokładnego hcakTA nie jest zgodą na podmianę frozen authority.
+Brak aktywnego live, brak nowych provider calls, brak commit/push/cleanup.
+RA055 nadal IN_PROGRESS; dirty tree zachowane zgodnie z poprzednim checkpointem.
+
+LIVE05 checkpoint09:02UTC:6responses731306tokens=719118input+12188output,
+COMPLETE. SLICE_IMPLEMENTATION attempt1 STAGE_COMPLETED09:01:43.977UTC;
+generator tools recorded09:01:56.631UTC. Brak gate/commit outcome jeszcze.
+Journal engineering-b338a2fc72c81a6e7a5f782a2ebd576b059105506bd28c1b50bd450826863e4b.jsonl.
+Sesja36010 nadal aktywna,nie restartować/nie zmieniać runtime ani iOS.
+
+LIVE05 AKTYWNY: sesja36010,mobl-2023-source-repair-20260914-05,
+hcakTA/launch-live-05.mjs. Admission/log nowe,preflight/auth0 przed startem,
+RUN_STARTED2026-09-14T08:56:08.275Z,SYSTEM_DESIGN MODEL_CALL_RESERVED.
+Nie uruchamiać launchera drugi raz. Status read-only: hcakTA/status-live-05.mjs.
+Runtime/frozen inputs/seed/candidate niezmieniane do terminalu; dozwolone
+wyłącznie monitoring i niezależny read-only review. Usage jeszcze nieznane,
+hard1.8M,historyczna kampania przed05=5006963/0delivered. Bez push/Jira/Discord.
+
+2026-09-14 10:54CEST: UI diagnostic50123 TERMINAL exit1, elapsed117032ms;
+rzeczywisty gate FAILED/exit65/duration107715ms,zeroexecutedtests.
+Kompilator: SafetyAlert.swift54 cannot find $configuration;
+SafetyAlertPresentation.swift39 cannot find EmergencyResources +4nil context.
+Zachowane result.json/exit.json i pełny log193283bytes,digest
+sha256:1a560c90e3be3c0e855b9b008ade3ee9d00fa4603d67f35aa1036bd464fc6a22.
+Authoritative before/after b6816d65...19550,protected/disposable before=after;
+brak PROTECTED_TREE_CHANGED i timeoutu. Kandydat/seed nadalcd46c82,
+żadnej ręcznej naprawy iOS. To sprawny compile-feedback path, nie UI PASS.
+
+Następna zatwierdzona próba05: nowe launch-live-05.mjs/status-live-05.mjs
+w TYM SAMYM hcakTA, invocation mobl-2023-source-repair-20260914-05.
+Primary odczytał template04 i diff05: zmienione tylko invocation/log/admission/
+exit filenames, bez zmiany objective/frozen config/modeli. Syntax/status0,
+NOT_STARTED. Pełna56012 exit0, canonical preflight0 i realny diagnostic
+uzasadniają nową próbę po naprawie host/runtime; nie jest identycznym retry
+niezdiagnozowanego timeoutu. Wszystkie role Codex subscription gpt-5.6-sol,
+hard1.8M,bez push/Jira/Discord,nowy izolowany candidate. Launcher sam ponawia
+canonical preflight i subscription auth przed exclusive admission.
+Historyczna kampania przed05:5006963tokens/0delivered; nie doliczać lokalnych
+FakeTransport/diagnostic testów. Zachować04 i wszystkie artefakty.
+
+PROVIDER-FREE UI DIAGNOSTIC AKTYWNY: sesja50123, gLCghJ/run.mjs, świeże
+admission.json i run-20260914.log. NIE uruchamiać skryptu ponownie.
+Canonical hcakTA preflight exit0: clean seedcd46c82,Xcode26.1.1/17B100,
+52.44GB available,PG SELECT1,wszystkie frozen digests zgodne. Fullgate56012
+exit0 przed startem. Exact ios-full-flow-ui-tests-final timeout1200000ms,
+bez zmiany trusted evaluator inputs/mutable outputs/selectorów. Weryfikacja
+zachowanego kandydata04 wyłącznie w nowym disposable,zero provider calls,
+nie autonomiczny sukces/commit. Runtime i wejścia zamrożone do terminalu.
+Po wyniku odczytać receipt/log/test IDs, sprawdzić integralność źródła i
+sklasyfikować PASS/compiler failure/infrastructure; brak blind retry.
+
+2026-09-14 poranny FINAL FULL GATE56012 exit0:3735passed/2jawne opt-in skipped,
+265passedfiles/2skipped,200.92s; build29/29,typecheck46/46,Cached0; strict6
+helpers/tests0,workflow55OK,diff0. Log
+`authority-qualification-0G3MCc/full-gate-recovery-20260914-final.log`.
+Poprzedni19263 pozostaje exit1 wyłącznie przez otwarty wtedy rejestr CTF025;
+nie ukrywać go. Timeouty nocne nie wystąpiły po odciążeniu hosta; nie zmieniono
+limitów ani safety. F3 kwalifikuje aktualne naprawy; RA055 nadal IN_PROGRESS.
+Następny krok teraz: canonical preflight hcakTA i jedna przygotowana
+provider-free exact UI gate w gLCghJ na zachowanym kandydacie04.
+Brak admission tego diagnostic przed preflight; nie uruchamiać launch-live-04.
+
+2026-09-14 10:47CEST: pełny19263 exit1,3733passed/2failed/2opt-in skipped;
+jedyne failures to AC2/AC3 rejestru otwartego CTF025. Wszystkie testy kodowe
+wykonały się bez failure; build29/29 Cached0. Nie przedstawiać19263 jako GREEN.
+Primary ponownie tool-loop49/49 exit0 (259ms), odczyt wcześniejszych mutation
+RED/restore i diffu; CTF025 zamknięty na podstawie tych dowodów. RA055 nadal
+IN_PROGRESS, acceptance test niezmieniony. Pełna komenda ponowiona sesja56012,
+log `authority-qualification-0G3MCc/full-gate-recovery-20260914-final.log`,
+wynik nieznany. Po exit0 wykonanie przygotowanej exact UI diagnostic gLCghJ.
+
+WZNOWIENIE 2026-09-14 10:42CEST: host load3 (wcześniej~100), ten sam HEAD/WIP,
+bez zmiany timeoutów. Primary oba solo kolejno sesja89341 exit0:
+provider-qualification2/2,57.18s (ciężki test56236ms); cross-fence3/3,15.39s
+(pierwszy13789ms). Log `authority-qualification-0G3MCc/recovery-solo-20260914-morning.log`.
+To porównanie wspiera wpływ obciążenia na poprzednie timeouty; nie usunięto
+żadnej asercji ani integrity check. Pełna uncached bramka ponownie uruchomiona,
+`authority-qualification-0G3MCc/full-gate-recovery-20260914-morning.log`,
+obejmuje również strict sześciu helpers/tests (dodany coordinator). Wynik
+jeszcze nieznany. Dopiero exit0 odblokuje dokładny provider-free UI diagnostic.
+
+Finalny własny check diagnostyki52692: lint/prettier/strict coordinator/
+workflow/diff exit0,workflow55OK. Nie zastępuje nieudanej pełnej bramki.
+Brak aktywnych prób; żadnego live/provider/Xcode admission po04.
+
+CHECKPOINT 2026-09-14 01:43CEST — brak aktywnego live, kwalifikacja wstrzymana
+na powtarzalnych timeoutach integracyjnych; NIE DONE/PASS.
+Końcowy własny odczyt journala:31rekordów (sequence0..30), nie23 z wstępnego
+raportu Luny. Outer SLICE_REVIEW entered23:41:23.737UTC; zagnieżdżony
+SLICE_REVIEW entered23:41:52.757/completed23:41:52.759,duration2ms.
+To dalsze~29s przed samym syntetycznym review, nie powolny model.
+Finer journal diagnostic exit1,1failed/2deselected,147.09s,timeout120000ms.
+Log `/tmp/ra055-cross-fence-journal-diagnostic.log`; zachowany journal:
+`/var/folders/xb/jd63xr65177dmssn7pz10kwh0000gn/T/ra055-cross-fence-journal-k9Py9Y/engineering-debug/engineering-a4ae858d2f4f7de0c62472a1981f8aba0f118d13616b04e4718bf259fc82bd69.jsonl`.
+Primary sam odczytał: mutation23:40:27.805UTC,FAST_GATES_PASSED23:41:22.349UTC,
+SLICE_REVIEW entered23:41:23.737UTC. To postęp pierwszego slice, nie deadlock
+w recovery albo modelowym retry; między mutacją a fast gates~54.5s.
+Pierwsze wejście handlera po~22s testu, scheduler resume~0.38s.
+Bez realnych model calls, bez zmiany runtime/timeoutów/frozen inputs.
+Opt-in test używa istniejącego AsyncLocalStorage journala; close w finally
+po fixture.drop, prywatny root poza cleanup. To diagnostyka, nie acceptance.
+
+Nie ponawiać identycznych prób na niezmienionym stanie. Potrzebne porównanie
+obu nieudanych testów na odciążonym/stabilnym hoście przed zmianą kodu lub
+hipotezą optymalizacji. Proces JumpConnect~358%CPU/swap~8.4GB/load~100 należy
+do użytkownika; nie zatrzymano go. Brak dowodu, że wszystkie opóźnienia mają
+wyłącznie tę przyczynę — nie przedstawiać tego jako zamkniętego root cause.
+Po stabilizacji: solo0 obu plików, potem pełny uncached gate, dopiero Xcode
+diagnostic/provider live. Jeżeli solo nadal timeout, instrumentować konkretny
+odcinek actualEvidence/baseline/Git/DB; nie osłabiać integralności lub limitów.
+Brak częściowych commitów/push, CTF025 nadal formalnie otwarty do pełnej bramki.
+
+Dalsza bezpieczna diagnoza (bez live): primary odczytał
+runWithEngineeringDebugJournal1396/runWithEngineeringDebugStage1435.
+AsyncLocalStorage pozwala opakować handler bez fixture seam/modelRouting
+i zapisuje STAGE_ENTERED/COMPLETED oraz istniejące tool/gate callbacks.
+Luna rozszerza wyłącznie opt-in coordinator test: osobny mkdtemp journal root
+poza kasowanym fixture, zachowany content-free journal, jedna próba tego samego
+testu120000ms. Normalny test bez zmiany zachowania; bez nowych timeoutów,
+transportów/produkcji. Wynik ma zawęzić koszt handlera, nie kwalifikować RA055.
+Primary strict coordinator/workflow/diff94202 exit0,workflow55OK.
+
+CHECKPOINT 2026-09-14 01:34CEST — RA055 nadal IN_PROGRESS, brak full gate/PASS.
+Bounded diagnostyka cross-fence: Luna exit1 po120000ms,1failed/2deselected,
+log `/tmp/ra055-cross-fence-stage-diagnostic.log`. Fixture/setup~22s;
+scheduler start24943ms,handler enter26122ms; cleanup start120055ms/end123173ms.
+Primary odczytał rzeczywisty diff i podczas próby wykonał readonly PG:
+design/planning normalnie postępują, implementation01:30:14.470,
+gate stage01:30:34.940, wymagany gate PASSED0 duration901ms.
+Brak dowodu deadlocku przed handlerem ani wejścia w malformed guard.
+Fixture faktycznie tiny (src/base.ts); .git pomijany w digest, brak node_modules
+lub kopiowania pełnego repo/executable. Koszt wielu operacji lifecycle/DB/Git
+na obciążonym hoście pozostaje hipotezą, nie udowodnionym wyłącznym root cause.
+Nie wykonywać kolejnego identycznego live/full retry bez nowego dowodu.
+
+Primary lint/prettier diagnostyki0; strict początkowo2 wykazał wcześniejszy
+literal widening can_write_workspace. Luna zachowała `true as const`, strict0.
+Zmiany tej fazy: model-runtime/src/tool-loop.ts; bedrock-runtime/test/tool-loop.test.ts;
+agent-worker/src/xcode-gate-adapter.ts; test/xcode-gate-adapter-scratch-ownership.test.ts;
+test/engineering-cross-fence-coordinator.integration.test.ts; CTF i oba plany RA055.
+Wszystkie ścieżki mają prefiksy packages/ albo apps/ zgodne z allowed paths powyżej.
+Cały istniejący dirty WIP jest zamierzony i zachowany, bez częściowego commita.
+Pełna lista ścieżek checkpointu: prywatny
+`authority-qualification-0G3MCc/dirty-tree-post-live04-timeout-checkpoint.log`.
+Nie usuwać seed/candidate/diagnostyk. Nie uruchomiono Xcode provider-free ani05.
+
+Warunek dalszego F3: rozstrzygnąć timeouty przy stabilnych zasobach hosta
+albo uzyskać pomiar konkretnej operacji handlera przed bounded optymalizacją;
+bez usuwania integrity checks i bez wydłużania timeoutów. Po usunięciu przyczyny
+solo oba pliki, następnie pełna uncached bramka wraz ze strict helpers
+(również coordinator test). Dopiero exit0 pozwala na przygotowaną jednorazową
+provider-free dokładną UI gate; potem ewentualny zatwierdzony pełny live05.
+Formalny audyt/commit/closure nadal niedozwolone bez końcowych kryteriów.
+
+Strict helpers/workflow/diff sesja6211 exit0,workflow55OK.
+Następna bounded diagnoza: wyłącznie
+`apps/agent-worker/test/engineering-cross-fence-coordinator.integration.test.ts`,
+opt-in `RA_ENGINEERING_STAGE_DIAGNOSTICS=1`, content-free stage/elapsed_ms
+wokół istniejących awaits (scheduler.tick i resumed handler, recovery
+prepare/claim, fixture teardown). Bez Promise.race/dodatkowych timeoutów,
+bez zmiany120000ms, bez produkcyjnych zmian. Luna wykonuje jeden exact pierwszy
+scenariusz z RA_REQUIRE_POSTGRES=1; wynik i timingi rozstrzygną dalszy krok.
+Nie mylić z plikiem cross-fence-stage (pierwszy raport eksploracji odrzucony
+przez primary jako dotyczący innego pliku). Exact coordinator test wykonuje
+trzy slices/review/commit przez scheduler.tick, nie polling loop.
+
+Cross-fence solo20587 zakończony exit1:1failed/2passed,184.71s.
+Pierwszy test timeout120000ms (124692ms), pozostałe17290/17739ms.
+Nie klasyfikować jako rozwiązany flake ani automatycznie jako wyłącznie host.
+Następna diagnoza: dokładne await points pierwszego scenariusza, ewentualna
+content-free instrumentacja etapów jednej lokalnej próby; bez zwiększania
+timeoutów, nowego live ani zmiany kryteriów. Strict helpers/workflow/diff
+uruchomione osobno sesja6211; wynik jeszcze nieznany.
+
+2026-09-14 01:22CEST: powtórzona pełna bramka39752 nie zakwalifikowała kodu.
+Lint/format0, build29/29 Cached0; podczas vitest dwa failures:
+engineering-provider-qualification (291519ms) oraz engineering-cross-fence-
+coordinator (414376ms). Primary przerwał wyłącznie własny runner PID47337
+SIGINT, końcowy exit130, wszystkie sprawdzone procesy potomne nie istnieją.
+Zachowany log `authority-qualification-0G3MCc/full-gate-post-live04-repairs-r2.log`.
+Nie ukończono pełnego zestawu, typecheck ani workflow; nie raportować PASS.
+Provider qualification powtórzony solo z RA_REQUIRE_POSTGRES=1:
+sesja10491 exit1,1failed/1passed,268.37s, dokładny błąd
+`Test timed out in 240000ms`, bez failure asercji nowego guarda.
+Log `authority-qualification-0G3MCc/provider-qualification-post-live04-solo.log`.
+Drugi plik powtarzany solo sesja20587, wynik nieznany,
+`authority-qualification-0G3MCc/cross-fence-post-live04-solo.log`.
+Host load75–129, swap8427/9216MB; readonly PG probe nie wykazał blockers.
+Nie podnosić timeoutów/nie zmieniać acceptance/nie zabijać procesów użytkownika.
+Nie uruchomiono provider-free Xcode ani nowego live. Najpierw rozstrzygnąć
+solo drugi plik i stan środowiska; koszt kampanii nadal5006963/0delivered.
+
+Pełna bramka80668 zakończyła exit1 na lint: unused `input` w nowej same-batch
+regresji tool-loop.test.ts:1026. Nie rozpoczęła build/test/typecheck. Luna
+usuwa wyłącznie unused parameter; następnie cała komenda będzie ponowiona
+z nowym logiem, bez pomijania lint ani deklaracji GREEN tego przebiegu.
+
+2026-09-14 00:58CEST: CTF025 restored; primary forced build model-runtime/
+bedrock-runtime exit0,3/3 Cached0 oraz tool-loop49/49 exit0 (sesja34034).
+Luna rzeczywiste mutacje vitest: malformed classification exit1,3failed
+(`/tmp/ctf025-vitest-mutant1.log`); brak intra-batch break exit1,2failed,
+writes2 zamiast1 (`/tmp/ctf025-vitest-mutant2.log`), forced build po każdej
+mutacji i restoration. Primary odczytał kod i logi oraz uruchomił regresję.
+Scratch mock ma teraz osobny injectCompeting i reset ścieżek. Poprawiona
+mutacja starej kolejności exit1 na pozostawionym owned subtree
+(`/tmp/xcode-cleanup-order-mutant.log`), nie na pre-executor failure.
+Primary solo cleanup po restore: sesja3344 exit0,1passed/1deselected.
+Pełna własna bramka uruchomiona sesja80668, wynik jeszcze nieznany:
+`authority-qualification-0G3MCc/full-gate-post-live04-repairs.log`.
+Obejmuje lint/format/build--force/RA_REQUIRE_POSTGRES=1 vitest/typecheck--force,
+dotychczasowy strict tsc czterech helpers + scratch-ownership.test.ts,
+workflow i diffcheck. Nie kwalifikować live przed terminalnym exit0.
+
+2026-09-14, niezależna kontrola po naprawach: primary uruchomił
+`. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts apps/agent-worker/test/xcode-gate-adapter.integration.test.ts --reporter=dot`
+— sesja70467 exit0,31/31. Następnie mutation starej kolejności cleanup oraz
+przywrócony kod z samym testem `-t 'cleans owned SwiftPM configuration when output cleanup fails'`
+dały oba exit1 (sesje92636/58675), processRunner0 zamiast1. Tego RED nie
+uznawać za dowód zabezpieczenia: mock mkdir uruchamiał competing injection
+także w teście cleanup; solo miał pustą ścieżkę, w zestawie dziedziczył ścieżkę
+poprzedniego testu. Kod produkcyjny przywrócony. Luna poprawia izolację mocka
+i powtarza load-bearing mutation; potem własna pełna bramka primary.
+Podobnie diagnostyczne sondy CTF025 exit0 nie zastępują RED regresji;
+zażądano rzeczywistych mutacji vitest z exit1 i restore/forced build.
+Żaden provider/Xcode live nie został ponowiony. Przygotowany provider-free
+`provider-free-live04-ui-gLCghJ/run.mjs` przeszedł syntax check i review API,
+ale nadal nie ma admission ani wyniku wykonania.
+
+LIVE04 TERMINAL FAILED: sesja53412 exit1,PID5963 nie istnieje,
+finished22:31:05.497UTC, journal RUN_COMPLETED22:31:03.886UTC:
+handlerSUCCEEDED/engineeringINCOMPLETE/reconciliation_required true.
+6responses735104=720041input+15063output COMPLETE; kampaniałącznie5006963,
+0delivered. Liczyć04 tylko raz. Full live test7062277ms (7062.28s), runner7093.47s.
+TrzycheapgatesPASS0; modelXcodeTIMED_OUT1253544ms/exitnull; UIINFRASTRUCTURE
+1213788ms/exitnull, GATE_BOUNDARY_ERROR PROTECTED_TREE_CHANGED: dodany
+`SonderClient/SonderClientLibrary/Tests/RemoteAgentUIHarness/RemoteAgentUIHarness.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration`.
+Brak wykonanychtestIDs/review/verifier/commita/attempt2. Zachowane13stagedpaths,
+HEADnadalcd46c82; seedstatusclean/sameSHA. Nie uruchamiać05 bez diagnozy i bramek.
+Private export: hcakTA/artifacts/engineering-private-evidence/
+evidence-023e6213b2429c118c7ac16d293789908b069f48602f43a2c1e335050538548c.json.
+
+Naprawa po terminalu: Luna wykonuje CTF025 (tool-loop.ts i jego bedrock-runtime
+test) z RED/GREEN/mutation. Następnie bounded Xcode cleanup:
+allowed paths apps/agent-worker/src/xcode-gate-adapter.ts oraz
+apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts.
+Primary odczytał finally: rm(outputRoot) może rzucić przed rm(ownedRoot).
+To zgodne z UI runner refused RUNNER_FAILED + pozostawionym configdir,
+ale log nie zachował pierwotnego errno — nie deklarować go jako udowodnionego.
+Wynik kroku: owned SwiftPM scratch cleanup wykona się także po błędzie
+sprzątania outputRoot, bez usuwania konkurencyjnego/pre-existing subtree.
+Nie zmieniać mutable_outputs, evaluator bytes, frozen inputs ani timeoutu.
+Regresja ze wstrzykniętym błędem pierwszego rm; brak fałszywego PASS i brak
+pozostawionego ownedRoot; mutacja przywróconej kolejności musi RED.
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`.
+Potem primary odczytuje oba diffy, uruchamia własną wspólną focused i pełną
+bramkę z forced build/typecheck. Bez live retry podczas napraw/mutantów.
+
+22:27UTC04 (2026-09-14 lokalnie): pierwszy Xcode ma trwały receipt
+ios-full-flow-model-tests-final TIMED_OUT,exit_code null,duration1253544ms,
+bez test_evidence/executed_test_ids. Drugi XcodePID27987 pracował następnie
+~20min i już nie istnieje; jego receipt oraz terminal sesji53412 jeszcze
+nieznane. Nie restartować live i nie zmieniać runtime do terminalu.
+Sonda CTF025 zachowana trwale:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/authority-qualification-0G3MCc/mutation-outcome-probe.mjs`.
+Primary odczytał kopię i wykonał ją exit0 z tymi samymi wynikami (to dowód
+defektu, nie zielony test naprawy). Kolejny workflow/diffcheck sesja17653:
+`. scripts/dev/env.sh && pnpm workflow:validate && git diff --check` exit0,
+PGup5432/workflow55OK. CTF025 pozostaje OTWARTY, runtime niepoprawiony.
+
+21:52UTC04: runtime nadal zamrożony dla aktywnej sesji53412. Trzy tanie
+gates PASSED0 (changelog688ms,receipt21:34:05UTC). XcodePID19164 uruchomiony,
+limit gate1200000ms; readonly sample pokazał waitForRemoteSourcePackagesToFinishLoading
+i SwiftPM loadPackageGraph, potem kolejne swift-driver procesy. Sample:
+/tmp/xcodebuild_2026-09-13_234856_HYQ8.sample.txt. Nie mylić z wykonanymi tests.
+
+Równoległy read-only review primary: handlers/worker/process-runner/invocation,
+model-runtime config/errors/types/structured-completion/tool-loop diff od
+b4fb467. Odkryty CTF025 ponownie OTWARTY: malformed null/UNKNOWN po sukcesie
+przyjmuje final; explicit AMBIGUOUS w batchu dopuszcza drugi executor przed
+odmową finalu. Luna zrobiła tylko prywatny FakeTransport probe, primary
+przeczytał i sam ponowił go dwa razy, exit0:
+`/Users/marcinjackowski/.local/opt/node-v24.19.0-darwin-arm64/bin/node /tmp/ra-mutation-outcome-probe.sajQra/probe.mjs`.
+Wyniki: null/UNKNOWN accepted2calls; knownFAILED refused; samebatch A→B/A→A
+poAMBIGUOUS calls2, osobne responses calls1. Zero real mutations/provider calls.
+Po terminalu04: Luna naprawia bounded packages/model-runtime/src/tool-loop.ts
+i packages/bedrock-runtime/test/tool-loop.test.ts; malformed mutating outcome
+fail-closed/ambiguous (bez retry), intra-batch stop kolejnej mutacji. Testy
+RED→GREEN i osobne mutation checks, potem własny diff/full gate. Nie pisać
+PASS ani zamykać RA055 przed naprawą. Nie zmieniać runtime w biegu.
+Nowe tylko dokumenty CTF/plan/WU podczas live; git diff --check exit0.
+
+21:27UTC04: readonly DB potwierdza SLICE_IMPLEMENTATION completed i aktywny
+GATE_EXECUTION pomimo journal157 bez nowych wpisów. DB
+ra_test_9373f914464c4d368bb2719405e69b4e, exact case powyższego live04;
+SELECT completions joined engineering_operations by intent_id/case_id:
+mobl-2023-help-asset-input PASSED exit0 duration791ms recorded21:17:54UTC;
+mobl-2023-full-flow-source-precheck PASSED exit0 duration1387ms recorded21:26:21UTC.
+Pomiędzy receipts~8m27, nie czas samych komend. Nie deklarować wszystkich
+gates ani Xcode PASS. Status-journal pokazuje wyniki grupowo z opóźnieniem;
+brak wpisu nie oznacza braku rozpoczętej/dokończonej pojedynczej bramki.
+Odczyty PG bez model calls i bez zapisów;735104tokens/6responses bez zmian.
+
+Checkpoint 2026-09-13 21:08UTC: live04 nadal aktywny,735104tokens/6responses,
+bez terminalu. Generator RUN_COMMAND SUCCEEDED i Assets+Generated APPLY_PATCH
+SUCCEEDED20:59:29UTC. Kolejny lsof21:06 potwierdził równoległe odczyty plików
+baseline i worktree (kolejna kontrola integralności), nie rozpoczęte Xcode.
+Po porządkowaniu aktywnego ENGINEERING_FINISH_PLAN:
+`. scripts/dev/env.sh && pnpm workflow:validate && git diff --check` exit0,
+workflow55OK (sesja58808). env.sh chwilowo zgłosił PG DOWN przy2s timeout;
+pg_isready5432 następnie exit0, a osobny psql SELECT1 z10s timeout exit0
+(sesja90783). Nie restartowano PostgreSQL ani procesów użytkownika.
+Wyłącznie dokumenty zmienione podczas live; runtime/frozen inputs/iOS nietknięte.
+Poniższe checkpointy grant-pending są historią sprzed jawnej zgody, nie blokadą.
+
+LIVE04 AKTYWNY: sesja53412, mobl-2023-source-repair-20260913-04,
+hcakTA/launch-live-04.mjs. Canonical preflight/auth/workflow0 przed admission;
+seedclean,53.5GB,Xcode26.1.1,PG1,Codex0.153.3/gpt-5.6-sol wszystkie role.
+Limit1.8M,historyczne4,271,859 przed04. Monitorować status-live-04.mjs oraz
+istniejącą sesję53412; nie uruchamiać launchera drugi raz. Nie zmieniać
+runtime/frozen inputs/iOS w trakcie. Terminal nieznany, brak dowodu delivery.
+
+Progress04: journal engineering-f66573194a8f3ad456d5a9d09cd68ef798a3f6ccad3a9bfe89855bdb5d1fc148.jsonl,
+hcakTA/artifacts/engineering-debug. Case ra045_c14fe8fd-efb6-4ac4-89c4-ee8ecbedbba0-case,
+worktree engineering-219ee8bcb0a7b3c78462dba01758c144. Design2responses
+30713tokens, następnie baseline filesystem snapshot (lsof potwierdził kopiowanie
+image asset w baselines/tree, to nie zawieszony provider). SLICE_IMPLEMENTATION
+attempt1 od20:41:09UTC. Pierwszy APPLY_PATCH SUCCEEDED20:43:19, SafetyAlertTests.swift.
+Usage3responses254269=247848input+6421output,COMPLETE. Trwa dalsza implementacja;
+nie poprawiać ręcznie iOS, nie zmieniać runtime. Brak gate/commitPASS.
+
+20:56UTC04: implementation attempt1 STAGE_COMPLETED20:48:31,6responses735104
+(720041input+15063output),COMPLETE. Długi etap filesystem przed generator/gates;
+nodePID5963 żywy, lsof pokazuje traversal worktree. Read-only Luna ustaliła
+vertical-slice-executor durableBaselineStore.inspect→deriveBaselineTreeDelta:
+około6rekurencyjnych skanów (digest/inventory +baselinebefore/after), bez
+osobnych progress events. To samo powtarza actualEvidence przy gate/review.
+Nie usuwać safety reverify ani zmieniać runtime w biegu. Dodatkowy czynnik
+host: load84/swapused8451MB; najwyższy CPU JumpConnect~353%, proces użytkownika,
+nie nasz provider i nie do zabijania. Ta obserwacja nie oznacza timeoutu ani
+terminalFAIL; monitorować do prawdziwego wyniku. Po terminalu ocenić minimalne
+instrumentation/shared-pass usprawnienie bez osłabienia baseline integrity.
+
+ZGODA LIVE PRZYJĘTA 2026-09-13: właściciel odpowiedział „tak nie przerywaj
+dopki nie zakonczysz pracy ale planuj to wszydtko tak zeby skonczyc” na
+pytanie o dokładny hcakTA, Codex subscription,limit1.8M/próbę,zachowane
+worktree/commit,bez push/Jira/Discord. F5 grant nie jest już blokadą.
+Przygotowano launch-live-04.mjs oraz status-live-04.mjs w hcakTA, nowy
+invocation mobl-2023-source-repair-20260913-04. Najpierw syntax/status/
+bundle invariants, potem launcher powtarza canonical preflight i auth.
+Nie uruchamiać drugi raz po admission04. Root WIP oraz frozen inputs
+pozostają bez zmian podczas live; brak ręcznych poprawek iOS.
+
+CHECKPOINT 2026-09-13 — F1/F2/F3 ZWERYFIKOWANE, F4 GOTOWY, F5 GRANT PENDING.
+Primary sesja47215 exit0, pełna bramka taska + strict czterech nowych/
+zmienionych tests/helpers. Log authority-qualification-0G3MCc/
+full-gate-source-authority.log:3729passed/2jawne opt-in skipped,265passedfiles,
+211.02s,build29/typecheck46 Cached0,strict0,workflow55OK. Brak flake i mutanta.
+Dokładna komenda: `. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run
+build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck
+--force && pnpm exec tsc --noEmit --strict --exactOptionalPropertyTypes --skipLibCheck
+--target ES2023 --module NodeNext --moduleResolution NodeNext --esModuleInterop
+--types node apps/agent-worker/test/engineering-live-full-flow-repair-authority.test.ts
+apps/agent-worker/test/engineering-live-full-flow-evaluators.test.ts
+apps/agent-worker/test/engineering-execution.integration.test.ts
+packages/test-evidence/test/engineering-gates.test.ts && pnpm workflow:validate && git diff --check`.
+
+Nowy prywatny bundle:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-source-repair-hcakTA`.
+Manifest0130c9a25fb4edd65e57c127e291c7de9662f1cc057b4fe7bd8cc9e741bf5b89,
+configb756aff5ba4029bb52938d93cb889053e73b8caa2e2d3cf2a12e284007ef7576,
+catalog69340729448790e480655ffa174f9f55b0502544f72481e444e1f0dd256a197e,
+overlay026e4eead6b485676a4dbc08f22fab3e427a96501f64189dafebea91096ea76e.
+Schema29ac8998... i mappingf425cf13... NIEZMIENIONE. Dwa gates mają11SOURCE
+candidates, brak TEST/generator candidates; test/write allowlists bez zmian.
+` . scripts/dev/env.sh && node --import tsx <hcakTA>/preflight.mjs` exit0,
+preflight.log: seed clean cd46c82...,Xcode26.1.1/17B100,PG SELECT1,
+~52.3GB available,4role codex_cli/gpt-5.6-sol/CLI0.153.3. Osobny
+createCodexSubscriptionAuthPreflight.verify exit0 SUBSCRIPTION_AUTHENTICATED,
+auth-preflight.log; NIE dowodzi wolnej quota ani model generation.
+`node --import tsx <authority-qualification-0G3MCc>/verify-new-bundle.mjs`
+z env.sh exit0 (bundle-invariants.log): stare raw hashes3plików bez zmian,
+zmiany nowego configu dokładnie roots +2candidate arrays, manifest/overlay
+wyłącznie rebind. Objective/seed/targets/evaluator bytes niezmienione.
+
+Nie ma nowego launcher/admission/provider run/iOS worktree/commita.
+Usage historyczne4271859/0delivered bez zmian. Wysłano nowe pytanie o exact
+grant hcakTA/11SOURCE/do1.8M, zastępujące nieaktualne pytanie19. Brak odpowiedzi
+zatwierdzającej. To granica uprawnień ADR0028, nie awaria loginu ani powód
+do powtarzania testów offline. RA055 nadal IN_PROGRESS, bez formalnego PASS.
+Po grant: z read-only launch-live-03.mjs przygotować nowy launcher04 w hcakTA,
+zmienić bundle/manifest digest/invocation/exclusive04 filenames, node --check,
+ponowić preflight/auth i uruchomić raz. Nigdy nie używać starego admission03.
+
+Intentional dirty delta tego wznowienia: apps/agent-worker/test/
+engineering-live-full-flow-evaluators.ts, engineering-live-full-flow-evaluators.test.ts,
+engineering-live-full-flow-repair-authority.test.ts (nowy),
+engineering-execution.integration.test.ts; packages/test-evidence/test/
+engineering-gates.test.ts; docs/decisions/ADR-0028-explicit-full-flow-benchmark-profile.md;
+docs/work-units/RA-055/ENGINEERING_FINISH_PLAN.md oraz WORK_UNITS.md.
+Pozostały wcześniejszy RA055WIP zachowany; runtime mutations przywrócone,
+schema max16 przywrócona. Nie czyścić root ani prywatnych bundles/worktrees;
+nie commitować częściowo i nie pushować. Plan F1–F7 jest aktywną nawigacją.
+
+NAJNOWSZA DECYZJA 2026-09-13: exact11 SOURCE candidates, cap16 bez zmian.
+Propozycja19/cap256 WYCOFANA: realny GateFailure replay wykazał16 violations
+FOREIGN_MUTATION_PATH dla8TEST paths obu gates. Ownership guard prawidłowy,
+nie wolno przeklasyfikować testów ani zmienić guardu. Doprecyzowano ADR0028
+i aktywny plan F1–F7. Test before-factory obejmuje teraz także prawdziwe
+createEngineeringGateFailureMapping z20typowanymi targetami,15test cases.
+Nowe wymaganie: candidate list = write20 minus generator1 minus TEST8.
+W globalnym scope/test allowlist nie ma żadnej zmiany.
+
+Primary pełna bramka20956 exit0:3727passed/2opt-in skipped,265passedfiles,
+191.16s,build29/typecheck46 Cached0,strict0,workflow55OK; full-gate.log.
+Ten wynik jest historyczny dla odrzuconej19-candidate propozycji i NIE
+dowodził poprawnego ownership rzeczywistego benchmarku. Własny replay
+wykrył to przed providerem. Pierwszy replay miał zły import (exit1), drugi
+doszedł do odmowy ownership (exit1); nie są to nowe live próby.
+
+Po zmianie na11 primary75595 exit0: forced build29/29 Cached0,67/67 w3plikach,
+realny replay historycznego GateFailure przy niezmienionym mapping digest:
+oryginalny katalog UNCLASSIFIED → poprawiony w pamięci AUTHORIZED11,
+bez generatora/TEST w candidates. Probe-live03-authority.mjs i
+source-authority-focused.log w authority-qualification-0G3MCc,ModelCalls0.
+Finalne mutation checks: cap16→17 (1unsafe acceptance), exact11 equality
+(2unsafe factory calls), candidate scope generator/foreign/TEST (6unsafe
+factory calls), wszystkie exit1 i przywrócone. Logs final-*-red.log.
+Nowa pełna bramka primary sesja47215, full-gate-source-authority.log,
+jeszcze aktywna; nie zmieniać produkcji/testów do terminalu. Następnie F4:
+osobny bundle exact11, canonical preflight, brak live bez exact grant.
+
+RECOVERY 2026-09-13: aktywny plan F1–F7 zapisany w ENGINEERING_FINISH_PLAN.md;
+użytkownik prosi o ciągłą pracę i plan domknięcia. Luna przerwana limitem usage,
+pozostawiła malformed full-flow-repair-authority.test.ts. Primary przejął
+wyłącznie lokalną implementację tych ograniczonych testów (Luna niedostępna).
+Naprawiony fixture używa prawdziwych parserów/validatorów, tylko syntetycznych
+policy/input data zamiast prywatnego kodu. Pierwsze własne próby:3fail z błędną
+asercją wrapper.value i wcześniejszym schema rejection duplicate/protected;
+poprawiono, bez ignorowania zabezpieczeń. Finalnie13testów (positive factory1,
+każdy osobny combined/UI empty/missing/duplicate/generator/foreign/protected)
+sesja37256 exit0. Bez nowego provider live, historyczne4,271,859tokens/0delivered.
+
+F2: maskowane negative resolver fixtures mają teraz pozytywną kontrolę AUTHORIZED
+przed każdym defektem, plus osobny empty-authority case. Target2 ma tę samą
+ścieżkę, żeby późniejszy path guard nie maskował kontroli target identity.
+Primary mutation log root: diagnostics/authority-qualification-0G3MCc.
+10 mechanizmów w qualified-mutation-*.log dało exit1 z rzeczywistym unsafe
+acceptance: unknown/infra class, gate binding, criterion identity, target identity,
+scope, empty authority (obie redundantne bariery), exact candidates, cap256,
+candidate scope (generator/foreign:4failed, model factory wykonane nielegalnie).
+Wszystkie mutacje przywrócone. UWAGA pierwsze mutation-*.log bez qualified-
+mają błąd narzędzia primary przy przywracaniu pustej linii: tylko pierwszy RED
+był merytoryczny, cztery pozostałe były parse errors i NIE są dowodem.
+Przywrócono dokładny blok,7/7GREEN, potem ponowiono wszystkie z unikalnym
+markerem i odczytano AssertionError/AUTHORIZED. Nie ma aktywnego mutanta.
+
+Primary sesja48509 exit0: forced build29/29 Cached0, focused181/181 w6plikach,
+strict tsc czterech helper/test files0. Ten wynik poprzedza rozdzielenie nowego
+fixture z3 na13testów; następnie37256 potwierdził13/13. Następny ruch:
+pełna bramka F3 + strict (aktualny total focused191). Dirty paths to poprzedni
+RA055WIP oraz gate schema/test, full-flow evaluator/helper/test, nowy
+full-flow-repair-authority.test.ts, execution integrationtest i dokumenty planu.
+Nie commitować częściowo. Nowy bundle F4 przygotować osobno po bramce;
+provider live nadal wymaga exact bundle grant, nie obchodzić ADR0028.
+
+PRIMARY POSITIVE PROFILE PROBE po cap fix: exit0,
+corrected-authority-in-memory-profile-restored.log; prawdziwy catalog parser
+oraz pełny profile checker przyjęły rzeczywiste definicje Phbmzv z jedyną
+zmianą W PAMIĘCI: jawne19required_mutation_paths obu Xcode gates. ModelCalls0,
+żadnego zapisu frozen bundle. To nie canonical preflight nowego bundle:
+nowe config/catalog/schema digests dopiero trzeba związać. Primary focused
+sesja7875 exit0,85/85tests/4files (authority-focused-primary.log), dodatkowy
+strict tsc evaluator helper+gate test exit0 (authority-strict-primary.log).
+Brakuje jeszcze pozytywnego synthetic factory fixture, mutacji i pełnej bramki.
+
+POSITIVE REAL-CONFIG PROBE FAILED: primary zbudował wyłącznie w pamięci
+katalog Phbmzv z 19 kandydatami; VerificationGateCatalog.create odrzucił
+required_mutation_paths max16 (exit1, corrected-authority-in-memory-profile.log).
+Brak zapisów frozen/config/iOS/provider. To dodatkowa niespójność reprezentacji,
+nie flake: same direct-validator tests omijają schema parse. Przed nowym
+bundle należy uzgodnić limity katalogu/correction artifacts z dokładnym
+zatwierdzonym zakresem i dodać pozytywny test przez prawdziwy catalog parser.
+Luna sprawdza powiązane limity, zakres implementacji zostanie zapisany poniżej.
+
+Decyzja zapisana w ADR-0028: wyrównać wyłącznie limit reprezentacji gate
+required_mutation_paths 16→256 z correction contract; exact profile pozostaje
+19 plików, required_test_paths oraz scope enforcement bez zmian. Dodatkowe
+allowed paths: packages/test-evidence/src/engineering-gates.ts,
+packages/test-evidence/test/engineering-gates.test.ts. Testy: rzeczywisty catalog
+parser przyjmuje19 i256, odrzuca257; pełny poprawny profile-before-factory
+fixture oraz negatywy z pojedynczym uszkodzeniem. Gate schema digest zmieni
+się jawnie, frozen pakiet pozostaje niemodyfikowany. Komenda kroku powyżej
+rozszerzona o test engineering-gates.test.ts i nowy full-flow-repair-authority.test.ts.
+
+LOCAL PRECHECK EVIDENCE: primary uruchomił `. scripts/dev/env.sh && node
+--import tsx <Phbmzv>/preflight.mjs` exit1, oczekiwana odmowa
+`definition repair candidate paths must be non-empty and unique` przed modelem.
+Log planner-gate-cO857p/live03-empty-authority-preflight-red.log. Nie uruchomiono
+launchera/live ani nie zmieniono frozen inputs. Kontrolny wybór istniejących
+testów authority/compiler-repair: sesja56822 exit0,8passed/84filtered,
+authority-existing-baseline.log. To nie dowód sześciu maskowanych negatywów.
+Primary odrzucił pierwszy raport poprawki: brak nowego testu before-factory
+z poprawnym kontrolnym fixture; sama zmiana kolejności walidacji tego nie
+zastępuje. Luna uzupełnia tę regresję, potem naprawa maskowanych fixtures.
+
+LIVE03 DIAGNOSIS / LOCAL REPAIR IN_PROGRESS: primary potwierdził na rzeczywistym
+Phbmzv/engineering.json, że oba finalne gate'y Xcode mają puste
+required_mutation_paths i required_test_paths. ADR-0021 poprawnie odmawia
+correction authority; validator full-flow błędnie wymaga pustych OBU list.
+Naprawa lokalna: pozostawić required_test_paths puste (chronione evaluatory),
+wymagać dokładnego jawnego zestawu 19 kandydatów naprawy: istniejące 20 allowed
+paths bez generator output. Nie poszerzać runtime authority ani nie zmieniać
+zamrożonego pakietu Phbmzv. Osobny poprawiony pakiet wymaga potwierdzenia
+użytkownika; pytanie wysłane, odpowiedź oczekiwana.
+Krok: kontrakt evaluatorów i preflight odrzucają pusty/obcy/niepełny zestaw
+przed factory/model. Allowed paths: apps/agent-worker/test/engineering-live-full-flow-*.ts,
+docs/decisions/ADR-0028-explicit-full-flow-benchmark-profile.md oraz ten plan.
+Komenda: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+apps/agent-worker/test/engineering-live-full-flow-evaluators.test.ts
+apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts
+apps/agent-worker/test/engineering-live-full-flow-common-contract.test.ts &&
+pnpm workflow:validate && git diff --check`. Primary wykonuje własny odczyt
+diffu i mutację RED/restored GREEN; pełna bramka przed następnym live.
+
+LIVE03 TERMINAL FAILED: sesja11078 exit1,2026-09-10T00:21:38.602Z,
+837204ms test. UsageCOMPLETE844529=832783input+11746output,6responses;
+historyczna suma4,271,859/0delivered. Trzy cheap CURRENT gates PASSED0;
+model XcodeFAILED65/235505ms i UI XcodeFAILED65/109635ms. Nie wykonały asercji:
+obie kompilacje zgłosiły SafetyAlertPresentation.swift:38 nieznany
+EmergencyResources oraz wtórne nil contextual-type:39,40,43. Nie oznaczać
+11model/4UItests jako wykonanych/passed — były wybrane, build uniemożliwił run.
+SliceImplementationReceipt i GateFailure zapisane. Attempt2 started/incomplete,
+STAGE_ERROR generic Error digest20e8ee107d445e02a36ee7c5b83fd4e1fea8817e7478d4d64b5bd8f93926a96b,
+przed nowym READ/model; runtime blocked, nie budżet. Commitnull. Read-only
+Luna diagnozuje dokładną blokadę compiler repair, main czyta gate evidence.
+Prywatny evidence-a2cb3a520c842acba1e3e9336bcd484901a8787c07b0767e932bc87947f2b465.json.
+Zachowany worktree: Phbmzv/workspaces/ra045_9d027ce0-34dd-4eda-a1d1-e8f903c0e27a-case/
+engineering-03a10d58c50c314568291e9368b5794e. Nie edytować tam iOS ręcznie,
+nie usuwać ani nie commitować niezweryfikowanego wyniku. Kolejny live04 dopiero
+po diagnozie/naprawie/realnej bramce; rozszerzona zgoda nadal ważna w tym zakresie.
+
+LIVE03 PROGRESS00:18Z: SystemDesign i ProgramDesign przyjęte,6responses,
+844,529tokens=832,783input+11,746output,COMPLETE. SLICE_IMPLEMENTATION attempt1
+STAGE_COMPLETED,3APPLY_PATCH SUCCEEDED/7authored paths: SafetyAlertTests.swift,
+SafetyAlert.swift/SafetyAlertPresentation.swift, SharedLibrary ChatViewController/
+ChatViewModel, Localizable.strings, WhatToTest.en-US.txt. Server generator
+RUN_COMMAND SUCCEEDED i APPLY_PATCH Assets+Generated.swift SUCCEEDED (8łącznie).
+Rzeczywisty xcodebuild PID90989 wykonuje11pinned model/state/voice/alert evaluator
+testów; wynik jeszcze nieznany, journal157rows. Nie zmieniać kodu ani worktree.
+Właściwy produkcyjny prefetch
+wykonał29 READ_FILE receipts; implementer MODEL_CALL_RESERVED o00:10:27.725Z.
+Przekroczono poprzednią barierę kontekstu; NIE oznacza to delivery ani gatePASS.
+Sesja11078 nadal aktywna, bez edycji runtime. Kolejny krok wyłącznie monitor
+tego samego journala/status03 do terminalu. Historyczne3427330 plus bieżącyusage.
+
+LIVE03 AKTYWNY: sesja11078, invocation `mobl-2023-full-flow-20260910-03`,
+start2026-09-10T00:07:42Z (02:07CEST). Canonical preflight i auth launcher0,
+seed czysty,~53.5GB wolne; wszystkie frozen digests bez zmian. Nowy journal
+`engineering-7a76d2d097040e061e6bd1e893e576bd4cc063e909fb5fed7769ca4d13aeadb5.jsonl`
+w Phbmzv/artifacts/engineering-debug. Pierwszy status SYSTEM_DESIGN,
+MODEL_CALL_RESERVED, usage jeszcze nie zaraportowane. Monitorować istniejącą
+sesję i status-live-03.mjs/live-03.log; NIE uruchamiać launchera ponownie ani
+zmieniać runtime/seed/frozen inputs w biegu. Pełna lokalna bramka poniżej0.
+Historyczny licznik przed03:3,427,330; limit03:1,800,000. Bez push/Jira/Discord.
+
+LOCAL PREFETCH REPAIR QUALIFIED 2026-09-10: primary fullgate94656 exit0,
+fragment-full-gate-qualified.log. Komenda: `. scripts/dev/env.sh && pnpm lint &&
+pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run &&
+pnpm run typecheck --force && pnpm exec tsc --noEmit --strict --exactOptionalPropertyTypes
+--skipLibCheck --target ES2023 --module NodeNext --moduleResolution NodeNext
+--esModuleInterop --types node apps/agent-worker/src/engineering-context-fragments.ts
+apps/agent-worker/test/engineering-context-fragments.test.ts apps/agent-worker/src/engineering-execution.ts
+apps/agent-worker/test/engineering-execution.integration.test.ts packages/repository-planner/test/config-discovery.test.ts
+&& pnpm workflow:validate && git diff --check`.
+Wynik3708passed/2opt-in skipped,264passedfiles/2skipped,206.20s;
+build29/29,typecheck46/46,Cached0, dodatkowy strict0, workflowOK55, lint/format/diff0.
+To1pełny zielony przebieg po opisanych buildrestoreerror i config8failach;
+nie ma nierozstrzygniętego flake. Primary odczytał actual wiring/helper/read-tools/
+config diffs, wykonał własne safety mutacje i prawdziwy prefetch bez modeli.
+Nie jest to DONE/PASS taska ani autonomiczny delivery.
+Następnie nowy live03 w zatwierdzonym zakresie: komenda `. scripts/dev/env.sh &&
+node --import tsx /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-v1-Phbmzv/launch-live-03.mjs`.
+Launcher ponawia canonical host/profile/subscription preflight; exclusive nowe
+admission/log/exit03, zachowany worktree/commit. Historyczne live3427330 przed
+startem. Nie wykonywać launchera ponownie po admission ani edytować runtime w biegu.
+
+CONFIG COMPATIBILITY RESTORED: primary sesja15066 forced build29/29,Cached0
+plus config-discovery/planner.integration12/12 exit0 (config-discovery-focused.log).
+Own mutation broadening optional config catch to DISCOVERY_FAILED exit1:
+unsafe resolved empty config instead of failure (mutation-config-discovery-precise-absence.log).
+Restored source, prettier0 and config tests3/3 exit0. New full gate session94656,
+fragment-full-gate-qualified.log: pełna komenda taska plus strict execution/
+fragment tests i config-discovery test. Wszystkie mutacje przywrócone; brak
+zaplanowanych zmian kodu przed terminalem tej bramki. Nadal0nowych modeli.
+
+FULL GATE80592 terminal exit1:3698passed/8failed/2opt-in skipped,262passed
+files/2failed/2skipped,208.92s (fragment-full-gate-restored.log). Build29/29
+Cached0, lint/format0. Wszystkie8faili to realna regresja kompatybilności
+`repository-planner/config-discovery.ts`: optional CONFIG_PATHS catch rozpoznaje
+tylko stary DISCOVERY_FAILED, nie nowy FILE_NOT_FOUND. To nie flake. Luna
+naprawia config-discovery.ts i jego test (dodatkowe allowed paths bieżącej
+korekty): optional root config tylko confirmed FILE_NOT_FOUND; generic I/O/race
+nie może udawać nieobecności. Opcjonalny workflow tree zachowuje missingancestor
+DISCOVERY_FAILED i dopuszcza missing-leaf FILE_NOT_FOUND; policy nadal fatal.
+Wykrytych workflow configów po enumeracji nie wolno opcjonalizować. Następnie
+own review/mutation, config/planner tests, pełna bramka. Live03 nie wystartował.
+
+FULL GATE RETRY: sesja48978 exit2 przed Vitest, build28/29 (fragment-full-gate.log).
+Przyczyną był błąd primary podczas przywracania mutacji: patch dopasował pierwsze
+z dwóch sąsiednich `undefined`, zamieniając miejscami state i fragmentBudget.
+Nie był to defekt workera ani flake. Przywrócono dokładny porządek `diagnostics,
+undefined,{used:0}` z pełnym kontekstem patcha. Nowy pełny przebieg sesja80592,
+fragment-full-gate-restored.log. Czerwony test samej mutacji nadal ważny:
+mutation-fragment-production-wiring.log,2/2RED po wyłączeniu budget (oversized
+nie osiąga modelu, clipped bez fragmentów odrzucony asercją kontekstu).
+Do końca pełnego przebiegu żadnych zmian kodu ani nowego live.
+
+CHECKPOINT phaseB own focused sesja98906 exit0,140/140 w4plikach:
+execution.integration, context-fragments, repository-planner/read-tools,
+implementation-tools/read-tools. Logfragment-focused-final.log. Realny
+createEngineeringExecution osiąga model i ARTIFACT z oboma dużymi context
+fixtures; ich source files są commitowane wyłącznie w tymczasowym repo testu.
+Rozdzielenie wariantów potwierdzone realnym pre-read: FAILED/OUTPUT_TOO_LARGE
+vs SUCCEEDED/truncated/complete:false. Poprzedni rzekomo clipped fixture miał
+67,895chars i testował zły branch; odrzucony i poprawiony przed tym wynikiem.
+Własna mutation-planned-correction-boundary.log exit1: podanie optionalMapped
+paths dla attempt2 pozwoliło na ARTIFACT/modelCalls2 mimo brakującego pliku.
+Przywrócenie i own test1/1 exit0 (sesja95937). Realny read-only prefetch
+ponowiony0 na przywróconym wiring,fragment-real-prefetch-restored.log.
+Dodatkowy own strict całego execution test+source (sesja10283) exit2:
+jeden błąd3034 discriminated union READ|SEARCH, worker poprawia bez castów.
+Nie mylić focused140/140 z pełną bramką; live03 nadal nie rozpoczęty.
+
+CHECKPOINT phaseB 01:54CEST: własny static gate sesja90776 exit0:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && pnpm run typecheck --force`;
+build29/29 i typecheck46/46,Cached0 (fragment-static-gate.log). To nie pełna
+bramka: produkcyjne positive wiring fixtures jeszcze dopracowywane. Helper
+własny restoration20/20 i strict tsc obu plików exit0 (sesja70045). Poprawiona
+newline mutation dała unsafe resolution RED exit1, envelope-cap także RED
+z unsafe resolution; logi mutation-fragment-newline-continuity-qualified.log
+i mutation-fragment-envelope-cap.log. Łącznie7 głównych guardów helpera ma
+znaczący RED, wszystkie mutacje przywrócone. Canonical preflight ponowiony
+exit0 po poprawce placement policy: frozen config20321fd6...,manifest7dc40f7...
+bez zmian, seed czysty,54,097,666,048bytes wolne, wszystkie4role CodexSol.
+Nowe prywatne launch-live-03.mjs/status-live-03.mjs przygotowane przez primary,
+diff tylko invocation/nazwy03; node --check0, statusNOT_STARTED. Nie uruchomione.
+Review correction-missing fixture wykrył pozorny test: attempt1 zamiast2
+i pozytywne oczekiwanie. Poprawiono na prior1/current2 i odmowę przed modelem;
+własna mutacja tego wiring i pełny test jeszcze wymagane. Nie raportować
+dawnych89/89 jako dowodu produkcyjnego dużego kontekstu.
+
+CHECKPOINT phaseB review: własny `probe-prefetch-03.mjs` exit0, realne read-tools
+przeciw seedowi,18entries→27evidence,29calls z allocation42 (cap48),11fragment
+calls,2missing planned markers. Każda istniejąca READ treść połączona tylko
+w prywatnej asercji porównana byte-for-byte z seedem, wszystkie digests zgodne;
+model nie był wywołany. Logfragment-real-prefetch-probe.log. Review pierwszego
+wiring odrzucony: policy błędnie dodana do frozen loader configDigest zamiast
+implementationExecutor.configDigest; reserve24 odrzucał wcześniej poprawne
+plany>24; brak realnych produkcyjnych regresji oversized/incomplete. Trwa korekta.
+Własne mutacje helpera byte-cap/call-cap/digest-binding/line-continuity/
+physical-lines dały exit1 z unsafe resolved promise; newline-continuity
+PRZEŻYŁA (19/19 exit0) wskutek fixture maskującego brak guardu kolejnym błędem.
+Wszystko przywrócone, helper19/19 exit0; worker poprawia ten konkretny test.
+Nie przyjmować przeżytej mutacji jako dowodu. Następna próba live nadal03.
+
+CHECKPOINT 2026-09-10 phaseB EOF: primary forced `pnpm run build --force`
+exit0 (sesja96675, fragment-eof-build.log). Następnie `. scripts/dev/env.sh &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/repository-planner/test/read-tools.test.ts
+packages/implementation-tools/test/read-tools.test.ts packages/contracts/test/schema-snapshot.test.ts`
+exit0,30/30 (sesja59846, fragment-eof-read-gate.log). Własna mutacja
+`endOfFile: true` dała exit1 na partial excerpt (mutation-fragment-eof-authority.log);
+przywrócenie i powtórzenie tego testu exit0,1/1. Brak aktywnych mutacji.
+Luna implementuje teraz wiring fragmentów wyłącznie w engineering-execution.ts
+i jego teście; drugi worker dopracowuje nowe testy helpera, bez wspólnych zapisów.
+Następne kroki: własne mutacje helpera, review wiring, pełny rzeczywisty read-only
+prefetch frozen kontekstu, pełna bramka repo i nowa próba live03. Nie uruchomiono
+kolejnego modelu; licznik live nadal3,427,330, ostatnia próba30,305. Dirty tree
+pozostaje zamierzoną pracą częściową RA-055 (dotychczasowe ścieżki oraz nowe
+engineering-context-fragments.ts/test); nie commitować częściowego taska.
+
+CHECKPOINT 2026-09-10 phaseA: primary sesja96175 forcedbuild29/29,Cached0 i
+focused3file116/116 exit0, planned-output-phase-a-restored.log. Own review
+potwierdził produkcyjne missing optional READ→model/mutation, required READ
+missing→model0 i zachowanie SEARCH. Trzy własne znaczące mutacje RED exit1:
+optional-path authority, precise FILE_NOT_FOUND-only, must_exist filter.
+Usunięcie filtra required pozwoliło modelowi wydać2responses i ARTIFACT mimo
+braku required dependency. Logi mutation-planned-optional-path-authority-qualified,
+mutation-planned-precise-absence-qualified i mutation-planned-required-filter-final.
+Pierwszy batch mutacji przywrócono przed terminalem, więc został ODRZUCONY
+jako dowód; drugi required-filter selektor wybrał0tests, także odrzucony.
+Powyższe trzy to powtórzenia z oczekiwaniem na exit i wykonanym testem.
+Wszystkie mutacje przywrócone; primary restoration sesja25320 exit0,5/5.
+Jeszcze wymagane correction-missing regression i real-content assertion.
+PhaseB równolegle w ROZŁĄCZNYCH plikach: jeden worker nowy standalone
+engineering-context-fragments.ts/test, drugi excerpt EOF metadata/read-tool
+propagation i testy. Nikt nie zmienia frozen inputs, seed ani live02.
+
+DODATKOWA POTWIERDZONA BARIERA przed live03: primary uruchomił rzeczywisty
+createImplementationReadTools.read przeciw niezmienionemu seedowi dla
+Resources/en.lproj/Localizable.strings: FAILED/OUTPUT_TOO_LARGE, exit0 samej
+sondy. Plik77,535bytes przekracza planner text envelope przed clippingiem.
+Nie powtarzać live po samej naprawie missing outputs. Plan kolejnej korekty:
+bounded readExcerpt fallback dla oversized/incomplete plain READ, porcje z
+ciągłymi line bounds, wspólnym full_file_digest, code-owned EOF, bez sklejania
+oversized envelope ani deklarowania pełnego READ. Zachować file/output/discovery
+caps; maksymalnie24 dodatkowe fragment reads na cały prefetch, w istniejącym
+server-owned cap48, limit256KiB odtworzonego tekstu per plik; odmowa przy
+braku postępu, digest drift, policy failure i przekroczeniu budżetu. Nie
+hardcodować taskowych słów wyszukiwania ani zmieniać frozen context/gates.
+Plan obejmie dodatkowo contracts/planner-port excerpt metadata i jego testy,
+read-tools excerpt propagation oraz odpowiednie snapshoty. Implementować
+po domknięciu bieżącej korekty precise missing-file boundary. Przed live
+rzeczywisty read-only prefetch wszystkich configured context entries, bez modeli.
+Primary rzeczywista sonda readExcerpt256lines przeciw seedowi exit0: pełne
+Localizable.strings77,535bytes w5calls, digestdd3a3c739ecb17e0c736815a33687c3b0d50f4ad4411edc9ccf2c97f07b99f1c;
+AgentAIFlowTests.swift63,579bytes w6calls, digestf53267ccf2027fe013419e11e1a2dcf85d9372e065d8237b84540714d14d966c.
+Każda porcja SUCCEEDED i untruncated, hashe stabilne. To read-only pomiar
+wykonalności, NIE wdrożona jeszcze obsługa fallback ani sukces Engineering.
+
+LOCAL PLANNED-OUTPUT PREFETCH REPAIR IN_PROGRESS: potwierdzono dokładny brak
+SafetyAlert.swift i SafetyAlertPresentation.swift w seedzie; obie ścieżki są
+same-slice SOURCE targets i required_read_context.must_exist=false. Gate
+implementation_context traktował je jako obowiązkowe READ przed pierwszym write.
+ADR0020 doprecyzowany: initial-only negatywna obserwacja wyłącznie potwierdzonego
+braku, nie generic DISCOVERY_FAILED i nie fikcyjny SUCCESS. Istniejący plik
+czytamy, correction/required/foreign/policy/oversize/I/O nadal fail-closed.
+Allowed paths: apps/agent-worker/src/engineering-execution.ts i jego integration
+test; packages/repository-planner/src/{read-tools,discovery-policy}.ts i test;
+packages/implementation-tools/src/read-tools.ts i test; ADR0020/WU/finish plan.
+Luna implementuje jeden zakres, primary niezależnie review/mutacje/bramka.
+Komenda kroku: `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts packages/repository-planner/test/read-tools.test.ts packages/implementation-tools/test/read-tools.test.ts && git diff --check`.
+Następnie pełna bramka i dopiero nowa sekwencyjna próba live03 w zakresie zgody.
+Nie modyfikować frozen Phbmzv, evaluatorów, seeda ani zachowanych artefaktów02.
+Pierwszy review implementacji odrzucony: optional primitive nadal łapał generic
+DISCOVERY_FAILED; dodanie wszystkich manifest context jako READ niszczyło
+dozwolone read-only support i generator SEARCH; ENOENT po open zamieniano
+nieprawidłowo w planowaną nieobecność. Wymagana korekta: tylko opcjonalne ścieżki
+z must_exist:false, bez zmiany configured plan, tylko potwierdzony initial
+missing leaf, zachowana odmowa wyścigu/zmiany już sprawdzanego pliku. Same trzy
+typecheck komendy workera nie są dowodem; wymagane behavior/wiring tests i mutacje.
+Primary wymusił build29/29 przed focused3file (sesja99260): exit1,111passed/
+2failed. Poprzedni fail generator correction zniknął: korzystał ze stale dist,
+nie był udowodnionym pre-existing flake. Obecne2faile to scoped SEARCH missing
+file (nowy FILE_NOT_FOUND wymaga dotychczasowej negative-search semantyki)
+oraz read-tools recovery guidance oczekujące starego DISCOVERY_FAILED. Trwa
+zachowanie guidance i SEARCH-only obsługi nowego kodu, bez osłabienia READ.
+Worker testów przejął zakres od pierwszego implementera; produkcyjne zmiany
+ograniczone do tych dwóch compatibility branches. Logplanned-output-phase-a.log.
+
+LIVE02 TERMINAL FAILED: sesja85594 exit1, koniec2026-09-09T23:09:11.457Z
+(2026-09-10 CEST),176206ms test. 30,305 provider-reported tokens =25,311input
++4,994output,2responses,COMPLETE. Historyczna suma3,427,330, nadal0delivered.
+SystemDesign, ProgramDesign i SliceContract przyjęte za pierwszym podejściem;
+poprzednia bariera planowania nie powtórzyła się. Nowy błąd przed implementer
+model call: EngineeringImplementationContextError / IMPLEMENTATION_CONTEXT_READ_FAILED,
+po5 READ_FILE SUCCEEDED i jednym DISCOVERY_FAILED. Gates[], commit brak;
+trwa read-only diagnoza exact context path i odróżnienie brakującego pliku od
+odmowy discovery. Nie wykonywać retry bez wyjaśnienia. Zgoda na kolejne próby
+w tym samym zakresie pozostaje aktualna. Seed ponownie czysty.
+Private evidence `evidence-690814ec5a84e955ff802fecb3ccc175e0d6439de1a7c16dc6e27f6a8ba4f9dd.json`
+w Phbmzv/artifacts/engineering-private-evidence. Status02 poprawiony i own
+uruchomiony0: marker wyłącznie z log02, żadnego fallback do journala01.
+
+LIVE AKTYWNY 2026-09-10: sesja85594, invocation
+`mobl-2023-full-flow-20260910-02`. Launcher02 przeszedł own diff/node --check,
+canonical preflight i subscription auth; exclusive admission/log02 utworzone.
+Journal `engineering-aa973c1d52586397f78eb27dd06aaa055578f15148a98414faf9cebbbb72222a.jsonl`
+w Phbmzv/artifacts/engineering-debug. Monitorować sesję i live-02.log; NIE
+wykonywać launchera ponownie ani zmieniać runtime/frozen inputs podczas biegu.
+Początkowy status helper02 odrzucony przed użyciem: wskazywał stary journal01;
+trwa korekta odczytu z RA045_DEBUG_LOG w aktualnym log02. Nie przypisywać
+historycznych49,720 tokenów tej próbie. Zużycie z ostatniego cumulative MODEL_USAGE.
+
+ZGODA LIVE ROZSZERZONA 2026-09-10: właściciel odpowiedział „tak i masz wiecej
+zgod na wiecwwj testow” na dokładne pytanie o Phbmzv/1.8M/izolowany zachowany
+worktree i lokalny commit, bez push/Jira/Discord. Obejmuje tę oraz kolejne
+próby tego samego zadania w tym samym zakresie, nie wymaga pytania po każdym
+terminalu. Limit1.8M jest per próba, historyczny licznik nie jest resetowany.
+Próby wyłącznie sekwencyjne; po błędzie najpierw diagnoza, ewentualna naprawa
+i jej bramka, nie ślepy retry. Zmiana benchmarku/uprawnień wymaga osobnej decyzji.
+Następna invocation: `mobl-2023-full-flow-20260910-02`, nowy launcher/admission/
+log/exit02 w istniejącym bundle; nie nadpisywać01 ani frozen inputs.
+Primary canonical preflight ponowiony exit0: czysty seed, niezmienione digests,
+PG SELECT1, Xcode26.1.1,55,178,633,216 wolnych bajtów. Auth ponowi launcher.
+Krok: rzeczywisty autonomiczny live z zachowaniem artefaktów i usage; allowed
+paths prywatne nowe launch/status02 i runtime-owned nowy workspace/artifacts,
+repo tylko dokumentacja checkpointu. Komenda po own review launchera:
+`. scripts/dev/env.sh && node --import tsx /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-v1-Phbmzv/launch-live-02.mjs`.
+Wpisy poniżej o oczekiwaniu na zgodę są odtąd historyczne.
+
+LOCAL PLANNING REPAIR VERIFIED — 2026-09-09. Primary sesja28242 exit0,
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/planner-gate-cO857p/full-gate-qualified.log`.
+Dokładna pełna komenda:
+```sh
+. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm exec tsc --noEmit --strict --exactOptionalPropertyTypes --skipLibCheck --target ES2023 --module NodeNext --moduleResolution NodeNext --esModuleInterop --types node apps/agent-worker/test/engineering-workflow.integration.test.ts apps/agent-worker/test/engineering-live-qualification.test.ts apps/agent-worker/test/engineering-planning-feasibility.test.ts && pnpm workflow:validate && git diff --check
+```
+Wynik: lint/format0; build29/29,Cached0; Vitest3678 passed/2 opt-in skipped,
+263 passed files/2 skipped,191.40s; typecheck46/46,Cached0; dodatkowy strict
+tsc0; workflow:validate OK55tasks; diff check0. Pełny zielony przebieg1 po
+opisanych niżej dwóch błędach statycznych, jednym realnym failu fixture i jednym
+przerwanym review-rejected przebiegu. Pominięte są tylko dwa jawne testy live.
+Primary odczytał rzeczywisty diff/krytyczne pliki; nie przyjął samego raportu Luna.
+
+Zamknięto lokalny krok kontraktu planowania, nie task RA-055. Regresje obejmują
+rzeczywistą materializację MEDIUM/1slice/20paths, naprawę odpowiedzi z obcą
+ścieżką w globalnym capie oraz preflight-before-factory. Ograniczenia globalne,
+generic max4 i riskFacts nie zostały osłabione. Kolejne mutacje bound-ID cap,
+generic-root cap i blueprint schema cap także dały exit1 z unsafe acceptance;
+mandatory-test-union powtórzony po korekcie fixture, exit1. Razem12 mechanizmów
+sprawdzonych mutacyjnie; survivor test-own-scope opisany niżej rozstrzygnięty.
+Wszystkie mutacje przywrócone; powyższa pełna bramka to restoration GREEN.
+
+E2E ma osobne SOURCE targets (one-view.ts,one.ts,two.ts) i TEST targets
+(one.test.ts,two.test.ts); model zapisuje test jako pierwszy. Gate rzeczywiście
+wykonuje asercje z pliku przez Node eval(readFileSync), nie porównuje znacznika.
+Bezpośrednie argv z nieistniejącym jeszcze plikiem testowym odrzucał preflight
+adaptera; inline loader zachowuje wykonanie testu i dotychczasową konfigurację
+bramki. Zachowane review correction, accepted attempts1:3/2:4 oraz recovery
+jednego evidence-bound commita; primary pełny przebieg tego E2E exit0,38550ms.
+
+NASTĘPNY KROK: uzyskać dokładną zgodę na JEDNĄ NOWĄ próbę Phbmzv do1.8M,
+nowy invocation/izolowany worktree, zachowany lokalny commit, bez push/Jira/Discord.
+Zgoda Phbmzv/01 została zużyta; continue nie odnawia jej automatycznie. Przed
+nowym admission ponowić canonical host/profile i subscription auth preflight.
+Nie zmieniać frozen bundle, seed ani evaluator inputs. Nie uruchamiać ponownie
+launch-live-01.mjs. RA-055 pozostaje IN_PROGRESS, bez nowego audytu/PASS/handoffu
+i bez częściowego commita. Historyczne live usage nadal3,397,025/0delivered;
+ta lokalna korekta dodała0 wywołań Engineering provider live. Tokenów native
+subagentów/primary nie mierzono i nie należy ich przedstawiać jako zero.
+Dirty tree pozostaje zamierzonym WIP RA055: zastane ścieżki i nowe helpery,
+testy, ADR/plan w git status; niczego nie usuwać jako rzekomego śmiecia.
+
+Poniższe checkpointy są historią lokalnej naprawy, nie aktualną kolejką.
+
+Checkpoint pełnej bramki lokalnej (2026-09-09): sesja43863 exit1,
+`planner-gate-cO857p/full-gate-final.log`. Lint/format exit0, forced build29/29
+Cached0; Vitest3677 passed/1 failed/2 opt-in skipped,262 passed files/1 failed,
+191.58s. Jedyny fail: dwuslice E2E w vertical-slice-e2e.integration.test.ts
+nie przypisuje TEST targets do slices; nowy preflight odrzuca pusty TEST scope.
+Trwa korekta wyłącznie fixture, bez fallbacku do globalnego scope i bez
+osłabiania produkcji. Allowed paths kroku obejmują także ten fixture E2E.
+To nie flake ani PASS. Następnie własny review i powtórzenie pełnej bramki.
+Wcześniejsze próby bramki:43270 exit1 na lint (unused fixture variables),
+9862 exit1 na prettier (feasibility fixture i shared synthetic JSON format).
+Obie przyczyny poprawione; format JSON nie zmienia jego screen-only danych.
+Nie było kolejnego provider live; wykorzystanej zgody Phbmzv/01 nie odnawiać.
+Review korekty E2E odrzucił dual-label SOURCE jako TEST: zielony solo1/1 nie
+uzasadnia takiego obejścia. Primary przerwał sesję5262 SIGINT, exit130,
+`full-gate-restored.log`; nie liczyć tego jako bramki ani flake. Właściwa korekta
+ma osobne rzeczywiste .test.ts, test-first writes i executable checks, z
+zachowaniem correction/recovery/provenance assertions. Trwa tylko ten fixture.
+
+LOCAL REPAIR IN_PROGRESS — recovery po live, baseline HEAD
+`ce9b2ff62e3c947c72c0fafca47d192af983ce98`. Doprecyzowanie ADR0028 zapisane:
+benchmark order nadrzędny nad domyślnym minimum, target-bound per-slice budget,
+blueprint structural max256 zgodny z SliceContract; generic policy max4 bez zmian.
+Krok: spójny planning contract i preflight feasibility. Allowed paths:
+apps/agent-worker/src/{engineering-workflow,engineering-execution,engineering-live-qualification}.ts,
+odpowiednie testy, packages/contracts/src/engineering-workflow.ts oraz testy/snapshot.
+Bramka kroku: `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-workflow.integration.test.ts apps/agent-worker/test/engineering-execution.integration.test.ts apps/agent-worker/test/engineering-live-qualification.test.ts packages/contracts/test/engineering-workflow.test.ts packages/contracts/test/schema-snapshot.test.ts && git diff --check`.
+Następnie znaczące mutacje, własny review i pełna bramka RA055. Nie wykonano
+jeszcze nowego live. Wszystkie zastane dirty paths pozostają zamierzoną pracą
+RA055; nie usuwać i nie commitować częściowo. Starsze LIVE AKTYWNY poniżej
+to wyłącznie historia, zastąpiona terminalnym wynikiem FAILED.
+
+Checkpoint lokalnej korekty: primary forced build exit0,29/29,Cached0,
+`diagnostics/planner-gate-cO857p/build.log` pod prywatnym live root.
+Primary `. scripts/dev/env.sh && pnpm exec vitest run packages/contracts/test/schema-snapshot.test.ts packages/contracts/test/engineering-workflow.test.ts apps/agent-worker/test/engineering-planning-feasibility.test.ts`
+exit0,34/34; log `contracts-feasibility.log` w tym samym katalogu.
+Osobny strict tsc nowego feasibility test z exactOptionalPropertyTypes exit0
+po naprawie trzech explicit-undefined fixtures (pierwszy przebieg exit2).
+Rzeczywisty Phbmzv/preflight.mjs także primary exit0: niezmieniony manifest/
+config/catalog, source_clean=true, PG SELECT1, Xcode26.1.1,~55GB; zero generacji.
+To nie jest pełna bramka ani odbiór poprawki: trwa wymagany integration
+regression MEDIUM1slice20paths → durable SliceContract i load-bearing
+canonical preflight-before-factory regression. Potem mutacje i pełna bramka.
+Odrzucone w review: fallback pustego TEST scope do global, pomijanie preflight
+dla niepełnych mocks, niezależny numeric root budget, preferowanie innego
+mappingu niż canonical resolved, dodatkowe nieuzgodnione mapping caps,
+adjacent-only overlap check, stare unconditional4 w repair prompt.
+Poprawiona produkcja nie zawiera tych obejść; model prompt version v4.
+
+Primary focused integration gate exit0:189/189,6plików,
+`planner-gate-cO857p/focused.log` (przed dodaniem mapped-repair regression).
+Własne mutacje w `planner-gate-cO857p/mutation-*.log`: outercap, pairedscopes,
+mandatorytestunion, generatorclosure i overlap dały rzeczywiste unsafe
+acceptance (test oczekiwał odmowy, otrzymał brak błędu), exit1. Pierwsza mutacja
+test-own-scope PRZEŻYŁA, exit0: fixture odrzucał się wcześniej na wymaganym
+gate test path. Poprawiono fixture; `mutation-test-own-scope-fixed.log` exit1
+z unsafe acceptance. Preflight-factory mutant exit1: promise rozwiązał się i
+factory callback wykonał się zamiast odmowy. Bound-count mutant (powrót min2)
+exit1 uniemożliwił rzeczywistą materializację MEDIUM1slice20paths.
+Scoped-model-write mutant exit1: błędna odpowiedź w globalnym, lecz nie
+slice-owned zakresie została przyjęta po1call zamiast wymaganej naprawy2calls.
+Każdy mutant przywrócono w finally; nie ma aktywnej mutacji.
+Po restore feasibility11/11 + strict tsc exit0. Pełna bramka nadal wymagana.
+
+Dodatkowy strict tsc całego workflow integration fixture (poza src-only
+standard typecheck) wykazał78 starszych diagnostyk po usunięciu nowych błędów.
+Korekta helperów zakończona: jawna source/dist DB boundary, parsowane i zawężone
+typy artefaktów, typowany adapter review zamiast whole-object unknown cast oraz
+context reader types. Produkcyjne kontrakty i istotne asercje zachowane.
+Primary sesja15193 exit0: forced typecheck46/46,Cached0, strict tsc wszystkich
+trzech workflow/qualification/feasibility fixtures z exactOptionalPropertyTypes,
+workflow:validate OK55tasks i git diff --check. Log `typecheck-final.log`.
+Shared synthetic-manifest.json przywrócony do źródłowego screen-only kształtu;
+TEST augmentation jest lokalnie w canonicalGitFixture, nie we wspólnych inputs.
+
+LIVE ZAKOŃCZONY FAILED 2026-09-09T05:59:07Z: session12471 exit1,
+invocation `mobl-2023-full-flow-20260909-01`,251528ms test/252.31s suite.
+49,720 provider-reported tokens (42,234 input +7,486 output),3responses,
+COMPLETE usage. Razem z poprzednią kohortą3,347,305 =3,397,025 tokenów;
+w obu kohortach nadal0 delivered tasks. Zużyto jedną nowo zatwierdzoną próbę.
+SYSTEM_DESIGN ukończony; PROGRAM_DESIGN odrzucony po jednej próbie naprawy.
+Dokładny detail `STRUCTURED_SCHEMA_INVALID:custom:slice_blueprints`,
+StructuredContractOutputError/TRANSPORT_ERROR. Commitnull, gate_receipts[],
+workspaces[]/baselines[] (main sprawdził). Brak implementacji i Xcode tests.
+Zachowano live-01.log/admission/exit, journal+summary i private evidence
+`artifacts/engineering-private-evidence/evidence-11ce1f3ba10a21e3e0013caa2810e2785e6bd21f1124277ac246bbbffa93df2b.json`.
+
+DIAGNOZA (main odczytał rzeczywisty kod, raport Luna był read-only):
+`engineeringProgramDesign` w contracts/engineering-workflow.ts614 emituje
+custom:slice_blueprints wyłącznie dla powielonych slice_id. Nie zachowano raw
+odrzuconego ProgramDesign (CLI ephemeral, export zawiera tylko ContextManifest
+i SystemDesign), więc nie udawać exact payload replay. Live harness riskFacts
+multi_module=true => MEDIUM. Prompt engineering-workflow.ts963 wymaga >=2
+blueprints, a ten sam prompt989 i assert763 wymagają dokładnego benchmark order
+[full-flow-safety-alert]. To niespełnialna kombinacja. Drugie ograniczenie:
+model-authored4write-roots kontra file-exact scope wymagający >4plików w jednym
+slice; parent paths nie są dozwolone. Samo usunięcie duplicatedIDs ani zwiększenie
+tokenów nie rozwiąże tych sprzeczności. Preflight host/hash/profile przeszedł,
+ale NIE sprawdzał wykonalności kontraktu planowania — to luka kwalifikacji tego
+nowego profilu, nie dowód złego logowania albo wyczerpania tokenów.
+
+NASTĘPNA LOKALNA KOREKTA przed kolejnym live (jeszcze NIE wdrożona):
+1. Zachować ADR0028 one full-flow slice; nie downgradować riskFacts doSMALL.
+   Uzgodnić w ADR semantykę: dokładny server-bound benchmark order jest nadrzędny
+   względem domyślnego minimum liczby slices; generic/unbound minimum pozostaje.
+2. Spójnie rozwiązać code-owned per-slice scope versus4model-roots. Nie dopuścić
+   parent directory jako obejścia file-exact allowlist. Preferować wyprowadzony
+   z zatwierdzonych benchmark targets scope/budget, nie argument modelu i nie
+   globalne zdjęcie limitu4. Uwzględnić także schema max16allowed_paths vs20target
+   paths: jawna decyzja i bounded limit, nie ciche przepełnienie po server binding.
+3. Prompt, repair instrukcje, bindProgramDesignGateSchedules,
+   assertEngineeringProgramDesignBlueprints i materializeSliceContract muszą
+   egzekwować jeden kontrakt. Dodać preflight feasibility przed factory.
+4. Deterministyczna regresja MEDIUM +onebound slice +file-exact scope >4,
+   rzeczywisty stage executor i materializacja; negatives duplicate/foreign/order,
+   parent/outside/protected scope, zachowanie generic minima/cap. Mutacje mają
+   dowodzić unsafe acceptance, nie tylko innego error message. Pełna bramka
+   i own diff obowiązkowe przed następną generacją.
+Zakres: apps/agent-worker/src/{engineering-workflow,engineering-execution,
+engineering-live-qualification}.ts i odpowiadające testy; contracts tylko przy
+jawnej decyzji o bounded schema. Frozen Phbmzv/seed/evaluator inputs nie zmieniać.
+W tym przebiegu NIE zmieniono kodu produkcyjnego podczas ani po live.
+
+LIVE AKTYWNY: unified exec session12471, invocation
+`mobl-2023-full-flow-20260909-01`, start journal2026-09-09T05:54:56Z.
+Canonical preflight i subscription auth ponownie exit0 przed admission.
+Journal:
+`benchmark-full-flow-v1-Phbmzv/artifacts/engineering-debug/engineering-84f16ca7d60059e0df26974909f1e215eeec2b50800c636e7200669fad26bc88.jsonl`
+pod prywatnym diagnostics root. Pierwszy stage SYSTEM_DESIGN/MODEL_CALL_RESERVED.
+Zużycie liczyć z ostatniego cumulative MODEL_USAGE, nie sumować cumulative rows.
+Brak terminala w tym checkpoint. Monitorować live-01.log/journal/session12471;
+nie uruchamiać launchera ponownie, nie modyfikować root runtime ani evaluatorów.
+
+LIVE OPT-IN PRZYWRÓCONY 2026-09-09: właściciel odpowiedział
+„zgody live s przywrocone mozesz testowac” na dokładne pytanie o JEDNĄ próbę
+Phbmzv do1.8M. Zgoda obejmuje jeden nowy izolowany worktree/lokalny zachowany
+commit, bez push/Jira/Discord. Invocation `mobl-2023-full-flow-20260909-01`.
+Przed startem powtórzony production-route host preflight exit0,~55GB free,
+czysty seed, brak aktywnych vitest/xcodebuild/codex exec. Launcher ponawia także
+exact subscription auth i canonical preflight oraz sprawdza hardcap i manifest.
+Dokładna komenda startu:
+`. scripts/dev/env.sh && node --import tsx /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-v1-Phbmzv/launch-live-01.mjs`.
+Launcher wykonuje `pnpm exec vitest run apps/agent-worker/test/engineering-live-ios.integration.test.ts --reporter=verbose`,
+z objective z zatwierdzonego overlay i wszystkimi exact paths/profile env.
+Exclusive `live-01-admission.json` blokuje powtórne uruchomienie tej próby.
+Log `live-01.log`, terminal `live-01-exit.json`, journal w bundle artifacts.
+Nie zmieniać runtime/config/evaluator inputs podczas aktywnego testu.
+Zgoda NIE resetuje historycznych3,347,305 tokenów i NIE oznacza sukcesu testu.
+
+KOŃCOWY CHECKPOINT LOKALNY 2026-09-09 01:12 CEST:
+primary session32116, pełna bramka exit0, log
+`~/.remoteagent/live-mobl-2023/diagnostics/root-gate-yEZogG/full-gate.log`.
+Komenda: `. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`.
+Wynik3662 passed/2 opt-in skipped,262 passed test files/2 skipped,193.96s;
+build29/29 Cached0, typecheck46/46 Cached0. Dwa pełne przebiegi tego recovery:
+SlXCHr exit1 przed poprawką, yEZogG exit0 po poprawce. Nie wymazywać pierwszego
+failure ani nazywać go nieistotnym flake. CTF029 zamknięty po własnym diffie,
+128/128 affected tests, mutation RED→restore GREEN i teraz pełnej bramce.
+Oba runnery są poprawione, PID-validation-before-cleanup i bounded reap polling
+są w finalnym fixture; NIE ma aktywnego mutanta ani writera.
+
+Nowy jawny profil jest podłączony do canonical preflight przed factory;
+21 qualification cases obejmuje także stale profile digest (callback0/factory0)
+i poprawnie związane nieznane/mylne profile (callback1/factory0). Istniejący
+legacy checker oraz accepted commit/per-slice gate projections zachowano.
+Builder/profile real positive, catalog-guard mutation i production-route
+preflight Phbmzv są zweryfikowane jak niżej. Odrzucone wcześniejsze buildery
+NIE tworzyły bundle. Synthetic route log nie jest production evidence.
+
+Read-only subscription auth check także primary exit0: oficjalny
+`createCodexSubscriptionAuthPreflight().verify({profile})` z route IMPLEMENTER
+załadowanym przez `loadSubscriptionModelDeploymentConfig` i
+`resolveSubscriptionModelRoute` z `models-codex.json`, wykonany przez
+`. scripts/dev/env.sh && node --import tsx --input-type=module`.
+Wynik `SUBSCRIPTION_AUTHENTICATED`, codex_cli/codex-sol-live/gpt-5.6-sol,
+client0.153.3. To kontrola version/login status, zero generacji modelu.
+
+NASTĘPNY KROK: nowy dokładnie zatwierdzony live Phbmzv, jedna próba,
+hardcap1.8M (target750k/warning1.2M), dotychczasowy routing wszystkich ról
+codex-sol-live, wyłącznie nowe izolowane worktree i lokalny commit zachowany,
+bez push/Jira/Discord. Prośba o ten dokładny opt-in została wysłana; do tego
+checkpointu BRAK odpowiedzi zatwierdzającej. Poprzednie4zgody wykorzystane,
+3,347,305 historycznych tokenów/0 delivered tasks pozostaje niezmienione.
+Nie uruchamiać provider live na podstawie samego tego dokumentu. Przed startem
+ponowić host/auth preflight, sprawdzić brak writerów i mutantów, zapisać dokładną
+komendę/nowe invocation_id. Po live ocenić trwały commit/gates, token usage,
+oraz rzeczywisty visual/design diff. RA-055 nadal IN_PROGRESS, bez końcowego
+audytu/PASS/DONE/handoff, bez częściowego commita i bez push.
+
+Zamierzone niezacommitowane ścieżki tego recovery, dodatkowo do pełnej listy WIP
+RA-055 niżej: nowe `apps/agent-worker/test/engineering-live-profile.ts/.test.ts`,
+`engineering-live-full-flow-precheck.ts/.test.ts`,
+`engineering-live-full-flow-evaluators.ts/.test.ts`,
+`engineering-live-full-flow-common-contract.ts/.test.ts`,
+`engineering-live-full-flow-profile-contract.ts/.test.ts`; zmienione
+`apps/agent-worker/test/engineering-live-ios.integration.test.ts`,
+`apps/agent-worker/test/engineering-live-qualification.test.ts`,
+`packages/model-runtime/src/process-runner.ts`,
+`packages/model-runtime/test/process-runner.test.ts`, ADR0028+README,
+CROSS_TASK_FINDINGS, ENGINEERING_FINISH_PLAN oraz ten WORK_UNITS.
+Private builder/bundle/preflight/mutation logi są poza repo i zostają zachowane.
+Pozostałe zastane zmiany użytkownika i wcześniejsze RA-055 nadal nietknięte.
+
+Aktualizacja korekty process-runner: post-cancel release handshake potwierdził
+rzeczywisty escaped child (marker zapisany DOPIERO po wyniku CANCELLED) dla
+parent-only SIGKILL i premature finish. Primary odczytał oba logi
+`diagnostics/process-runner-tree-mutations-1788906500/{parent-only-kill-red,premature-finish-red}.log`.
+Finalny test nadal wymagał korekty fixed200ms -> bounded PID termination polling
+(znany asynchroniczny reap, CTF017), walidacji PID>1 i cleanup również po timeout
+readiness. Worker poprawia; nie uruchamiać jeszcze pełnej bramki równolegle.
+Primary znalazł identyczne clearTimer-before-SIGKILL w `runSubscriptionControlCommand`
+tego samego src pliku: stop->close->fail->cleanup. Ten sam bounded finding obejmuje
+oba runnery; wymagany control-command post-cancel child regression i mutacja.
+Normal exits muszą pozostać niezmienione. Następny krok: own pełny diff obu
+funkcji/fixtures, own focused tests/mutations/forced build, rejestr CTF029,
+następnie powtórna pełna bramka. Żadnego provider live przed jej exit0.
+
+Checkpoint 2026-09-09 po nowym wiring: pełna bramka
+`diagnostics/root-gate-SlXCHr/full-gate.log` pod prywatnym live root zakończona
+exit1:3660 passed/1 failed/2 opt-in skipped,262 wykonane test files,197.24s.
+Lint/format/build29/29 Cached0 wykonały się, typecheck/workflow po Vitest NIE
+wykonały się przez `&&`. Fail: model-runtime `cancels the entire subscription
+process tree`, marker `bad`. Solo ten sam plik11/11 exit0 (session58036).
+Nie uznawać tego za zieloną bramkę ani od razu za dowód escaped descendant:
+stary fixture uruchamia marker200ms od readiness PRZED abort i może przegrać
+z obciążeniem. Osobno primary code review potwierdził ryzyko clearTimeout(killTimer)
+po zamknięciu leadera przed SIGKILL potomka ignorującego SIGTERM. Luna dostała
+bounded reproducer i korektę tylko `packages/model-runtime/src/process-runner.ts`
+oraz jego testu: post-cancel handshake, reproducer ignore-SIGTERM, wynik stopu
+dopiero po eskalacji, timer cleanup utrzymuje proces przy życiu. Brak akceptacji
+poprawki przed own diff/tests/mutations i powtórzoną pełną bramką.
+
+Nowy private bundle ISTNIEJE:
+`~/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-v1-Phbmzv`.
+Main builder validate-only oraz create exit0; official config/manifest/overlay
+loadery i pinned profile contract przyjęły konfigurację. Canonical manifest
+`sha256:7dc40f7cc2c173aa58682cc6414bd7526284844e751590a2c2d669b89a6365c0`,
+config `sha256:20321fd6d1cfabd0115d67f9a9d251cf6318dbd45ff20b54f0730ae16ae50aa8`,
+catalog `sha256:3b164598b5b565ccad4b311b313cbc4c11d1ddeb0e8ddfeb764f9e852c0d4c08`.
+Main actual canonical host/profile preflight exit0: Xcode26.1.1/17B100,
+PG SELECT1, ~55.4GB available, production routing codex-sol-live/0.153.3,
+source clean,5gates/20targets. Asset sourceprobe0, precheck unchangedseed1
+EXPECTED; to nie Xcode baseline ani test-first. Reproducer nowego preflight:
+`. scripts/dev/env.sh && node --import tsx /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/benchmark-full-flow-v1-Phbmzv/preflight.mjs`.
+Primary odczyt i wykonanie poprawionego skryptu exit0. `preflight-production.log`
+jest rzeczywistym routingiem; starszy `preflight.log` był odrzuconym w review
+synthetic-client-version diagnostic, NIE dowodem produkcyjnego route identity.
+
+Real pinned full-profile positive + extra-required-gate negative:
+`diagnostics/verify-full-flow-catalog-boundary.mjs`, main exit0. Wyłączenie tylko
+catalog cardinality/set guard dało exit1, unsafeCallbacks1/rejectedfalse;
+restore main exit0, unsafeCallbacks0. Logi `catalog-guard-red.log` oraz
+`catalog-guard-restored-green.log` w nowym bundle. Po restore own qualification21
++wrapper8 =29/29 exit0 (session4098). Main strict tsc wszystkich nowych
+full-flow/profile helperów/testów oraz qualification/live harness exit0
+(session10646, pełne strict flags jak niżej). Canonical factory-order mutation
+ma rzeczywiste3 unsafe callbacks w `factory-order-red.log`; main odczytał log.
+Legacy frozen bundle real default wrapper positive0 zachował oba stare probes.
+Hashes3frozenbundlefiles+2qualifieddefinitions i seedHEAD/clean identyczne przed/
+po przygotowaniu nowego bundle. Zero nowych Engineering provider calls/tokenów;
+nie obejmuje to niemierzonej tu sesji native Sol/Luna. Nowy live nadal nie ruszył.
+Wysłano osobne pytanie o jedną próbę Phbmzv do1.8M tokenów; samo wyświetlenie
+pytania NIE jest zgodą. Najpierw wymagana poprawna pełna lokalna bramka.
+
+Recovery 2026-09-09: primary uruchomił po zawężeniu authority komendę
+`. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-live-profile.test.ts apps/agent-worker/test/engineering-live-full-flow-precheck.test.ts apps/agent-worker/test/engineering-live-full-flow-common-contract.test.ts apps/agent-worker/test/engineering-live-full-flow-evaluators.test.ts apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts && pnpm exec prettier --check apps/agent-worker/test/engineering-live-*profile*.ts apps/agent-worker/test/engineering-live-full-flow-*.ts && git diff --check`:
+exit0, 80/80 w pięciu plikach, session98018. Rzeczywista nazwa wrappera to
+`engineering-live-full-flow-profile-contract.ts`, nie skrót nazwy poniżej.
+To nie pełna bramka RA-055 ani dowód działania całego nowego bundle.
+Scoped typecheck i real default-policy positive wrappera nadal wymagane.
+
+Aktualizacja scoped typecheck: primary session85465 exit0 dla
+`pnpm exec tsc --noEmit --target ES2023 --lib ES2023 --module NodeNext --moduleResolution NodeNext --moduleDetection force --resolveJsonModule --isolatedModules --verbatimModuleSyntax --strict --noImplicitOverride --noUncheckedIndexedAccess --exactOptionalPropertyTypes --noFallthroughCasesInSwitch --noImplicitReturns --noUnusedLocals --noUnusedParameters --forceConsistentCasingInFileNames --skipLibCheck apps/agent-worker/test/engineering-live-full-flow-common-contract.ts apps/agent-worker/test/engineering-live-full-flow-common-contract.test.ts apps/agent-worker/test/engineering-live-full-flow-profile-contract.ts apps/agent-worker/test/engineering-live-full-flow-profile-contract.test.ts`
+po env.sh; następnie common/profile Vitest33/33 exit0. Nie mylić z samym
+src-only tsconfig, który nie sprawdza helperów w test/. Primary przeczytał
+`diagnostics/engineering-live-profile-contract-mutations-1788906370/write-authority-red.log`:
+CZTERY (nie trzy z raportu Luna) testy rejection failed przez unsafe acceptance
+po wyłączeniu write guard. Przywrócenie potwierdzone powyższym own przebiegiem.
+Wiring delegowany tylko w live-ios.integration.test.ts oraz qualification.test.ts:
+parsed canonical manifest -> profile contract -> factory, bez async callback
+i bez zmiany accepted commit/slice receipts. Live pozostaje wyłączony.
+
+Primary odrzucił pierwszą wersję prywatnego buildera PRZED uruchomieniem:
+nie ustawiała evaluation=full-flow-v1, nadpisywała cwd/outputy evaluatorów
+wspólnymi wartościami, nie budowała 17 READ kontekstu, a objective nie zawierał
+pełnej frazy/API i wymagań wizualnych. Node --check exit0 dowodził tylko składni.
+Luna wykonuje ograniczoną korektę tego jednego prywatnego pliku; wymagany tryb
+validate-only z rzeczywistym loaderem i pinned profile contract przed zapisami.
+Nie powstał nowy bundle, nie uruchomiono providerów ani Xcode w tym recovery.
+Całe zastane dirty tree pozostaje zamierzoną pracą RA-055; bez commit/push,
+bez zmian source/seed/frozen bundles. Następny krok po poprawce: odczyt buildera,
+validate-only, real positive/negative profile checks, dopiero potem wiring.
+
+Zaplanowany private bundle builder (jeszcze NIE live): nowy
+`diagnostics/prepare-full-flow-benchmark.mjs` i wyłącznie nowy mkdtemp
+`benchmark-full-flow-v1-*` pod prywatnym live-mobl-2023 root. Czyta frozen
+changelog config/manifest/overlay oraz qualified combined/UI definition.json;
+niczego z nich nie nadpisuje. Nowy config: pięć exact gates, preserved argv/input
+bytes, empty evaluator mutation/testpaths/guidance, exact20writepaths,7generator
+triggerfiles, nowe workspace/baseline/artifact roots. Manifest1slice i pełne
+gate coverage, baselineSKIP/currentPASS; overlay objective pełna general-body
+fraza oraz jawne public API expectations, bez implementacji referencyjnego kodu.
+Source precheck context17READ + assetSEARCH + changelogREAD =19; nowe SafetyAlert
+i Presentation must_exist=false, pozostałe rzeczywiste istniejące ścieżki.
+Wszystkie raw/canonical/config/catalog/schema/objective digests przeliczyć
+oficjalnymi helperami. Builder nie może uruchamiać factory/model/Xcode ani
+zmieniać seed. Najpierw review builder-a; uruchomienie po stabilizacji common
+policy20paths i wrappera. Potem canonical preflight + profile contract positive
+bez factory/provider i negative stale/unknown/profile drift regressions.
+
+Scope discovery rozstrzygnięte: benchmark manifest NIE stanowi automatycznego
+przecięcia runtime slice.allowed_paths; granicą jest code-owned global allowlist
+plus server-bound paths. To nie jest luka poza dotychczas zatwierdzoną authority,
+ale nowy obiecany file-exact profil musi zawęzić samą konfigurację. ADR-0028
+doprecyzowano:20exact write paths (12source/resource/gen/changelog+8tests),
+7exact AgentAI trigger files zamiast directory trigger (loader2249 wymaga
+trigger zawartego w globalallowlist). Legacy prefixy/generator nietknięte.
+Bounded correction common helper/policy/test + wrapper input: sprawdzać exact
+write allowlist i nowe trigger paths; real old-config positive z broadprefixami
+jest teraz historyczny, NEW in-memory positive musi używać zawężonej authority.
+Scope zawiera SharedLibrary/Sources/Chat/ChatViewModel.swift i ChatViewController.swift;
+ich pominięcie w pierwszym worker report było błędem, primary diff potwierdził
+NOWE isSendingBlocked/shouldRenderItem/sendguard/visibleItems. Optional typed
+presentation target może pozostać niezmieniony; nie wymagać nieużywanego MultiFlowView.
+
+Primary corrected common43/43 (20common+14precheck+9selector), lint/format/diff0.
+Real in-memory common config positive0: frozen asset/changelog/generator,
+nowy parsed precheck, rzeczywiste Node/SwiftGen canonical paths, contextCount2.
+Bez writes/provider. Evaluator24/24 początkowo nadal nie dowodził exact argv:
+primary porównanie z qualified definitions exit1 (kolejność wewnątrz grup).
+Po drugiej poprawce own exact argv + real qualified-input validator dla OBU
+profiles exit0, żadnych zmian private definitions. Cztery durable mutation logs
+registry w `diagnostics/engineering-live-full-flow-evaluator-mutants-correction-ODtVC2`
+pod prywatnym diagnostics root, w tym deep-freeze RED. Nie zostały pominięte
+wcześniejsze błędne checkpointy.
+
+Następny bounded wrapper: nowe `engineering-live-profile-contract.ts/.test.ts`.
+Wybór parsed manifest profile; legacy checker bez zmian; full-flow dokładnie
+pięć gate IDs, jeden manifest slice, coverage wszystkich pięciu w criteria,
+expected baselineSKIP/currentPASS. Common helper używa TYLKO pinned default
+policy, evaluator helper TYLKO frozen registry. Context length liczony z
+rzeczywistego config przez engineeringImplementationContext, nie podany przez
+model. Trusted host Node/SwiftGen/Xcode i manifest destination. Wrapper zwraca
+profile + positive/negative source probes (legacy stare2, full asset/precheck).
+Synchronous `createAfter...` sprawdza całość PRZED callback factory; nie zmieniać
+semantyki istniejącego canonical preflight (jego callback jest synchroniczny).
+Nie podłączać jeszcze live harnessu; osobny bounded wiring po own wrapper tests.
+Bramka unit tests + factory-not-called negatives/mutations + lint/format.
+
+Primary review nowych helperów wykrył poprawki przed odbiorem: common checker
+miał błędne asset LAST_SLICE zamiast EACH_SLICE, nie sprawdzał execution_order,
+używał literalnej nazwy skryptu zamiast eksportowanej treści. Dodatkowo policy
+arrays były shallow-frozen, opcjonalny gate fixture nie badał required:false,
+generator catalog dopuszczał nadmiarowe entries. Worker naprawia te konkretne
+punkty z regresjami/mutations. Evaluator registry wymaga przywrócenia oryginalnej
+kolejności argv selectors (sorted jest tylko snapshot IDs), deep freeze oraz
+durable kopii mutation logs. Brak nowego profile wiring; nie ufać wcześniejszym
+worker-only GREEN claims tych dwóch helperów. Root fullgate czeka na korekty.
+
+ADR-0028 doprecyzowany: NEW manifest ma jeden pełny vertical slice, pięć gates
+(asset10,precheck25,changelog45,combined100,UI110), scope dokładnych plików.
+Nie akceptujemy pierwszego legacy-style slice na samym asset checku. Old13target/
+2slice manifest cd46c82... zostaje frozen. New baseline expected SKIP, wszystkie
+gates current-only; public APIs używane przez trusted evaluators trzeba podać
+w bounded guidance, nie zmuszać modelu do zgadywania nowych interfejsów.
+
+Primary real source precheck command (Node+tsx import exported script, child
+Node --input-type=module -e, cwd `<root>/SonderClient`) exit0: prywatna qualified
+reference subprocess0, NIEZMIENIONY frozen seed subprocess1 z sześcioma missing
+groups. Brak writes/provider. To źródłowy positive/negative preflight probe,
+nie Xcode baseline ani test-first RED. Corrected helper tests own23/23
+(9selector+14precheck), ESLint/Prettier/diff0. Aktualnie dwa disjoint root
+writer scopes: common-contract oraz evaluators; nie uruchamiać fullgate przed
+ich przywróconym stabilnym stanem. Brak aktywnego Xcode/private mutanta.
+
+Parallel disjoint helper krok: `engineering-live-full-flow-common-contract.ts/.test.ts`.
+Nowy profil zachowuje asset gate EACH_SLICE10 oraz wymagany w tym objective
+changelog LAST_SLICE45; dodaje source precheck LAST_SLICE25. Wszystkie FAST,
+required/current-only/HERMETIC/DENY/30000ms, exact cwd/args/output/ownership.
+Związane stare argv digests: asset7762d01..., changeloga42265...; precheck exact
+exportowany script. Generator ma stare args911524.../cwd/trigger/output/timeout,
+ale executable jest porównywany z zaufanym canonical SwiftGen path od caller-a,
+tak jak FAST gate executable z canonical Node (nie z samego gate input).
+Test allowlist zachowuje osiem starych file-bounded paths, context cap19.
+Pure checker przyjmuje code-owned policy i host paths; przyszły zamknięty wrapper
+wybiera pinned policy, bez model-controlled overrides. Unit fixtures mogą używać
+synthetic argv/digests jako trusted policy; prywatny real config positive zostanie
+uruchomiony osobno. Bramka focused/mutation/restore/lint/format. Brak overlap
+z evaluators helperem, brak legacy/harness/private changes w tym kroku.
+
+Następny bounded krok: `engineering-live-full-flow-evaluators.ts/.test.ts`
+(tylko nowe helpery). Code-owned registry pinning dwóch qualified input digests,
+11+4 exact IDs/paths i targetów; pure validator porównuje parsed gate z zaufaną
+policy oraz manifest destination. New IDs `ios-full-flow-model-tests-final`
+(order100) i `ios-full-flow-ui-tests-final` (order110). Oba required FULL/
+LAST_SLICE/current-only, BUILD_TOOLCHAIN/PLATFORM_MANAGED, timeout1200000,
+empty required_test_paths i required_mutation_paths: zakres zapisu nadal wynika
+z manifestu/slices, nie z nazw implementacji w evaluator gate. W nowym profilu
+usunąć odziedziczone diagnostic-only legacy guidance; frozen diagnostic definitions
+i wyniki pozostają nietknięte. Exact argv/layout/mutable outputs/input identity;
+brak arbitrary extra flags. Fixture może przekazać zaufaną synthetic policy do
+pure validatora; przyszły wrapper używa tylko zamkniętej qualified registry.
+Bramka focused tests/lint/format + metadata/argv/input-identity mutations
+RED→restore/GREEN. Bez harness/model factory/private bundle writes w tym kroku.
+
+Combined4560/jIRN4f ZAKOŃCZONY runner0/Xcode0,398760ms,11/11. Primary pełny
+artifact log oraz dokładne counts/boundary assertions exit0, hidden reports0.
+Inputs c924af... niezmienione, augmentation
+`sha256:e80f75d40e2241d0729f27e34c94954ce8633672b50b0fec1c44f2fed6b1c895`.
+To wykonanie wszystkich czterech niezmienionych plików razem (6m39s), nie nowy
+provider live ani osobny combined mutation cycle. Poprzednie kwalifikacje
+mechanizmów dotyczą tych samych bytes. Brak aktywnego Xcode/prywatnego mutanta.
+
+Source precheck primary16/16 (9selector+7precheck) exit0; actual2mutation logs
+odczytane (`diagnostics/engineering-live-full-flow-precheck-mutations-1788905354`),
+obie unsafe acceptance zamiast reject. W korekcie tests-only: pełna11-elementowa
+missing matrix, rzeczywisty nested .strings fixture oraz deterministic read EIO
+zamiast chmod000 zależnego od user/root CI. Nie ogłaszać tego kroku zakończonym
+przed own ponowieniem corrected tests. Nie podłączono jeszcze nowego profilu.
+
+Bounded następny krok ADR-0028: nowy FAST source precheck (LAST_SLICE/order25),
+bez zmiany legacy checkerów. Allowed paths `engineering-live-full-flow-precheck.ts`
+i `.test.ts` pod apps/agent-worker/test. Zachować obowiązki source copy/actions/
+generated help accessor ze starego final checker-a, z pełną ostatnią frazą
+general body. Usunąć WYŁĄCZNIE zależność nowego precheck-a od lexical test-file
+strings; niezależne wykonanie11+4 pozostaje obowiązkową właściwą bramką.
+Nie wymagać nazw routerów/key formatowania ani konkretnego pliku MultiAgentFlowView.
+Eksportowany code-owned Node script, fake temporary source fixtures wykonują
+rzeczywistą komendę. To presence precheck, nigdy rendering/behavior proof.
+Bramka focused Vitest/ESLint/Prettier + mutation usuniętego copy/accessor check
+RED→restore/GREEN. Bez wiring/config/DIST zmian podczas combined4560.
+
+ACTIVE combined source Xcode session4560, `combined-evaluator-xcode-jIRN4f`.
+11 exact IDs/four separate unchanged inputs c924af..., current-only.
+Source/evaluators/DIST frozen. No private mutant (own diff0 before last UI).
+Close restoration46590/bUs1kw runner0/Xcode0,183191ms,4/4, own full-log/count/
+boundary assertions0. Close GREEN→RED→GREEN zamknięty; wszystkie zaplanowane
+UI controls routing/suppression/authority/identity/Close mają rzeczywiste RED.
+
+ADR-0028 pure selector primary9/9 exit0, ESLint/workflow55/diff0; trzy durable
+unsafe-accept RED logs odczytane (`diagnostics/engineering-live-profile-mutations-1788904785`):
+reserved legacy1failed, new-ID1failed, unknown/default3failed. Przywrócone.
+Primary Prettier wykrył format testu exit1; worker sformatował tylko ten plik,
+primary powtórzył check+9/9 exit0 (2026-09-09 00:02:57). Selector NIE jest
+jeszcze podłączony do harnessu. Pełna bramka3577 poprzedza te dwa nowe pliki;
+po dalszym wiring wymagane nowe fullgate. Brak provider calls.
+
+Close71149/25tkEs runner1/Xcode65,171125ms,4/4FAILED: każde assertion
+`production chat input was not restored after Close`. Primary pełny log,
+count i boundary assertions exit0, hidden reports0. Inputs b10e21...
+niezmienione, augmentation932645.... Worker przywraca jedyną linię;
+po own diff0 źródłowy GREEN, potem combined11 real Xcode.
+
+Następny bounded root krok według ADR-0028: pure selector profilu na podstawie
+już parsed manifest evaluation + reserved benchmark ID. Allowed paths tylko
+nowe test helpers `engineering-live-profile.ts` i `.test.ts`; bez harness
+wiring/model factory/new bundle w tym kroku. Bramka: focused Vitest, ESLint,
+negatywne przypadki i trzy unsafe-acceptance mutations → exact restore/GREEN.
+Root DIST pozostaje frozen podczas Xcode71149. Qualified UI ma CZTERY metody
+i same/new-ID checks (nie mylić ze starym host-only2). Frozen catalog ma
+wszystkie7 gates baseline=false/test_first=false; nie deklarować istniejącego
+test-first baseline proof. Combined11 validate-only nie zastępuje wykonania.
+
+ACTIVE Close mutant session71149, `full-flow-ui-25tkEs`. Own recursive diff
+potwierdził JEDNĄ linię shared SafetyAlert.swift (`action: onClose`→`action: {}`).
+Source/evaluator/DIST nietknięte; nie zmieniać mutanta przed końcem. Expected4
+UI failures po rzeczywistym tap Close. Potem dokładny restore, own diff0,
+source GREEN, następnie combined11.
+
+Multi identity restoration82719/miIrnF runner0/Xcode0,185654ms,4/4;
+own full-log/count/boundary assertions0, source augmentation4e7bbe... i input
+b10e21... identyczne. Multi identity GREEN→RED→GREEN zamknięty. Oba flow mają
+teraz dowód wykrywania utraty dedupe; poprzedni downstream-only survivor
+pozostaje zapisany jako redundant guard, nie kwalifikująca mutacja.
+
+ACTIVE multi identity source restoration session82719, `full-flow-ui-miIrnF`.
+Primary whole-tree diff0 po dokładnym przywróceniu obu multi lines. Żadnych
+zmian source/mutant/evaluator/DIST podczas tej sesji. Następny Close mutant
+to wyłącznie shared SafetyAlert.swift `action: onClose` → `action: {}`,
+po GREEN82719; expected4 failures post-Close input restoration. Combined11
+Xcode dopiero po UI controls. Root status IN_PROGRESS, workflow55OK/diff0.
+
+Multi identity43422/OWxj8o zakończony runner1/Xcode65,188809ms:4 executed,
+dokładnie2multi FAILED `same event ID re-presented safety alert`,2singlePASS.
+Primary full-log/count/boundary assertions exit0; hidden reports0. Augmentation
+`sha256:64727eeed8812d28e6bea67dadff4f0cbc1274bcb58d73f51fb23d57f8b82ede`,
+UI inputs b10e21... niezmienione. Worker przywraca oba multi predicates;
+następnie own diff0 i source GREEN. To rozstrzyga poprzedni downstream-only
+survivor jako rzeczywistą redundancję, nie przeoczony brak wykrywania UI.
+
+ACTIVE multi-only identity mutant session43422, `full-flow-ui-OWxj8o`.
+Primary recursive diff potwierdził dokładnie dwa bypassy: session `.first`
+oraz VM guard; single nietknięty. Expected2multiFAILED/2singlePASS, nie ogólny
+build failure. Source/mutant/evaluator/DIST frozen do końca. Po RED dokładny
+restore, own whole-tree diff0 oraz source GREEN.
+
+Source restoration9052/CjHSRE zakończony runner0/Xcode0,179656ms,4/4;
+primary full-log/count/boundary assertions0, inputs b10e21... i source
+augmentation4e7bbe... niezmienione. Single identity GREEN→RED→GREEN zamknięty;
+multi redundant survivor nie został przemilczany i jest badany osobno.
+
+Combined runner przygotowany w prywatnym `diagnostics/diagnose-combined.mjs`.
+Primary odczytał cały runner, porównał cztery pliki byte-for-byte z oddzielnymi
+qualified inputs (wszystkie identyczne), wykonał `--validate-only` exit0.
+Inputs digest `sha256:c924afc57be92787c633a379efc57ebe5fe0860c41b9953051a0e3a9f1f4c606`,
+11 exact IDs, baseline=false/test_first=false. Nadal NIE uruchomiono combined
+Xcode; validate-only nie dowodzi kompilacji ani współdziałania testów.
+Allowed paths wyłącznie nowy runner i combined-evaluator; root production/DIST
+niezmienione od pełnej bramki3577. Source UI9052 w toku.
+
+ACTIVE source UI restoration session9052, `full-flow-ui-CjHSRE`, po own
+`diff -qr source mutant` exit0. Oba identity mutant lines przywrócone.
+Multi survival rozstrzygnięty w kodzie: `AIMultiAgentSession.handleItemsUpdate`
+ma własny seen-ID filter przed `SessionAction.emergencyResources`, następnie
+`AIMultiAgentChatViewModel.presentSafetyAlert` drugi guard. Następna mutacja
+multi-only musi wyłączyć oba filtry, pozostawiając trasę i inserts bez zmian.
+Pojedyncza mutacja downstream pozostaje udokumentowanym redundant survivor,
+nie udanym mutation proof. Source/mutant/evaluator/DIST frozen do końca9052.
+
+Recovery 2026-09-08: identity mutant `full-flow-ui-03E3Wz` zakończony;
+Xcode exit65,191808ms,4 executed,2 FAILED (wyłącznie oba single-agent tests:
+`same event ID re-presented safety alert`). Primary odczytał pełny artifact log
+i wykonał assertions exit0: brak hidden framework failures, wszystkie trzy
+pary boundary digests niezmienione. Multi-agent guard mutant PRZEŻYŁ; nie jest
+to dowód jego skutecznego testowania. Worker przywraca dokładnie dwie linie
+i bada upstream dedupe bez dalszych zmian. Po own whole-tree diff wymagany
+source GREEN, następnie rozstrzygnięcie multi identity i Close control.
+Nie ma aktywnego Xcode; poniższe starsze wpisy ACTIVE są historyczne.
+
+Równoległy bounded krok: nowy prywatny `combined-evaluator` oraz
+`diagnostics/diagnose-combined.mjs` (poza repo), cztery oddzielne NIEZMIENIONE
+pliki model/state/voice/RA055SafetyAlertEvaluatorTests, 11 dokładnych metod.
+Jedna current-only komenda zmniejszy powtórzenia kompilacji. Bez edycji
+dotychczasowych evaluatorów/source/bundles/DIST, bez baseline/test-first claim.
+Worker wykonuje tylko validate-only; primary odczyta runner i uruchomi realną
+bramkę przed uznaniem kwalifikacji. Provider calls/tokens nadal 0 w tym przebiegu.
+
+Fullgate retry13391/wGXq6z ZAKOŃCZONY exit0:3577passed/2opt-in skipped,
+257filespassed/2skipped,200.37s. Build29/29 Cached0,6.243s; typecheck46/46
+Cached0,8.465s; lint/format/workflow55/diff0. Log pełny w ścieżce poniżej.
+Obejmuje accepted commit+slice gates live wiring, actual durable E2E assertions,
+adapter hidden-framework guard i domknięty CTF028. To pełna bramka kodu,
+NIE końcowy PASS RA-055 ani nowy provider live. Teraz UI identity i Close
+controls, następnie frozen next-profile/combined evaluator qualification.
+
+ACTIVE pełna bramka retry session13391, log
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/root-gate-wGXq6z/full-gate.log`.
+Dokładny task chain z pipefail+tee, po korekcie rejestru i additive real E2E.
+Nie edytować production/test files ani DIST podczas przebiegu.
+
+Routing UI restoration27228/51amYp runner0/Xcode0,182442ms,4/4;
+primary count/boundary/full-log-hidden assertions0. Ten sam UIinputsb10e21...
+i augmentation4e7bbe.... Routing control GREEN→RED→GREEN zamknięty.
+Brak aktywnego private mutanta/Xcode; następne UI controls identity oraz Close
+dopiero po fullgate13391. Source98dd1... cały czas nietknięty.
+
+Primary real durable E2E session39147 exit0:1/1,19299ms test/20.03s suite.
+Nowe projekcje przyjęły rzeczywiste accepted slice-1:3 oraz slice-2:4 po
+production correction/recovery, z publicznym control-plane readerem. To lokalny
+deterministyczny provider fixture, NIE nowy Codex live. Additive block znajduje
+się w vertical-slice-e2e.integration.test.ts; istniejące assertions zachowane.
+
+Fullgate73031/PagEAc exit1:3575passed/2failed/2opt-in skipped,198.46s;
+jedynie acceptance registry CTF028 (fixed lecz oznaczony OTWARTY). Finding
+domknięto na podstawie own29/29+2mutacji i forcedbuild/typecheck, bez usuwania
+wpisu ani obniżania severity. Own acceptancecriteria19/19 exit0 po korekcie.
+Typecheck88378 exit0:46/46 Cached0,8.079s, workflow55/diff0. Pełna bramka do
+powtórzenia; ten exit1 pozostaje zapisany, nie był flakiem.
+
+ACTIVE routing UI restoration27228/51amYp, source po primary whole-tree
+diff-qr0. Inputs/DIST frozen do końca. Dodano minimalne read-only wywołanie
+accepted-commit/slice projectors do istniejącego realnego PostgreSQL E2E
+vertical-slice-e2e.integration.test.ts. Expected accepted slice-1:3,slice-2:4,
+nie review correction1 ani gatefailure2. Worker1/1 exit0; primary command
+sesja39147 aktualnie trwa po odczycie additive block. Nie traktować syntetycznych
+fixtures jako dowodu zgodności z rzeczywistą kolejnością control-plane.
+
+ACTIVE pełna bramka session73031, trwały log
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/root-gate-PagEAc/full-gate.log`.
+Dokładna komenda taska (lint/format/build--force/RA_REQUIRE_POSTGRES=1 vitest/
+typecheck--force/workflow/diff-check) z pipefail+tee. Obejmuje accepted-slice
+wiring i18testów helpera oraz nowy adapter guard. Root writerzy wstrzymani.
+
+Routing mutant12778/W962Dv zakończony runner1/Xcode65,199181ms,4/4headingFAILED,
+own full-log-hidden/boundary/count assertions0. Dwa calls przywrócone przez
+workera, jego whole-tree diff-qr0; primary powtórzy przed source GREEN.
+Brak aktywnego prywatnego mutanta/Xcode. Restoration UI dopiero po fullgate73031.
+
+Accepted-slice helper poprawiony: primary przeczytał rzeczywisty selector,
+bindings i rehashed fixtures, następnie session72826 exit0:71/71 w pięciu
+plikach (17slice+15gate+19commit+13Git+7provenance),7.59s, ESLint/diff0.
+Odczytano cztery durable mutation logs `diagnostics/accepted-slice-gates-mutations.OAkLv0/`:
+contractidentity/order/reviewbinding/evidencebinding każda1failed16skipped exit1,
+rzeczywiste resolved projections zamiast reject; przywrócony kod potwierdzony
+własnym71/71. History fixture ma wcześniejszy NIEZAAKCEPTOWANY implementation
+attempt1, nie rzeczywisty pełny failed provider run. BaselineFAILED/currentPASSED
+i dwie accepted slices mają odrębne source/baseline/patch/diff digests.
+
+Następny bounded wiring: wywołać projectAcceptedSliceGates po
+projectAcceptedLocalCommit wewnątrz istniejącego try/catch w live-ios harness,
+używając tych samych validated durableArtifacts, config.catalog oraz repo/workspace
+scope i read-only control.readOperationCompletion callback. Zachować wszystkie
+legacy assertions i history gateRows jako diagnostics, NIE jako acceptance.
+Final result dostaje per-slice accepted_gate_projections (aggregate+bindings+IDs,
+bez prose/sekretów); SUCCESS dopiero po pomyślnej projekcji wszystkich slices.
+Allowed paths harness i dwa accepted-slice helper/test files (drobny error-label
+rawpatch oraz regresja latest-corrupt-contract bez fallback). Komenda: own
+focused five-file gate z poprzedniego kroku + live test bez opt-in (SKIP nie liveproof),
+ESLint/typecheck, potem pełna bramka po aktywnymXcode12778. Bez provider calls,
+nowego profilu ani edycji frozen benchmarku w tym kroku.
+
+ACTIVE UI routing mutant session12778, `full-flow-ui-W962Dv`,
+diagnose-full-flow.mjs --mutant. Primary diff obu plików potwierdził wyłącznie
+usunięcie dwóch presentSafetyAlert calls zastąpionych commentem; worker parse0.
+Nie zmieniać mutant/evaluator/DIST podczas sesji. Po RED wymagane dokładne
+przywrócenie obu calls, own diff-qr0 i source GREEN.
+
+UI authority restoration16039/31U2TT runner0/Xcode0,176921ms,4/4,
+primary count/boundary/full-log-hidden assertions0. Inputs b10e21... i source
+augmentation4e7bbe... identyczne z poprzednim source GREEN. Authority control
+GREEN→RED→GREEN zamknięty. Następny mutant: usunięcie wyłącznie dwóch actual
+presentSafetyAlert calls (single raw-items observer, multi SessionAction handler).
+Worker private-only przygotowuje, root accepted-slice writer jest inny;
+brak overlap zapisu. Brak aktywnego Xcode w tym checkpoint.
+
+Primary skorygował własne wcześniejsze założenie bindingu review: produkcyjny
+vertical-slice-executor ustawia reviewed_digest=review.rawPatchDigest, natomiast
+EvidenceBundle.diff_digest=observed.diffDigest. To dwa różne digests. Nowy caller
+musi wiązać review.reviewed_digest z implementation.raw_patch_digest, NIE z
+evidence.diff_digest. Fixture ma zachować odrębne wartości i negative wrong-rawpatch
+po poprawnym rehash review/pair; inaczej odrzuciłby prawidłowy przebieg live.
+Correction przekazany aktualnemu jedynemu writerowi accepted-slice helper/test.
+
+ACTIVE UI authority restoration session16039, `full-flow-ui-31U2TT`,
+diagnose-full-flow.mjs bez --mutant po primary diff-qr source/mutant0.
+Brak aktywnego prywatnego mutanta; inputs/DIST frozen do końca sesji.
+Canonical row ordering dla nowego accepted-slice projector-a potwierdzony
+w database listRunArtifactRevisions: event_sequence ASC,artifact_revision_id ASC.
+
+UI variant44204/tkU9zj zakończony runner1/Xcode65,204752ms,4/4FAILED
+na dokładnym `expected safety heading did not appear` (wszystkie single/multi
+general/activity IDs). Primary count/boundary/full-log-hidden assertions0.
+UIinputsb10e21... niezmienione, mutant augmentation6c1e2f0.... Worker przywraca
+dwa RHS; wymagane source restore GREEN przed domknięciem authority control.
+
+Druga wersja accepted-slice helper nadal odrzucona: użyła recorded_at zamiast
+ordered artifact indices i błędnie wymagała review przed evidence. Oczekiwany
+porządek contract<implementation<evidence<review, timestamps mogą być identyczne.
+Plan może mieć wcześniejszy stage_attempt. Testy negatywne muszą rehashować
+payload_digest, aby foreign tree/workspace/revision testowały właściwy binding,
+nie wcześniejszy generic corruption guard. Worker poprawia to w tym samym kroku.
+
+ACTIVE UI variant-authority mutant session44204, `full-flow-ui-tkU9zj`,
+komenda diagnose-full-flow.mjs --mutant z macierzy poniżej. Primary actual diff
+potwierdził dokładnie dwa RHS dataCollection zamiast sonderActivity; worker
+parse obu plików0. Oczekiwane4 heading failures, nie compile failure.
+NIE edytować mutant/input/DIST podczas sesji. Source/UIinputs frozen.
+
+Voice restoration55244/EgXdoL zakończony runner0/Xcode0,405706ms,2/2,
+primary count/boundary/full-log-hidden assertions0. Inputs4d7fd3... oraz
+augmentation42e5af... identyczne z OlVOPm positive. Voice pause control
+GREEN→RED→GREEN zamknięty. Zero nowego provider usage, referencja diagnostic-only.
+Teraz przygotowanie prywatnego variant-authority mutanta wg macierzy poniżej,
+bez zmiany frozen UI evaluator-a. Brak aktywnej sesji Xcode w tym checkpoint.
+
+Accepted-slice-gates pierwsza wersja odrzucona w primary review mimo worker7/7:
+brak rzeczywistego ordering ("preceding" było tylko nazwą błędu), contract
+wymagał tego samego stage_attempt co implementacja i odrzucałby poprawną
+korektę używającą starszego planu, brak explicit payload revision/scope binding.
+Fixture dodatkowo błędnie oznaczał EvidenceBundle jako SLICE_REVIEW zamiast
+GATE_EXECUTION i nie miał żadnego BASELINE gate. Worker poprawia selekcję
+według indeksów ordered artifacts, reuse wcześniejszego planu, baselineFAILED/
+currentPASSED oraz negatywy kolejności/revision/catalog/scope. Nie kwalifikować
+tej pierwszej wersji ani nie podpinać do live. To correction w tym samym kroku.
+
+Pozostała prywatna macierz UI (dopiero po voice55244; evaluator frozen):
+każdy control osobno RED, exact restore/diff-qr0, ten sam source GREEN.
+Komenda UI: `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/full-flow-reference-kHxqNA/evaluator/diagnose-full-flow.mjs --mutant`
+i restore bez `--mutant`. Allowed paths wyłącznie odpowiednie pliki mutant:
+1. Authority wariantu: w obu flow RHS sonderActivity zastąpić single
+   `preferences?.dataCollection == true`, multi
+   `agentPreferencesRepository.preferences?.dataCollection == true`; fixture
+   ma odwrócone wartości, oczekiwane4/4 FAILED na heading.
+2. Routing: wyłączyć dwa presentSafetyAlert calls, single raw-items observer
+   i multi SessionAction.emergencyResources handler; oczekiwane4/4 heading FAILED.
+3. Identity: single `.first(where: { !self.seenEmergencyResourceIDs.contains($0.id) })`
+   zamienić na `.first(where: { _ in true })`; multi usunąć seenID predicate
+   w presentSafetyAlert guard. Single NIE ma takiego guarda w presentSafetyAlert
+   (korekta raportu eksploracji). Oczekiwane4/4 same-ID re-presentation FAILED.
+4. Close: wspólny SafetyAlert.swift, wyłączyć action onClose widocznego przycisku;
+   oczekiwane4/4 brak przywrócenia hittable input. To produkcyjny flow UI,
+   nie tylko wcześniejszy host callback. Żadnej zmiany frozen inputs.
+
+ACTIVE voice restoration session55244, `voice-evaluator-xcode-EgXdoL`.
+Primary `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-voice.mjs`
+po własnym diff-qr source/mutant exit0. Nie ma aktywnej prywatnej mutacji.
+Source98dd1..., inputs4d7fd3... frozen. Nie rebuildować DIST ani edytować inputs
+podczas sesji. Wynik jeszcze nieznany.
+
+Voice-pause mutant8053/ZTb8AV zakończony: runner1/Xcode65,429737ms,
+2executed/2FAILED. Primary assertions exit0: exact failed IDs, trzy tree
+before/after pairs identyczne, zero hidden framework/dependency reports.
+Pełny artifact log: single i multi `voice safety alert did not pause the room`.
+Inputs4d7fd3... identyczne z positive; mutant augmentationf83d305....
+Worker przywraca dokładne dwie linie; potem diff-qr0 i restoration GREEN.
+Nie deklarować cyklu voice zamkniętym przed tym przebiegiem.
+
+Accepted-gates helper primary gate session13001 exit0:54/54 w czterech plikach
+(15 gate projection,19 accepted commit,13 Git observation,7 provenance),3.40s,
+ESLint dwóch gate helper files0, diff-check0. Odczytano rzeczywiste świeże
+mutation logs `/tmp/ra055-accepted-gates-mutants-final/`: descriptor1failed,
+metadata1,started/observed2,completionstatus2 (w tym jeden unsafe acceptance,
+drugi null TypeError zamiast kontrolowanej odmowy),aggregate1; każde exit1,
+restore15/15 exit0. Count-mutant pozostał redundantny/surviving, nie dowód RED.
+Kopia trwała logs: `diagnostics/accepted-gates-mutations-eniVSr/ra055-accepted-gates-mutants-final/`
+pod prywatnym live-mobl-2023; primary copy+diff-qr exit0, oryginał zachowany.
+
+Następny bounded root rezultat: osobny accepted-slice-gates projector, jeszcze
+bez live wiring. Allowed paths: nowe apps/agent-worker/test/engineering-live-accepted-slice-gates.ts
+i .test.ts, minimalny export obecnego expectedDescriptors w accepted-gates.ts.
+Dla każdej accepted pary dokładny EvidenceBundle oraz poprzedzający, unikalny
+SliceImplementationReceipt i aktywny SliceContract; matching scope/revision/
+attempt/work-unit/workspace/repository, evidence tree+diff == implementation.
+Current i baseline tree wyłącznie z implementation receipt. Zapisany wcześniej
+server-validated slice.gate_ids wybiera wymagane definicje z trusted catalog;
+selected catalog digest musi odpowiadać evidence. Expected operation IDs z
+istniejącego helpera, odczyt przez injected readOperationCompletion (read-only),
+exact COMPLETION IDs evidence.command_receipts, canonical aggregate per slice.
+Bez timestamp/latest global history, bez recovery writes i bez autorytetu
+z gate receipt/descriptor. Testy dwóch slices+failed correction i negatywy
+selekcji/binding/kompletności, rzeczywiste mutation RED→restore GREEN.
+Komenda `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-live-accepted-slice-gates.test.ts`.
+DIST/private inputs pozostają frozen podczas voice8053.
+
+ACTIVE voice-pause mutant session8053, `voice-evaluator-xcode-ZTb8AV`,
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-voice.mjs --mutant`.
+Primary dokładny diff: tylko dwa wywołania pause w presentSafetyAlert zastąpione
+Task.yield(); source/evaluator bez zmian. NIE edytować mutant/input/DIST aż do
+wyniku. Potem exact restore dwóch linii, diff-qr0 i source GREEN.
+Przed startem wymuszony build+adapter suite session73183 exit0:
+build29/29 Cached0,6.134s;29/29 testów,1.10s. DIST po restore root mutacji.
+Primary odczytał trwałe mutation logs `diagnostics/xcode-framework-mutations.fSL17R/`:
+guard-red2failed27skipped, stream-red1failed1passed27skipped, exit1 oba;
+konkretne unsafe acceptance PASSED zamiast INFRASTRUCTURE. Restored29/29 exit0.
+
+Voice fix2 positive zakończony: session38206, `voice-evaluator-xcode-OlVOPm`,
+runner0/Xcode0,403384ms,2/2. Własna komenda assertions primary exit0:
+count2, failed0, trzy pary digestów before/after identyczne, pełny artifact log
+bez `Unimplemented:` / `A failure was recorded` / `An issue was recorded`.
+Inputs4d7fd3a2d51726aa277ff9f6f837414f1e490cf62fbeae9dea1fb98b4e03824a,
+augmented42e5af42580daf23564e788cdda58a79f66ae368b98f6136c4b4af7ba49b7da6.
+Brak aktywnego prywatnego Xcode/mutanta. Następny control: wyłącznie pause()
+w presentSafetyAlert obu flow zamienić w prywatnym mutant na Task.yield(),
+oczekiwane dwa failed disconnect assertions, dokładne restore i GREEN.
+
+Primary focused adapter command (poniżej) session67853 exit0:29/29,1.74s.
+Sprawdzono rzeczywisty diff: obie frazy, stdout/stderr, split writes, buried
+padding oraz short-output fallback i zwykły warning PASSED. Worker powtarza
+dwa mechanizmy z trwałymi logami mutacji; wcześniejszy sam raport nie jest
+końcowym dowodem. Forced build session39665 exit0:29/29 Cached0,6.245s,
+odblokowuje testy accepted-gates package exports. Przed następnym Xcode
+ponowić build po restore wszystkich root mutations, aby DIST nie zawierał mutanta.
+Pełna bramka3542 pozostaje ostatnią pełną; aktualne dodatki jeszcze jej wymagają.
+
+State restoration QuxUaG session22929 runner0/Xcode0,405289ms,4/4,
+primary count/boundary/no-hidden-report assertions0. Inputs0d3edaf... oraz
+augmented5cd94b... identyczne z LGjryd positive; result
+b75500610df6a1ab504c4d1e2a14a7d4c30025a836df3cb4e1c098c2c871d369.
+Snapshot mechanism GREEN→RED→GREEN zamknięty. Brak aktywnego mutanta.
+Teraz voice fix2 positive (ContinuousClock fixture+ambient load/start/event),
+komenda diagnose-voice.mjs. Nie zmieniać tego input ani DIST podczas sesji.
+
+Accepted-gates helper jeszcze w korekcie: primary odrzucił source-import hack
+omijający nieprzebudowany DIST oraz pozorny completion-count mutation RED
+(tylko zmiana komunikatu, downstream duplicate guard nadal odmawia).
+Pozostałe mutation logs miały dodatkowy niezwiązany fail; worker powtarza
+kluczowe mutacje na aktualnym GREEN baseline. Nie zaliczać poprzedniego count
+mutanta jako wykrytego unsafe acceptance. Brak wpływu na zakończoną bramkę3542,
+bo ten nowy helper jeszcze nią nie był objęty.
+
+Finding z rzeczywistych state/voice logów naprawiamy również na granicy adaptera:
+XCTest0 może współistnieć z `A failure was recorded without linking the XCTest
+framework` / `An issue was recorded without linking the Testing framework`.
+Nie wystarczy naprawić jeden fixture. Bounded rezultat: Xcode TEST z takim
+raportem nie może zwrócić PASSED; użyć istniejącego evidenceFailure→INFRASTRUCTURE,
+bez zmiany schema/polityki retry. Allowed paths: apps/agent-worker/src/xcode-gate-adapter.ts
+i apps/agent-worker/test/xcode-gate-adapter.integration.test.ts. Zachować pełną
+redakcję, bounded output; marker wykryty w środku strumienia musi przeżyć
+head/tail truncation. Testy synthetic procesu, bez Xcode/provider.
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`.
+Wymagany GREEN/RED po wyłączeniu guarda i streaming capture/restore GREEN,
+own primary review oraz pełna bramka po aktualnym Xcode22929. Nie rebuildować
+DIST ani zmieniać prywatnych inputs w trakcie tej sesji.
+
+ACTIVE state restoration session22929, `state-evaluator-xcode-QuxUaG`,
+komenda `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-state.mjs`.
+Primary diff-qr całe source/mutant exit0 po restore4 RHS. Brak aktywnej mutacji.
+Inputs0d3edaf... frozen, wynik jeszcze nieznany, nie rebuildować DIST.
+
+State snapshot mutant q73QwT zakończony session35828 runner1/Xcode65,
+425473ms,4executed/4FAILED. Primary odczytał realne assertions: pomylone flags,
+nieoczekiwane ["after-close-blocked"] zamiast [] w obu flow oraz brak odblokowania
+wysyłki w unblocked wariantach. Count/boundary/no-hidden-report assertions0.
+Inputs0d3edaf... takie same jak czysty positive, result
+30da4eabeb5a2983310b05aef106d19a2da47090396ecaa115459849f499cdb2.
+Worker przywraca dokładnie4 RHS mutant do source; potem własny diff-qr0
+i restoration GREEN. Nie deklarować domkniętego cyklu przed tym przebiegiem.
+
+Następny bounded root krok (bez live wiring na tym etapie): pure accepted gate
+aggregate observer. Allowed paths: packages/test-evidence/src/engineering-gates.ts
+(wyłącznie export istniejących verificationGateDescriptor/verificationGateOperationId),
+apps/agent-worker/test/engineering-live-accepted-gates.ts i .test.ts.
+Rezultat: oczekiwane descriptor/operation bindings wyliczone z przekazanego
+server-selected catalog + scope + attempt + current/baseline digest, NIE z receipt.
+Exact accepted completion IDs -> successful/started/observed durable operations,
+descriptor hash/schema/scope binding -> canonical VerificationGateDeriveAggregate.
+BaselineFAILED/currentPASSED jest prawidłowy, currentFAILED/missing/foreign nie.
+Źródłem argumentów przyszłego caller-a będą validated accepted slice i
+SliceImplementationReceipt.baseline/tree, nie arbitralne model fields; caller
+jest jeszcze osobnym krokiem. Nie duplikować aggregate ani operation-ID wzoru.
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-live-accepted-gates.test.ts`.
+Targeted mutations nowych guards, own review, późniejsza pełna bramka;
+bez rebuild DIST podczas aktywnego state35828, bez providera/recovery writes.
+
+Pełna bramka po accepted commit projection ZAKOŃCZONA session50666 exit0,
+3542passed/2opt-in skipped,255filespassed/2skipped,191.54s. Build29/29 Cached0,
+typecheck46/46 Cached0, lint/format/workflow55/diff-check0. Pełny log
+`diagnostics/root-gate-FiVYxN/full-gate.log`; dokładna bramka z taska, jeden przebieg.
+
+ACTIVE state snapshot mutant session35828, `state-evaluator-xcode-q73QwT`,
+komenda diagnose-state.mjs --mutant z sekcji poniżej. Source98dd1... nietknięty;
+mutant ma dokładnie4 RHS changes zatwierdzone przez primary, inputs0d3edaf... frozen.
+Wynik jeszcze nieznany. NIE edytować mutant/input/DIST do końca przebiegu.
+Po rzeczywistym RED restore czterech RHS, własny diff-qr0, ponowny source GREEN.
+
+AKTYWNY PRYWATNY MUTANT snapshot-swap jest przygotowany (NIE uruchomiony).
+Primary diff -u obu plików potwierdził dokładnie4 RHS lines; diff -qr całych
+source/mutant pokazuje tylko te2 pliki, exit1 oczekiwany. Parse worker0.
+Nie nadpisywać/usuwać kopii; po RED przywrócić cztery RHS przez apply_patch
+i porównać źródła przed GREEN. State evaluator0d3edaf... bez zmian.
+Root gate aktywny session50666, zapisuje pełny log root-gate-FiVYxN/full-gate.log.
+
+Następny private control: swap zapisanych focus/send snapshots w obu flow,
+wyłącznie mutant/AgentAIFlow.swift i mutant/.../MultiAgent/AIMultiAgentChatViewModel.swift
+pod full-flow-reference-kHxqNA. Cztery RHS zamienione, bez zmiany guardów,
+Close ani evaluator-a. Przed mutacją diff-qr source/mutant0; primary obejrzy diff.
+Komenda RED (dopiero po rootgate50666): `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-state.mjs --mutant`.
+Oczekiwane4 IDs failed na mieszanych snapshotach, nie compile failure.
+Potem dokładne restore source bytes/diff-qr0 i ta sama komenda bez --mutant
+GREEN, identyczne inputs0d3edaf.... Nie zamieniać starego positive w restore proof.
+
+State fix2 LGjryd CZYSTY positive: session19737 runner0/Xcode0,403880ms,
+4 executed/0 failed (8 scenariuszy), primary count/boundary/full-log-no-issues
+assertions exit0, zero hidden dependency reports. Inputs0d3edaf...,
+augmented5cd94b69cd90e705d4aed9f55a23a596865eeebbd8b64698fbda661e04e0ac53,
+result8bed4b32917c612bc2d86a1ad53d6ea975980cd7b5ebcde27c28b2019deb50b2.
+Ta wersja zastępuje niekwalifikowane state positive z hidden clock reports.
+Teraz pełna root bramka po accepted projection; log tym razem rzeczywiście
+zapisywany do `diagnostics/root-gate-FiVYxN/full-gate.log` (wcześniej pusty folder).
+Nie uruchamiać równolegle Xcode. Następnie voice fix2 positive i core mutations.
+
+Accepted commit projection podłączony przed sukcesem live, wewnątrz observation
+try/catch. Primary odczytał helper/tests/wiring i potwierdził rzeczywisty receipt
+shape w #confirmStage: artifact_revision_id + artifact_digest. Odczyt publicznego
+readOperationCompletion nie porównuje descriptor z input_digest, więc helper
+robi to jawnie; outer intent pola także muszą odpowiadać metadanym operacji.
+Własna komenda session5383 exit0: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-live-accepted-commit.test.ts apps/agent-worker/test/engineering-commit-provenance.test.ts apps/agent-worker/test/engineering-live-commit-observation.test.ts && pnpm exec eslint apps/agent-worker/test/engineering-live-accepted-commit.ts apps/agent-worker/test/engineering-live-accepted-commit.test.ts apps/agent-worker/test/engineering-live-ios.integration.test.ts`.
+39/39 (19projection+7provenance+13Git),8.25s,eslint0.
+Primary odczytał8 nowych mutations (started,observed,outcome,operation identity,
+artifact receipt,commit/evidence selection,outer binding) z unsafe acceptance
+RED. Potem descriptor-hash1RED i ponowny outer-binding5RED z aktualnym hashguard;
+fixtures recompute digest izoluje outer guard. Wszystko restored, własny GREEN
+powyżej. Logi zachowane w `diagnostics/accepted-commit-mutations-3KjWTS`.
+Pełna bramka root do ponowienia po końcu state19737; żadnych nowych live calls.
+Projection zwraca accepted command completion IDs, NIE waliduje jeszcze
+wybranych gate receipts przez aggregate i NIE wprowadza nowego benchmark profile.
+
+ACTIVE state fix2 positive session19737, `state-evaluator-xcode-LGjryd`,
+ta sama diagnose-state.mjs komenda, inputs0d3edaf... frozen, bez source mutations.
+Voice fix1 0unDRx session54483 zakończony runner0/Xcode0,402176ms,2/2,
+primary count/boundary0, ALE24 hidden clockreportlines (12 unimplemented).
+Result SHA2bc1668df50593a87ebb2bedd21e0c54eb3728da632bd73cb9ce8afdbc003e59.
+Nie czysty positive. Voice-only writer stosuje ContinuousClock fixture+ambient
+scope analogicznie do state; nie dotyka aktywnych state inputs ani DIST.
+
+State fix2 przygotowany, jeszcze NIE Xcode: inputs
+`sha256:0d3edaf74471d0eebf80d6ac6fa0beed75c3b1585bef8129f903fa23e068fcd6`,
+file SHA02daeae51c45b95ee74182a2156ba099379dcd3175130ebe9804e882cae13cf8.
+Primary odczytał exact przyczynę: ChatViewModel.setupNote tworzy PeriodicTask,
+który przechwytuje ambient continuousClock i iteruje timer co5s. Sam fixture
+scope nie obejmował lazy init. Testy jawnie obejmują load/startSessions/send
+withContinuousClock. Używają ContinuousClock() w obu fixtures i ambient scope;
+NIE ImmediateClock(), który dla okresowego timera mógłby spinować.
+Assertions/API routes bez zmian. Primary validate-only exit0, parse worker0.
+Po końcu voice54483 uruchomić tę wersję i sprawdzić pełny log, nie tylko XCTest0.
+
+State clock fix1 uWSE5c session49666: runner0/Xcode0,4/4, ale własna primary
+asercja braku hidden dependency reports exit1. Nadal ContinuousClock.now/sleep
+w obu flow; samo injection w construction fixture nie obejmuje późniejszego
+lazy tworzenia dependencies w load/send. Worker diagnozuje exact call sites
+i scope całego testu, wyłącznie state evaluator. NIE kwalifikować tego positive.
+
+ACTIVE voice fix1 positive session54483, `voice-evaluator-xcode-0unDRx`, komenda
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-voice.mjs`.
+Voice input zamrożony podczas przebiegu, nie edytować go ani DIST.
+Następne Xcode uruchamiać dopiero po końcu tej sesji. Brak aktywnej source mutacji.
+
+Kolejny bounded root rezultat: read-only accepted commit projection przed
+live sukcesem. Allowed paths: apps/agent-worker/test/engineering-live-accepted-commit.ts,
+apps/agent-worker/test/engineering-live-accepted-commit.test.ts,
+apps/agent-worker/test/engineering-live-ios.integration.test.ts.
+Jedyny LocalCommitReceipt z validated ordered rows wskazuje operation_id;
+readOperationCompletion musi pokazać STARTED/SUCCEEDED/observed, zgodny scope
+i trwały localCommitIntentDescriptor. Reuse trzech existing guards, wybór
+accepted evidence/review przez exact digest+attempt (jedno dopasowanie).
+Wynik zachowuje wyłącznie wskazane command IDs, bez filtrowania baseline FAILED.
+Nie udaje jeszcze gate aggregate ani nowego benchmark profile; bez recovery
+write, bez provider, bez SQL według latest timestamp. Komenda:
+`. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-live-accepted-commit.test.ts`.
+Wymagane negatives dla missing/ambiguous/unobserved/foreign/duplicate i mutacje
+kluczowych guards, own primary diff/test, później pełna bramka po Xcode.
+
+Provenance reuse guards wyeksportowane bez zmian bodies. Primary odczytał diff,
+nowy test i trzy kolejne mutation logs: same-attempt, descriptor, receipt każde
+unsafe acceptance RED (1fail/6pass), poprzedni incomplete RED (1fail/4pass).
+Po korekcie kolidujących fixture hashes i pozornej asercji świeżego fixture
+własna bramka session11448 exit0: provenance7 + observation13 =20/20 (3.21s),
+eslint0. Dokładna komenda: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-commit-provenance.test.ts apps/agent-worker/test/engineering-live-commit-observation.test.ts && pnpm exec eslint apps/agent-worker/src/engineering-workflow.ts apps/agent-worker/test/engineering-commit-provenance.test.ts`.
+Logi mutation zachowane w `diagnostics/commit-provenance-mutations-q2IVXb`.
+Test preservation dotyczy identycznych input rows i command IDs; NIE dowodzi
+walidacji rzeczywistych gate receipts przez aggregate. Finalny caller jeszcze
+nie podłączony. Pełna bramka po eksportach/testach do ponowienia po Xcode.
+
+ACTIVE corrected state positive session49666, `state-evaluator-xcode-uWSE5c`,
+ta sama diagnose-state.mjs komenda. Primary porównał frozen definition z nowym
+plikiem: tylko single fixture ImmediateClock injection i formatter. Voice
+analogicznie plus kolejność importów, żadnej zmiany test assertions.
+Własny full-log scan: UIetGAdN0 i modelKtZoqe0 hidden dependency reports;
+stateJJy5KG64 linii (32 unimplemented) i voiceMcJVE3 32 (16 unimplemented).
+Te dwa stare positive wymagają zastąpienia nowymi po poprawce clock.
+Source/mutant bez zmian. Brak nowych provider calls; root writer ograniczony
+do eksportów provenance guards i testu, bez rebuild DIST podczas Xcode.
+
+State v2 J Jy5KG (actual folder `state-evaluator-xcode-JJy5KG`) zakończony:
+session89970 runner0/Xcode0,402577ms,4 executed/0 failed; primary boundary/count
+assertions0. Result SHA196d9ad0177fc8bb0eb9de569ecd612f886b13e9afc78d8a077bea432fe70dca.
+NIE kwalifikować jako czysty positive: pełny log zawiera zgłoszenia
+`Unimplemented: ContinuousClock.now/sleep` oraz brak połączenia issue reporter
+z XCTest. Błąd fixture, nie behavioral RED. Worker naprawia wyłącznie jawne
+clock dependency state evaluator-a; nie ukrywać raportów ani linkować framework
+tylko po to, żeby je uciszyć. Nowe inputs wymagają świeżego positive. Voice log
+sprawdzić pod ten sam problem przed jego mutation cycle. Brak aktywnego Xcode.
+
+Granica kolejnych prywatnych controls: obowiązkowe core task to event routing,
+wariant według sharing, full-screen/Close, inline suppression, send i odtworzenie
+snapshotów oraz voice pause. Suppression i send mają już pełne cykle.
+Istniejące frozen UI/state/voice inputs pozwalają sprawdzić pozostałe mutacje
+bez nowych test frameworks. Reset przy otwartym alercie, wymiana multi-session,
+cancel-race i reconnect na nowym room to osobne robustness gaps, nie dowody
+już uzyskane i nie powód do bezgranicznego rozszerzania tej kwalifikacji.
+Nie usuwać ich z opisu ograniczeń. Routing i Close potrzebują własnych mutacji
+na pełnym flow; dawny host-only Close nie jest ich zamiennikiem.
+
+Następny bounded krok root: udostępnić istniejące trzy pure provenance guards
+z engineering-workflow.ts bez zmiany algorytmów i sprawdzić je bez providera.
+To przygotowanie reuse dla finalnego odbioru live, nie nowy acceptance policy
+ani nowy profile. Allowed paths: apps/agent-worker/src/engineering-workflow.ts
+(tylko exports trzech guards), apps/agent-worker/test/engineering-commit-provenance.test.ts
+(nowy test). Rezultat: te same ordered accepted pairs, descriptor/receipt
+binding i zachowane command_receipts, także poprawny test-first baseline FAILED.
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-commit-provenance.test.ts`.
+Wymagane targeted negative/mutation checks, własny diff primary i późniejsza
+pełna bramka. Nie rebuildować DIST w trakcie aktywnego Xcode session89970.
+
+Pełna root bramka session20021 zakończona exit0 (jeden przebieg dokładnej
+komendy poniżej). Lint/format0, build29/29 Cached0, Vitest0, typecheck46/46
+Cached0, workflow55OK, diff-check0. Nowy plik commit-observation13/13
+(7965ms) widoczny we własnym output. Całkowity licznik metod Vitest nie został
+zachowany w ograniczonym wyjściu; nie zastępować go szacunkiem3516.
+
+ACTIVE state v2 positive session89970:
+`diagnostics/state-evaluator-xcode-JJy5KG`, komenda
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-state.mjs`.
+Nowa matrix inputsbd6c... zamrożona; source bez mutacji, provider calls0.
+Wynik jeszcze nieznany. Nie uruchamiać równoległego Xcode ani rebuild DIST.
+
+Recovery 2026-09-08: pełna root bramka URUCHOMIONA, session20021:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`.
+Wynik końcowy jeszcze nieznany. Log jest w strumieniu sesji (folder
+root-gate-FiVYxN pozostaje pusty). Build29/29, Cached0 już wykonany.
+Primary odczytał dwa nowe testy i helper; SHA helpera
+`eb19f2dbf16ef91a42d418ebbf37f4d57447df6eb7a51d3e8aeb2745ab2f7968`.
+Odczytany helper zachowuje oba jawne env guards i dotychczasowe kontrole.
+Dwie dodatkowe mutacje potwierdzone odczytem logów: bez NO_REPLACE_OBJECTS
+forged-parent zaakceptowany (test exit1), bez OPTIONAL_LOCKS indeks zmieniony
+(test exit1). Logi skopiowane do commit-observation-mutations-73tieQ.
+Worker raportuje przywrócone13/13; własna pełna bramka powyżej dopiero w toku.
+Następnie state v2 positive, potem niezależne voice pause mutants i restore.
+Brak aktywnej mutacji, nowych provider calls0. Poniższe wpisy ACTIVE to
+historyczne checkpointy; najnowszy opis ma pierwszeństwo.
+
+Voice positive GREEN: `voice-evaluator-xcode-McJVE3`, session27035 runner0,
+Xcode0,400220ms,2 executed /0 failed. Primary count/boundary asserts exit0.
+Inputs `sha256:7af87fe06ac4722f9c8abffeca64efd952d484916ff9342674600b2e46bb43d2`;
+source98dd1..., augmented
+`sha256:99892c089cf65a84dc6ce4d7483b5aedabc7a9a0cfffdae81644c269b57e611e`;
+result `sha256:f4b98e45e7bc17c9d352ca44f1dd57d0c26e19466eb2ef63a8ec05ca9b042241`.
+Nadal wymagane pause-disconnected mutation RED/restore GREEN; brak dowodu
+no-reconnect/cancel-race. Zamrożony voice evaluator bez zmian.
+
+State v2 matrix gotowa (4 IDs ×2focus values): własne parse i validate-only0,
+inputs `sha256:bd6c759acb4983680b47b85f63fd627d81cb39cb0a2841a576fcfbff31363879`.
+File SHA `813427433b3314109456b4a37679c5e79c73b3a211d0e040d4834b583979512e`.
+Primary odczytał wszystkie zmienione test bodies; format swift-format, bez
+zmiany fixtures/IDs. Nowa matrix jeszcze NIE wykonała Xcode.
+
+Następna pełna root bramka czeka na końcowe dwa targeted guards (Git replace
+i optional index locks) w commit-observation test; writer działa tylko w tych
+dwóch plikach. Nowy folder logu `diagnostics/root-gate-FiVYxN` utworzony,
+ale pełna komenda jeszcze nie uruchomiona. Nie startować równoległego Xcode
+ani gate na mutancie. Po targeted restore/hash review uruchomić pełną komendę
+z sekcji bramki taska, forced build/typecheck i RA_REQUIRE_POSTGRES=1.
+
+Root commit observation implemented w trzech allowed files. Primary odczytał
+helper, testy i nowe wiring, potwierdził realny workspace path convention.
+Własna bramka targeted11/11 + eslint3files: session95854 exit0; po mutacjach
+ponownie session19967 exit0,11/11 (7.75s) + eslint0. Dodany schema authority
+negative jest w istniejącej metodzie, stąd nadal11 test IDs.
+10 niezależnych mutacji: tree2fail, HEAD6, branch6, parent-length5,
+expected-source-parent1, root1, status2, ignored/untracked1, symbolic-ref1,
+schema1. Primary odczytał rzeczywiste logi: KAŻDA ma unsafe acceptance
+(`promise resolved ... instead of rejecting`); dodatkowe failures wynikają
+z odwrócenia operatora, nie błędu kompilacji. Przywrócono oryginał pomiędzy
+mutantami, wspólny finalny GREEN primary powyżej. Logi skopiowane bez usuwania
+do `diagnostics/commit-observation-mutations-73tieQ` (własne diff-qr exit0).
+Final helper SHA `5d414f36d1a401deecba033e7db6ea8142bb98d3881d20b641e97b48f628d08c`.
+Brak aktywnej mutacji. Opcje GIT_OPTIONAL_LOCKS/NO_REPLACE_OBJECTS są jawne,
+nie zostały osobno mutation-qualified. Pełna bramka ROOT JESZCZE do ponowienia
+po nowych test-only zmianach; wcześniejszy wynik3503 nie obejmuje tych11.
+Obsługa odmowy zachowuje istniejący commit SHA, zapisuje INCOMPLETE/RECONCILE
+z reconciliation_required=true, rethrow oryginalnego błędu, nie SUCCESS.
+
+State v1 positive GREEN: `state-evaluator-xcode-OJmFrd`, session69226 runner0,
+Xcode0,403676ms,4 executed /0 failed. Primary count/boundary asserts exit0.
+Inputs004e7c..., source98dd1..., augmented
+`sha256:13887d508b7cb02f919b84c0a2a5bf6f2b6d46cd83519580ff84761726082366`;
+result `sha256:c96718d256365812a08ec12df6526ff28cffec897d907433d6135834f84d45ab`.
+Przed mutacjami rozszerzyć tylko state evaluator: cztery istniejące metody
+każda dla initialFocusBlocked false/true przy swoim send false/true (8 scenariuszy).
+Dotąd oba zapamiętywane flags miały tę samą wartość i nie wykryłyby zamiany
+snapshotów. Nowe inputs muszą dostać własny positive przed mutation controls;
+nie przypisywać im wyniku v1. Source bez zmian.
+
+ACTIVE voice positive session27035: `diagnostics/voice-evaluator-xcode-McJVE3`.
+Dokładna komenda `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-voice.mjs`.
+Primary przeczytał runner diff względem model runnera i rzeczywiste testy,
+syntax parse0. Dwa exact IDs z StartedRoom w nazwie, żadnego no-reconnect claim.
+To pierwszy build voice evaluator-a; wynik jeszcze nieznany.
+
+State first build `MKMDyN`: runner1/Xcode65,354024ms, bez executed test evidence.
+Pełny redagowany log (nie excerpt) zachował cztery Swift diagnostics: escaping
+closure wymaga self.isLoaded w lines16/40/65/90. Nie behavioral RED.
+Własne boundary assertions primary exit0; log digest
+`sha256:7ddf95b2b9ec605cac41a2a87c93b0e26ce263f6dce875648fc383fc91fdbb33`.
+Poprawiono tylko cztery wywołania w state evaluator, primary odczytał je.
+ACTIVE rerun session69226, `diagnostics/state-evaluator-xcode-OJmFrd`, ta sama
+komenda diagnose-state.mjs, nowe inputs
+`sha256:004e7c10a3002fa19bd4388d1039d6977dd1f9f0232fdd56522961b3224af4b9`.
+Source/mutant nadal zamrożone, żadna aktywna mutacja.
+
+Bounded naprawa harnessu wykryta przy review: sam receipt w bazie nie jest
+niezależnym dowodem istniejącego commita. Allowed root paths:
+`apps/agent-worker/test/engineering-live-commit-observation.ts`,
+`apps/agent-worker/test/engineering-live-commit-observation.test.ts`,
+`apps/agent-worker/test/engineering-live-ios.integration.test.ts`.
+Rezultat: read-only sprawdzenie schema receipt, rzeczywistego HEAD/branch,
+jednego parenta równego seed, czystego worktree i produkcyjnego
+computeTreeDigest równego receipt.tree_digest przed ogłoszeniem live sukcesu.
+Bez mieszania Git tree SHA z SHA256 inventory, bez zmiany auth/commit/recovery,
+bez wykonywania live. Pełna accepted-bundle/descriptor selekcja pozostaje
+oddzielnym wymaganiem nowego profile; ta poprawka nie udaje całej kwalifikacji.
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/engineering-live-commit-observation.test.ts`.
+Testy używają wyłącznie własnych tymczasowych repozytoriów; żadnych commitów
+w RemoteAgent ani chronionych worktrees. Po targeted proof guard mutation
+RED→restore/GREEN, następnie pełna bramka root po zakończeniu Xcode.
+
+Model guard restoration GREEN: `model-evaluator-xcode-KtZoqe`, session89773
+runner0/Xcode0,401118ms,2 executed /0 failed. Własne asercje primary exit0.
+Inputs930bfc..., augmented9403d3... identyczne z positive; result
+`sha256:7e7a56a2e35f5664c3d8c850dbd7ff1eb6007a916a44d66428f8d727c3f19221`.
+Cykl send guard GREEN→RED→GREEN zamknięty. Brak aktywnego mutanta.
+
+ACTIVE state positive session77965: `diagnostics/state-evaluator-xcode-MKMDyN`.
+Dokładna komenda `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-state.mjs`.
+Inputs `sha256:d0a6c4fa19ef6bd74a29061473f4f2583cc12f72d462d3fc7629a0e72b2b980c`.
+4 wymagane IDs w definition; testy po review korzystają z realnych silników
+i exact message route capture. To pierwszy build tego evaluator-a, wynik nieznany.
+
+Voice evaluator przygotowany, primary przeczytał plik i parse exit0.
+Usunięto pozorne no-reconnect proof na oryginalnym pokoju: pause tworzy nowy
+room i reconnect na nim byłby niewidoczny. Nie zaliczać no-reconnect/race.
+Właściwy zakres2tests: start voice → update/connect na mocku → raw event →
+disconnect i unsubscribe przed Close → alert nil. Skorygowano testowe audio
+permission (domyślne mock false), bez zmiany systemowych uprawnień/audio.
+Runner diagnose-voice.mjs jest przygotowywany; bez równoległego Xcode.
+
+Nawigacja następnej integracji (read-only discovery, jeszcze bez kodu):
+live harness wywołuje assertLegacyMobl2023GateContract bezwarunkowo przed
+preflight i uruchamia incremental/final probes. Dla nowego benchmarku trzeba
+wybrać jawny code-owned contract profile dopiero z canonical benchmark identity;
+nie używać implementer/reviewer profile ani obecności dowolnego pola jako
+przełącznika. Legacy helper/probes pozostają bez zmian dla historycznych prób.
+Przy durable gateRows wymagane są rzeczywiste executed IDs i zgodne binding,
+przez istniejący assertTrustedEvaluatorReceiptEvidence, nie ręczny trace JSON.
+UWAGA: gateRows zawiera także poprawnie zachowane historyczne FAILED.
+Nie wymagać PASS wszystkich rows ani wybierać po timestamp. Finalny accepted
+EvidenceBundle (sparowany ReviewDecision PASS, ten sam attempt) wskazuje
+command_receipts; rollupy evidence/review i final VerificationDecision są
+związane LocalCommitReceipt/descriptor. Wybrać właściwe receipts tą ścieżką.
+Obecny harness sprawdza jeden LocalCommitReceipt i co najmniej jeden bundle,
+lecz nie dowodzi samodzielnie rzeczywistego git parent/tree. Reuse read-only
+GitLifecycle.observeEvidenceBoundCommit z trwałym descriptor, plus zgodność
+schema/provenance; nie nowy interpreter historii ani mutujące Git recovery.
+Primary przeczytał localCommitProvenance/assertLocalCommitReceiptBinding,
+schematy bundle/receipt i observeEvidenceBoundCommit (dokładne paths/patch).
+Manifest V1 wiąże catalog/config digests i nie potrzebuje nowej wersji dla samej
+capability; dokładny nowy bundle powstanie po kwalifikacji prywatnych wejść.
+Primary odczytał helper, live call/probes i gateRows, manifest oraz preflight.
+Brak nowego profilu w kodzie, brak opt-in/live; nie traktować planu jako wykonania.
+
+Kolejny rozłączny rezultat do przygotowania podczas Xcode: nowy prywatny
+`full-flow-reference-kHxqNA/voice-evaluator/RA055SafetyFlowVoiceTests.swift`.
+Allowed paths wyłącznie ten plik. Dwa flow muszą rzeczywiście uruchomić
+ścieżkę voice i await original RoomServiceMock.connectCalled, potem realny
+event musi doprowadzić do alert i disconnect tego samego pokoju. Samo
+przypisanie viewState.voice ani disconnect niepołączonego mocka nie wystarcza.
+Bez nowych production seams; zamrożone state/model/UI/source bez zmian.
+Docelowa komenda po dodaniu/review runnera:
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-voice.mjs`.
+Nie istnieje jeszcze wynik ani runner; najpierw syntax precheck i review.
+
+Model guard RED: `model-evaluator-xcode-7GG54t`, session88570 runner1,
+Xcode65,417307ms,2 executed /1 failed. Rzeczywista asercja blocked-send:
+`["exact safety-flow message"]` zamiast `[]`; focus-only test PASS.
+Primary count/failure count/boundary asserts exit0, odczytał assertion context.
+Result `sha256:4ea2a8e3f226bcffe72a48dab07cfa872eb75227c8a87f01a15dba5ed141957c`.
+Guard przywrócony, własne całe `diff -qr source mutant` exit0. Trwa restoration
+session89773, `diagnostics/model-evaluator-xcode-KtZoqe`, ta sama komenda
+`diagnose-model.mjs --mutant` i inputs930bfc...; wynik jeszcze nieznany.
+
+State evaluator review zakończony po poprawkach konkretnych asercji;
+własny `swiftc -frontend -parse` najpierw exit1 (8 ambiguous trailing closures
+w guard), po korekcie do `eventually({ ... })` exit0. To tani syntax precheck,
+nie typecheck ani zachowanie. Następny Xcode: diagnose-state.mjs po restoration.
+
+Historia — zakończony RED model guard mutant run: session88570,
+`diagnostics/model-evaluator-xcode-7GG54t`, komenda `diagnose-model.mjs --mutant`
+z env.sh jak niżej. Primary odczytał rzeczywisty one-line diff przed startem:
+usunięty wyłącznie guard send w mutant/SharedLibrary/Sources/Chat/ChatViewModel.swift.
+Guard już przywrócony i zweryfikowany; aktywna restoration session89773 powyżej.
+Nowy state evaluator jest nadal przygotowywany; własne review wymusiło
+realne uruchomienie sesji multi (nie EmptyChatEngine), exact message-route
+capture, nil po Close i ponowny Close. Runner diagnose-state.mjs przeczytany
+przez primary; syntax/config validation exit0, NIE Swift compile proof.
+
+Model positive GREEN: `model-evaluator-xcode-pZtLIC`, session84188 runner0,
+Xcode0,401139ms,2 executed /0 failed. Własne primary count/outcome i wszystkie
+trzy boundary digest pairs exit0. Result
+`sha256:fbf599c8182066e798fe2466f38448db6c7d7a3c21ed7e2a89c4e75a76c2d7cd`;
+inputs930bfc..., source98dd1..., augmented
+`sha256:9403d3cb395b6052ef169a11efefeed1df8d8e940c7e96553fa85e9a33058fa8`.
+Następnie usunąć tylko guard `!isSendingBlocked` w mutant ChatViewModel.send,
+uruchomić `. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-model.mjs --mutant`;
+oczekiwane1/2 assertion failure (blocked send), restore i ponowne2/2 GREEN.
+Nie zmieniać model evaluator pomiędzy tymi trzema przebiegami.
+
+Następny bounded rezultat, równoległy wyłącznie do odczytu/build frozen source:
+nowy prywatny `full-flow-reference-kHxqNA/state-evaluator/RA055SafetyFlowStateTests.swift`.
+Allowed paths tylko ten nowy plik, bez zmian model/UI evaluator lub źródła.
+Cztery przypadki: oba flow, początkowo odblokowane albo wcześniej blokowane;
+realny alert blokuje send, Close odtwarza poprzednie flagi i rzeczywiste
+wywołania message route (zero podczas alertu, jeden dokładny tekst dopiero
+po Close w początkowo odblokowanym przypadku). Powtórny Close idempotentny.
+Nie używać prywatnych helperów innych klas testowych ani zgadywanych API.
+Docelowa pojedyncza komenda po własnym review runnera:
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-state.mjs`.
+Runner jeszcze nie istnieje; brak deklaracji test PASS. Voice/race osobno.
+
+Suppression restoration GREEN: `full-flow-ui-etGAdN`, session66341 runner
+exit `0`, Xcode0,180940ms,4 executed /0 failed. Primary przed startem wykonał
+`diff -qr source mutant`, exit0, i po wyniku własne asercje count/outcome oraz
+wszystkich trzech par tree digests, exit0. Inputs b10e21... i augmented4e7bbe...
+identyczne jak positive; result
+`sha256:b98e4d4aa891c02411c8247a80c65482b95aa728cbd2d834114852a2396ae2d9`.
+Cykl suppression jest rzeczywiście GREEN→RED→GREEN; brak aktywnego mutanta.
+
+Uruchomiono model positive: session84188,
+`diagnostics/model-evaluator-xcode-pZtLIC`. Dokładna komenda primary:
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-model.mjs`.
+Wcześniejszy własny `node --check`, `--validate-only`, prettier dwóch planów,
+workflow55OK i git diff --check exit0. Inputs
+`sha256:930bfc9b7db79dab4740327848ac297ded0613d2546ce4b25e53f825156c35f2`.
+Dwa testy samego ChatViewModel.send NIE dowodzą przywrócenia flag przez
+Close/reset obu flow. Podobnie input.isHittable nie dowodzi engine.send;
+to oddzielna luka pokrycia wymagająca actual API/engine call assertions.
+
+Suppression mutant RED: `full-flow-ui-qB87Sg`, session36884 runner exit `1`,
+Xcode exit `65`, 167265ms, 4 executed /4 failed. Każdy test zatrzymał się
+na `legacy card remained visible during safety alert` (wcześniej niż
+planowana asercja po Close). Nie był to błąd kompilacji ani infrastruktury.
+Primary odczytał receipt i cztery assertion failures oraz uruchomił własne
+asserty niezmienności wszystkich trzech par digestów, exit `0`.
+Inputs nadal `sha256:b10e21fdb5f9a3f5763c704aec38f8b7e157ee89247c12ee40f5187455efb78d`;
+result `sha256:d7dbed97a57e1fbcf01eca3b6d4fe1b26a7521f70d087dbedb95c51f63073435`.
+Teraz przywrócić jedną linię filtra w mutant i uruchomić tę samą komendę
+`diagnose-full-flow.mjs --mutant`; dopiero GREEN zamknie kontrolę mutacji.
+Model runner faktycznie powstał pod `diagnostics/diagnose-model.mjs`,
+nie pod wcześniej planowanym katalogiem model-evaluator. Review primary:
+stałe rooty, dwa dokładne test IDs, frozen gate argv i rzeczywisty adapter;
+nie uruchomiono jeszcze model Xcode. Bez nowych provider calls.
+
+FULL-FLOW POSITIVE GREEN: `full-flow-ui-2ssWzy`, session63048 exit `0`,
+Xcode0,181810ms,4 executed /0 failed. Primary własne assert count/outcome
+i wszystkie3pary tree digests równe exit `0`. Inputs
+`sha256:b10e21fdb5f9a3f5763c704aec38f8b7e157ee89247c12ee40f5187455efb78d`,
+source98dd1..., augmented
+`sha256:4e7bbec762050aa02278025b82690423ba76cbe12049e295d8614110b992a8dc`,
+result `sha256:42e1840a373aef43e503e1df17879c7582ffe5cd398afc67301f1a6b04411966`.
+Oba flow × oba warianty, actualrow/input/fullscreenClose/repeatedID/newID
+wykonane; nie autonomiczny sukces. Następne mutacje kwalifikują czułość testów.
+
+Mutation plan: nowa sibling kopia `full-flow-reference-kHxqNA/mutant`
+(wyłącznie ona do celowych uszkodzeń), source i UIinputs pozostają frozen.
+Runner dostaje zamknięty wybór source/mutant (żadnych dowolnych rootów).
+Kolejno routing, variant, suppression, Close — pojedynczy mechanizm per run,
+read actual diff, wykonane4IDs/RED, restore exact source, GREEN. Komenda:
+`.../evaluator/diagnose-full-flow.mjs --mutant` (pełny prefix jak niżej).
+Pierwsza mutacja: tylko SharedLibrary/Sources/Chat/ChatViewController.swift,
+`items.filter(panel.viewModel.shouldRenderItem)` zastąpić `items`.
+Oczekiwany fail legacycard poClose, nie compiler/infra failure. Model send
+test w oddzielnym model-evaluator czeka na swój runner, bez równoległego Xcode.
+
+Równoległy, rozłączny rezultat: niezależny test samego send guard.
+Allowed new private path `full-flow-reference-kHxqNA/model-evaluator/RA055SafetyFlowModelTests.swift`;
+bez edycji source/UIinputs podczas session63048. Dwa przypadki wywołują
+rzeczywisty ChatViewModel.send: isSendingBlocked=true oznacza0 engine calls;
+sam focus block oznacza1 call z exact text. Bez testowej kopii guarda.
+Docelowa komenda po dodaniu osobnego runnera i review: `. scripts/dev/env.sh
+&& node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/full-flow-reference-kHxqNA/model-evaluator/diagnose-model.mjs`.
+Runner użyje istniejącego Swift-only trusted evaluator i SharedTests target;
+nie odpalać go równolegle z UI Xcode. Obecny etap przygotowuje tylko test.
+Mutacje i voice/reset wymagają odrębnego realnego wyniku, nie zapewnienia
+workera ani sprawdzenia tekstu funkcji.
+
+Drugi full-flow UI run uruchomiony: session63048,
+`diagnostics/full-flow-ui-2ssWzy`. Zmiana wyłącznie evaluator UITests:
+normalny wiersz identyfikowany przez produkcyjne `chat_message_` oraz
+sprawdzenie label zawiera syntetyczną treść; input exact `chat_input_text_view`
+jako UITextView. Wait failures wypisują bounded12k app.debugDescription;
+asercje mają step-specific messages. Primary przeczytał rzeczywisty plik.
+Uwaga: sama deklaracja identifier UILabel nie dowodzi przyczyny poprzedniego
+FAIL; nowy przebieg dopiero ją rozstrzyga. Source nadal98dd1..., bez zmian.
+
+Wynik pierwszego full-flow run `full-flow-ui-hXAtcE`: runner exit `1`,
+Xcode exit `65`, FAILED,197155ms,4 executed /4 failed. Wszystkie cztery
+przeszły readiness i zatrzymały się na `staticTexts[RA055 normal chat]`
+PRZED emit-emergency. To uruchomiony failure UI, nie compiler failure ani
+dowód niesprawności safety routing. Source/disposable/protected digest pairs
+before/after równe. Result digest
+`sha256:29773b9eb43da8d220783d069f75dc15d3d2537259a6eb9e09152bcd1d167d3f`.
+Primary odczytał receipt oraz kontekst wszystkich4assertionfail z pełnego
+redagowanego artefaktu. Aktywna bounded diagnoza evaluator-a: ustalić
+rzeczywisty accessibility node wiadomości vs nadpisanie raw items podczas
+startup; nie zastępować wiersza hostowym Text ani zgadywać PASS z readiness.
+Source pozostaje zamrożony; tylko evaluator writer może przygotować korektę,
+potem własny review i ponowienie dokładnej komendy przez primary.
+
+Pierwszy pełny flow UI uruchomiony przez primary: session92659,
+`diagnostics/full-flow-ui-hXAtcE`; komenda `diagnose-full-flow.mjs` zapisana
+poniżej, wynik oczekiwany. Primary odczytał cały rzeczywisty source diff
+(8 plików, brak zmian poza allowed paths), host, testy i runner; poprawki
+review obejmowały oddzielny send guard (nie reuse focus flag), reset flags,
+obserwację nested VM w multi ChatView, event-ID dedupe, injected project
+relative paths, rzeczywisty normal chat row, właściwy UITextView selector,
+inert AV/permissions, deterministyczną datę i readiness po inicjalizacji.
+Source digest przed run:
+`sha256:98dd1b84877a39b5cf734a947e9104b7dacfebe0b454d664432f6a2dd6c188fa`;
+5 inputs digest `sha256:e771dfd4a61990bbc0dcf282255eb2af89b71b21f014930ec3f35743c0289a21`.
+Oba writers zamrożone na czas Xcode. Własne plutil/XML i --validate-only
+exit `0`; to schema/config proof, nie Swift compile ani UI PASS.
+Host używa prawdziwych Flow views, publicznych inert mocks i lokalnego exact
+route matcher; nie importuje TestingHelpers do executable app. Dodatkowe
+publiczne produkty Chat/Networking/CallProvider pochodzą z istniejących
+lokalnych packages; zachowano56 pins bez zmiany dependencies/wersji.
+Pokrycie tego przebiegu to text UI, nie kwalifikacja voice race/send guard;
+te mechanizmy wymagają własnych executed assertions i mutacji później.
+
+Aktywna nowa referencja: `diagnostics/full-flow-reference-kHxqNA/source` pod
+prywatnym live-mobl-2023. Skopiowana przez `cp -cR`; własny computeTreeDigest
+z workspace-runner potwierdził baseline `sha256:85352eba72a28f6a04bdbc622836c15d8cc041e750ef127ce10957cb2205458d`,
+exit `0`. Pierwsza sonda pomyliła package export (test-evidence), exit `1`;
+nie była zmianą plików ani dowodem digestu. Poprawiona sonda rzeczywiście
+użyła workspace-runner.
+
+Decyzje referencji: użyć istniejących emergencyItemsObserver i
+AIMultiAgentSession.handleItemsUpdate/sessionAction. Wariant pochodzi z
+careTeamSharingRepository.preferences.sonderActivity, nie dataCollection;
+brak/false zgody nie może pokazać komunikatu o udostępnieniu. Raw items
+zachowują event; render-only predicate (default true) w ChatViewModel oraz
+ChatViewController.bindPanel pomija emergency card wyłącznie dla obu flow.
+Nie tworzyć pustego UICollectionView cell ani nowego backend event schema.
+Alert jest stanem produkcyjnego flow/modelu i fullScreenCover produkcyjnego
+widoku, blokuje input; Close przywraca wcześniejszą blokadę input, bez
+automatycznego otwierania mikrofonu. Powiadomienie pokazuje się natychmiast,
+nie dopiero po zakończeniu async pause.
+Dedupe ma używać identity event/item, nie równości resources: dwa różne
+alerty mogą mieć identyczną treść. Zachować date/history guard i reset sesji;
+repeat tego samego ID po Close nie otwiera alertu, nowy ID z tym samym
+payload otwiera. Multi SessionAction może przenieść istniejący item ID;
+to wewnętrzny kontrakt nowej referencji, nie zmiana backend schema.
+UI suppression: unikalny syntetyczny tytuł legacy card znika po Close,
+normalna wiadomość pozostaje widoczna. Sam brak wszystkich wierszy nie PASS.
+Wstrzyknięcie raw items kwalifikuje consumer event→UI, nie backend classifier
+ani sieciowy transport. Nie rozszerzać twierdzeń dowodu na te granice.
+
+Jeden writer source: AgentAIFlow.swift, AgentAIFlowView.swift, nowy
+SafetyAlertPresentation.swift, MultiAgent/{AIMultiAgentSession,
+AIMultiAgentChatViewModel,AIMultiAgentChatView,AIMultiAgentFlowView}.swift
+pod Sources/Shared/AgentAI oraz SharedLibrary/Sources/Chat/{ChatViewModel,
+ChatViewController}.swift. Drugi writer wyłącznie sibling `evaluator/`,
+code-owned host/test/project/runner; nie zmienia source. Exact komenda po
+review: `. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/full-flow-reference-kHxqNA/evaluator/diagnose-full-flow.mjs`.
+Najpierw `--validate-only`, potem 4 scenariusze single/multi × false/true,
+rzeczywiste XCUIApplication tap i callback/effect; provider calls 0.
+
+Właściciel 2026-09-08: „kontynuuj bez potwierdzania masz pelny dostep” wprost
+po pytaniu o nową izolowaną referencję full-flow. Zakres zatwierdzony:
+przygotować implementację referencyjną i niezależne testy obu chat flows w
+NOWEJ prywatnej kopii. Nie modyfikować original/seed/previous worktrees,
+positive-control, action-mutant ani frozen benchmark. Nie nazywać wyniku
+autonomicznym delivery. Brak nowego provider call w tym kroku.
+
+Plan bounded kroku: odczytać istniejące emergency-resource event handling,
+preference source i input/voice state obu flow; skopiować positive-control
+do nowego `diagnostics/full-flow-reference-<unique>/source`; jeden Luna writer
+wdraża minimalne production wiring i testuje przez rzeczywiste callbacki.
+Allowed paths: wyłącznie nowa kopia Sources/Shared/AgentAI (konkretne pliki
+ustalone po discovery) oraz jej prywatny evaluator/harness; plan RA-055.
+Bez zmian policy, publicznego kontraktu RemoteAgent, dependencies/secrets.
+Weryfikacja: produkcyjny adapter Xcode z chronionym evaluator-em, oba flow ×
+oba warianty, event/presentation/inline suppression/Close; potem kontrolowane
+mutacje i restoration z identycznymi wejściami. Dokładna komenda zostanie
+zapisana przed jej uruchomieniem, po przygotowaniu osobnego runnera.
+
+Pełna bramka primary po log preservation zakończona: session3472 exit `0`,
+3503 passed / 2 opt-in skipped, 252 files passed / 2 skipped, 192.89 s.
+Uruchomiona komenda: `. scripts/dev/env.sh && pnpm lint && pnpm format &&
+pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run &&
+pnpm run typecheck --force && pnpm workflow:validate && git diff --check`.
+Build i typecheck wymuszone; typecheck46/46, cached0, workflow55OK.
+Jeden pełny przebieg po najnowszej poprawce; brak fail/flake w tym przebiegu.
+To odbiór lokalnych zmian, nie pełny audyt PASS RA-055 ani nowy sukces live.
+Aktualny następny krok: decyzja zakresu nowej prywatnej referencji pełnego
+flow opisana niżej. Oryginalny failure worktree zachowuje cztery wcześniejsze
+staged paths; source/positive-control bez zmian, action-mutant przywrócony.
+
+Stan zapisu: odziedziczone i nowe zmiany RA-055 pozostają zamierzone,
+niezacommitowane; task nie jest zamknięty i nie ma zgody na częściowy commit.
+Lista dirty paths poniżej oraz allowed paths kolejnych checkpointów obejmuje
+też: `packages/test-evidence/src/index.ts`,
+`docs/decisions/ADR-0025-xcode-qualification-evidence-boundary.md`,
+`docs/decisions/ADR-0026-trusted-evaluator-disposable-inputs.md`,
+`docs/decisions/ADR-0027-isolated-xcode-ui-harness-inputs.md`,
+`docs/work-units/RA-055/ENGINEERING_FINISH_PLAN.md`. Nie usuwać tej pracy.
+
+UI Close qualification COMPLETE (nie status całego taska): restoration
+`ui-harness-v1-hEo6nf`, session90316 exit `0`, Xcode exit `0`, 135402 ms,
+2 executed / 0 failed. Result digest
+`sha256:4b4aac2916c977404ebadc917293f6285eba42e0c9d77401ff1afa66bdf08d96`.
+Primary własnym Node assert porównał restoration z positive-control: cały
+obiekt evidence (source/disposable/protected before/after oraz inputs digest)
+identyczny, te same executed IDs, exit `0`. Razem GREEN→RED→GREEN,
+niezmienne pięć inputs `8d1bbee7...`. Żaden mutant nie pozostał aktywny.
+Pełna bramka po log preservation uruchomiona: session3472, wynik oczekiwany.
+
+Bounded read-only discovery następnego slice: obecny positive-control zawiera
+SafetyAlert wyłącznie w jego deklaracji, nie ma produkcyjnego event→SafetyAlert
+wiring w AgentAIFlow ani AIMultiAgentFlow. ChatEngine.initialize udostępnia
+generyczne callbacks; brak safety callback/suppression state. Hostowy GREEN
+nie zastępuje tego brakującego zachowania. Aby zakwalifikować pełny flow
+positive/mutant/restoration, potrzebna jest odrębna referencyjna implementacja
+w nowej prywatnej kopii, potem evaluator rzeczywistych obiektów obu flow.
+Nie wprowadzać takiej produkcyjnej zmiany pod pozorem diagnostic-only harness;
+potwierdzić zakres z właścicielem. Oryginał/frozen bundle nietknięte, bez live.
+
+Potwierdzony UI mutant `ui-harness-v1-1uCubk`: Xcode exit `65`, FAILED,
+141957 ms, 2 executed / 2 failed. Oba rzeczywiste tap Close kończą się
+`XCTAssertEqual` dla `Close count: 0` zamiast `Close count: 1`, nie błędem
+kompilacji. Input digest identyczny z positive `8d1bbee7...`; wszystkie trzy
+pary source/disposable/protected digests before/after równe. Result digest
+`sha256:cba1967a97e71ddf9b5aa089953a6d02b10f7823d4b0372b2dff4563e1d871d6`.
+Luna przywróciła jedyną linię do `action: onClose`; własny `cmp` primary
+z positive-control exit `0`. Restoration uruchomione tą samą komendą
+action-mutant: session90316, `ui-harness-v1-hEo6nf`. Wynik jeszcze oczekiwany.
+Nie ma aktywnego mutanta; nie zmieniano pięciu wejść ani adapter DIST.
+
+Log preservation: primary odczytał rzeczywisty kod/testy, uruchomił dwie
+mutacje RED (wyłączenie downgrade invalid evidence oraz utrata stderr),
+przywrócił kod i ponowił focused adapter suite: 28/28, exit `0`, 2.03 s
+(session57899). Pomyłka filtra `@remote-agent/agent-worker` nie wykonała tsc;
+poprawiona osobna komenda `. scripts/dev/env.sh && pnpm --filter
+@remoteagent/agent-worker typecheck` rzeczywiście uruchomiła tsc, exit `0`
+(session17313). Pełna bramka po tej poprawce pozostaje do uruchomienia po UI.
+Nie wywodzić typecheck z pustego dopasowania filtra. Provider calls nadal 0.
+
+PIERWSZY REALNY UI GREEN: session8532 exit `0`, Xcode141495ms, 2 executed /
+0 failed w `ui-harness-v1-nr0JPE`. Exact IDs generalHelpClose i
+activitySharingClose sprawdzone przez primary z xcresult; input digest
+`sha256:8d1bbee72298f5b8ca6a51f87f276e9fddf93f027240ee24e9a73c67ca5480fd`,
+result digest `sha256:1914805e2b2e38010e31b9da64995c85ca5d59d7653039412d9ce47cc2326f14`.
+Source unchanged85352..., augmented unchanged
+`sha256:693760d2afdb370ef82d2aff1b6cdc0acfd5457998a77445fdffa3be487e8782`;
+protected digests before/after równe. Własne assert tych pól exit `0`.
+Jeszcze NIE pełny dowód do czasu mutacji/restoration; nie original app routing.
+Aktywny krok: jeden Luna writer zmienia WYŁĄCZNIE prywatny
+`diagnostics/compile-reference-wadKN0/action-mutant/SonderClient/SonderClientLibrary/Sources/Shared/AgentAI/SafetyAlert.swift`:
+Close button action onClose→pusta closure. Positive-control/original/5inputów
+nietknięte. Komenda primary `. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/ui-harness-v1/diagnose-ui-harness.mjs action-mutant`.
+Oczekiwane 2 executed / failed; potem przywrócić dokładną linię i powtórzyć
+komendę do GREEN, identyczny input digest przez wszystkie3controls.
+
+Run `ui-harness-v1-9qzxHQ` exit `1`/Xcode65, 105340 ms: pruned lock przeszedł
+resolution; build hosta x86_64 nie znalazł arm64 Shared. Prywatny PBX Debug
+otrzymał wyłącznie ONLY_ACTIVE_ARCH=YES w project/app/UI configs, Release bez
+zmian. Własny odczyt3zmienionych configs i plutil exit0. Wznowiony runner
+session8532, `ui-harness-v1-nr0JPE`; wynik oczekiwany. Nie ma mutanta Close.
+
+Równoległy bounded fix logów: `apps/agent-worker/src/xcode-gate-adapter.ts`
+i istniejący integration.test.ts, jeden Luna writer, bez rebuild dist podczas
+live Xcode. Dla błędu parsowania xcresult PO otrzymaniu ProcessRunResult
+zachować rzeczywisty exit/signal/stdout/stderr w redagowanym artefakcie, a
+werdykt monotonnie obniżyć do INFRASTRUCTURE i przeliczyć receipt digest.
+Brak test IDs nie staje się PASS; prawdziwy compiler FAILED bez zmiany,
+pre-dispatch/scratch/policy bez zmiany. Komenda focused jak adapter powyżej.
+Cel: nie gubić uruchomionego procesu jako `runner refused: RUNNER_FAILED`.
+Nowy kod nie jest jeszcze odebrany; primary własny review/test/mutacje przed
+build. Weryfikacja całego taska nadal wymaga pełnej bramki po tych zmianach.
+
+Projekcja lockfile przyjęta własnym deepEqual primary wszystkich56 zachowanych
+pins wobec ponownie odczytanego oryginału; derived digest
+`sha256:4d729e8b23f5743a006b7188e917ba704f20c5e61f3a3c9446ccf5d798e84211`.
+Dependency diagnostic session97041 (`dependency-resolution-l1a7g6`) Xcode
+rozwiązał graf, stderr pusty, 50676 ms, bez crasha. Sam skrypt exit `1`:
+DisposableWorkspace PROTECTED_TREE_CHANGED (dokładna zmieniona ścieżka nie
+została jeszcze ustalona; pozostawiony scratch jest hipotezą);
+nie kwalifikować jako gate PASS. Przygotowany skrypt nie używa produkcyjnego
+cleanup adaptera, tylko bada dependency graph i zachowuje logi.
+Ponowiony rzeczywisty UI runner przez produkcyjny adapter: session36956,
+`diagnostics/ui-harness-v1-9qzxHQ`, dependency resolution przeszedł do Swift
+compile; wynik oczekiwany. Source/action-mutant SafetyAlert.swift porównane
+przez cmp exit `0` przed jakąkolwiek nową mutacją. Nie ma aktywnego mutanta,
+nie wykonano provider calls. Nie zgadywać wyniku Close przed executed IDs.
+
+Pełna bramka primary po SwiftPM scratch/lock: session23916 exit `0`,
+3503 passed / 2 opt-in skipped, 252 files passed / 2 skipped, 183.56 s;
+forced build29/29/typecheck46/46 cached0, workflow55OK. Komenda standardowej
+pełnej bramki jak poniżej, log `/tmp/ra055-gate-20260908.5x7DtZ/ui-swiftpm-lock.log`.
+Osobna dependency diagnostyka session18518 exit `1`,
+`diagnostics/dependency-resolution-yBx2bE`: actual Xcode crash w
+DependencyPackagesGroup/NSMutableArray array58/indexset56, nie błąd UI.
+Tylko Xcode.app jest zainstalowany; nie instalowano innego toolchain.
+Forum Apple773478 opisuje taki crash przy nadmiarowych pins. Własne porównanie
+rzeczywistego grafu EUvjZa (56remote packages) z app lock59 wskazuje dokładnie
+nimble,cwlcatchexception,cwlpreconditiontesting; Nimble w manifestach wyłącznie
+test targets. ADR27 doprecyzowany przed projekcją. Aktywny private-only krok:
+`diagnostics/ui-harness-v1/reference-lockfile.mjs` oraz dwa prywatne runnery.
+Helper sprawdza exact hash źródła i usuwa wyłącznie3 ustalone pins, zachowując
+wszystkie56 pozostałych pól; zapisuje provenance. Najpierw bounded dependency
+diagnostic, potem rzeczywisty UI runner, bez zmian oryginału/provider calls.
+To hipoteza do testu, nie obietnica obejścia crasha ani potwierdzenie Close.
+
+Przebieg pięcioplikowy `ui-harness-v1-DguGJm`: session 97086 exit `1`,
+TestRun INFRASTRUCTURE, exit_code null, 56133 ms, excerpt wyłącznie
+`runner refused: RUNNER_FAILED`; brak dowodu wykonania UI. Oba source digests
+85352... i oba augmented digests
+`sha256:e7d90549cf5a5bfcfe512329cd6c8b03cd765bafc648ac87ef14e7c88949073f`
+są równe. Nie zgadywać przyczyny: adapter utracił szczegóły wyjątku po
+uruchomieniu procesu. Przygotowywana prywatna diagnostyka samego
+`-resolvePackageDependencies` (nie gate, nie evidence UI), allowed new path
+`diagnostics/ui-harness-v1/diagnose-dependencies.mjs`; kopia disposable,
+te same chronione wejścia, bounded timeout/output, log przed cleanup.
+Najpierw review skryptu, potem komenda `. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/ui-harness-v1/diagnose-dependencies.mjs`.
+Pełna bramka primary w toku, session 23916, log
+`/tmp/ra055-gate-20260908.5x7DtZ/ui-swiftpm-lock.log`; nie uruchamiać Xcode
+równolegle z pełnym Vitest. Status RA-055 IN_PROGRESS, provider calls 0.
+
+Lockfile odbiór primary: focused 64/64, exit `0`, 680 ms. Własna mutacja
+exact lock path→dowolny suffix Package.resolved: 1 failed / exit `1`;
+restore 18/18 exit `0` i bezpośredni package build exit `0` przed Xcode.
+Pięć wejść ma digest
+`sha256:3b4488f9979c87de458b0db2d3983b5255e84406d8a4f06fac0fe74d4de96d80`.
+Lockfile 16532 bytes, digest
+`sha256:57f92b4f442508dfbc79db903b899dd4253fe621fd42c768c2085017f6f0fc89`,
+59 pins (Iterable 6.7.1). Runner ma `-disableAutomaticPackageResolution` i
+`-onlyUsePackageVersionsFromResolvedFile`, potwierdzone lokalnym Xcode help.
+Session 97086: wznowiony realny runner, katalog `ui-harness-v1-DguGJm`;
+wynik jeszcze oczekiwany. Brak nowych wywołań providerów.
+Collision regression primary: nowy test przeczytany, własne 2 mutacje
+(exclusive mkdir→recursive; flag ustawiony przed udanym mkdir) dały po
+1 failed / exit `1`. Przywrócone; own 28/28 adapter tests exit `0`, 697 ms.
+Pierwszy mutant dispatchował proces mimo kolizji, drugi usuwał konkurencyjny
+plik — test odróżnia oba błędy. Obecny kod nie zawiera mutanta.
+
+Najnowszy Xcode wynik: `ui-harness-v1-EUvjZa`, runner exit `1`, Xcode exit
+`65`, 204958 ms, compiler failure Utilities/Iterable, bez executed test IDs.
+Osobny projekt bez lockfile wybrał inne dependency versions; nie zmieniać
+produkcyjnego kodu pod nowe API. Doprecyzowano ADR-0027 przed zmianą: jeden
+opcjonalny exact Package.resolved jako chronione wejście. Allowed paths core:
+trusted-evaluator-inputs.ts i jego test, engineering-gates.test.ts oraz
+disposable-workspace.integration.test.ts (jeden Luna writer). Bramka:
+`. scripts/dev/env.sh && pnpm exec vitest run
+packages/test-evidence/test/trusted-evaluator-inputs.test.ts
+packages/test-evidence/test/engineering-gates.test.ts
+packages/test-evidence/test/disposable-workspace.integration.test.ts`.
+Prywatny runner dołączy lockfile z positive-control/SonderClient/
+SonderClient.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved,
+bez zmiany oryginału. Stare cztery input files i ich identity pozostają
+wspierane; nowy pięcioplikowy przebieg ma nowy digest. Nie traktować
+poprzedniej nieudanej kompilacji jako negatywnego testu Close.
+
+Wznowienie po zwolnieniu dysku przez właściciela: 63692312 KiB available
+(około 60.74 GiB). Próba prywatnego UI runnera session 66510 exit `1`,
+przed Xcode/providerem: ENOENT w xcodeSwiftPmConfigurationPath na nieistniejącym
+parent `project.xcworkspace/xcshareddata/swiftpm` świeżego projektu.
+Definition zachowana w prywatnym `diagnostics/ui-harness-v1-ePsFe6/`;
+nie powstał TestRun. Nie jest to błąd UI ani wynik testów.
+Aktywny bounded fix: `apps/agent-worker/src/xcode-gate-adapter.ts` i
+`apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`, jeden Luna
+writer. Weryfikacja: `. scripts/dev/env.sh && pnpm exec vitest run
+apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`.
+Adapter sprawdza każdy istniejący segment stałego scratch path i odrzuca
+symlinki; tworzy brakującą gałąź dopiero po pre-tree binding i sprząta tylko
+pierwszy faktycznie nowy subtree. Nigdy nie usuwa istniejących ancestorów.
+Testy fresh project, częściowych ancestorów, istniejących siblingów i symlinków;
+primary własny review/mutation/build przed ponowieniem Xcode. Status IN_PROGRESS.
+Focused primary po poprawce: 27/27, exit `0`, 682 ms; bezpośredni build i
+typecheck agent-worker exit `0`. Własne 3 mutacje (symlink guard, zbyt płytki
+cleanup, pominięcie digest guard istniejącej konfiguracji) po 1 failed / exit
+`1`, przywrócone przed GREEN i rebuild. Realny runner wznowiony, session
+29511, prywatny `ui-harness-v1-EUvjZa`, Xcode uruchomiony; wynik oczekiwany.
+Równoległy test-only krok: nowy
+`apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts`, allowed
+path jednego Luna writera, do deterministycznej kolizji pomiędzy odczytem
+braku rootu a exclusive mkdir. Bez hooków produkcyjnych; vi.mock factory,
+bo spy na ESM namespace fs.mkdir nie działa (odrzucona próba usunięta).
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run
+apps/agent-worker/test/xcode-gate-adapter-scratch-ownership.test.ts`.
+Live Xcode używa niezmiennego dist; ewentualne mutacje źródła test-only
+muszą być przywrócone bez rebuild podczas działania Xcode.
+
+Właściciel zatwierdził izolowany UI harness przez `continue` w odpowiedzi na
+pytanie o zakres. Ograniczenia: bez zmian oryginalnego worktree/frozen bundle,
+bez nowego provider live. Decyzja przed implementacją: ADR-0027. Baseline
+bieżącego repo nadal `ce9b2ff62e3c947c72c0fafca47d192af983ce98`, dirty tree
+poprzednich kroków zachowany. Poniższa wcześniejsza prośba o decyzję jest
+rozstrzygnięta; nie pytać ponownie o ten sam zakres.
+
+Aktywny bounded krok: parser layout UI, complete additive file set, exact
+project/scheme binding i zachowanie legacy identity. Allowed paths:
+`packages/test-evidence/src/trusted-evaluator-inputs.ts`,
+`packages/test-evidence/src/engineering-gates.ts`, ich istniejące testy oraz
+`packages/test-evidence/test/disposable-workspace.integration.test.ts`.
+Jeden Luna writer; primary własny diff, mutacje i komenda:
+`. scripts/dev/env.sh && pnpm exec vitest run
+packages/test-evidence/test/trusted-evaluator-inputs.test.ts
+packages/test-evidence/test/engineering-gates.test.ts
+packages/test-evidence/test/disposable-workspace.integration.test.ts`.
+Focused odbiór primary: 63/63, exit `0`, 651 ms po restore; bezpośredni
+package build także exit `0`. Własny przegląd wykrył dopuszczenie `NotTests`
+jako segmentu `Tests`; poprawka i niemaskowany test wszystkich czterech plików.
+Dziewięć własnych mutacji dało po jednym failed / exit `1`: granica segmentu,
+pominięcie layout w digest, target ID, rozszerzenie extra file, wyłączenie UI
+argv guard, pominięcie wymaganego projektu, związanie project argument,
+zakaz workspace i nazwa scheme. Komenda dla każdej: `. scripts/dev/env.sh &&
+pnpm exec vitest run packages/test-evidence/test/<suite>.test.ts -t '<case>'`,
+odpowiednio suite `trusted-evaluator-inputs` albo `engineering-gates`.
+Wszystkie mutacje przywrócone przed GREEN i rebuild; nie ma mutanta w dist.
+Pierwsza pełna bramka primary exit `2`: 3497 passed / 2 opt-in skipped,
+251 plików passed / 2 skipped, 263.43 s, build 29/29 cached 0. Późniejszy
+forced typecheck wykrył TS2345/TS2349 w typowaniu tabeli it.each nowych testów
+layoutu (nie runtime failure). Log
+`/tmp/ra055-gate-20260908.5x7DtZ/ui-harness-core.log`; korekta testowej tabeli
+w toku, nie uznawać całej bramki za GREEN.
+Korekta przyjęta: jawny readonly tuple/function type tabeli, bez zmiany
+przypadków ani asercji. Powtórzona pełna bramka primary exit `0`: 3497 passed /
+2 opt-in skipped, 251 plików passed / 2 skipped, 190.94 s, build 29/29 oraz
+typecheck 46/46, oba cached 0; workflow 55 tasks OK. Komenda:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force &&
+pnpm workflow:validate && git diff --check`. Log:
+`/tmp/ra055-gate-20260908.5x7DtZ/ui-harness-core-restored.log`.
+Krok portable core ADR-0027 DONE lokalnie z tą bramką; task RA-055 nadal
+IN_PROGRESS, bez audytu PASS, domknięcia ani commita częściowego.
+Status IN_PROGRESS. Następny krok: prywatny harness i rzeczywiste XCUITest,
+nie podłączenie nowego providera i nie zmiana scope modelu.
+
+Równoległy krok przygotowawczy (bez uruchamiania Xcode przed odbiorem core):
+osobny Luna writer tworzy wyłącznie nowe pliki w prywatnym
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/ui-harness-v1/`.
+Rezultat: cztery wejścia ADR-0027 i runner `diagnose-ui-harness.mjs`,
+hostujące publiczny produkcyjny SafetyAlert z lokalnego Shared. Dwa exact
+XCUITest IDs klikają rzeczywisty Close i obserwują callback/dismissal;
+bez bezpośredniego wywołania callback przez test. Positive-control i frozen
+bundle tylko do odczytu. Komenda weryfikacyjna po przeglądzie i odbudowie:
+`. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/ui-harness-v1/diagnose-ui-harness.mjs`.
+Runner wymaga 40 GiB wolnego miejsca i zachowuje evidence w osobnym katalogu;
+nie ma providera. Następnie ten sam harness na kontrolowanym mutancie Close
+oraz restoration; brak czerwonego testu blokuje uznanie dowodu.
+
+Prywatne pliki przygotowane i przeczytane przez primary. Poprawki przeglądu:
+root/cwd/argv/output paths, prawdziwe linkowanie Shared, generated Info.plist,
+UI TEST_TARGET_NAME zamiast TEST_HOST, angielska locale, bounded scroll do
+Close i obserwacja close-count po tap. Własny `--validate-only` dla
+positive-control i action-mutant exit `0`; PBX `plutil -lint` i scheme
+`xmllint --noout` exit `0`. Aktualny input digest
+`sha256:e7ef256645d6fd93c7f48c97015aa64e9d3f93f53b431f772093460d6ed5dfcd`.
+To walidacja schema i konfiguracji, NIE build ani dowód interakcji UI.
+Własna próba powyższego runnera exit `1` przed Xcode: poniżej 40 GiB wolnego
+miejsca (ostatnio 39.55 GiB). Nie utworzono run workspace ani nie wywołano
+providera. Poproszono właściciela asynchronicznie o zwolnienie co najmniej
+1 GiB; żadnych automatycznych usunięć kopii/cache ani obniżenia admission.
+Następny krok po portable GREEN i dostępności dysku: ten sam runner,
+positive→controlled Close mutant→restore; pierwotny worktree nietknięty.
+Portable GREEN jest już powyżej. Ostatni odczyt po zakończeniu bramki:
+41221444 KiB available (około 39.31 GiB), nadal poniżej admission 40 GiB.
+Realna blokada najbliższego kroku: miejsce na dysku, nie brak zgody na
+izolowany harness. Nie ponawiać prośby o zakres. Zalecane zwolnienie 2 GiB
+przez właściciela; po dostępności uruchomić runner bez `--validate-only`.
+Nie ma aktywnego Xcode/providera ani mutanta. Prywatny harness, source copies,
+oryginalny worktree i dotychczasowe wyniki zachowane. Provider calls/tokens
+tego kroku: 0; tokeny primary/Luna nie są mierzone tym licznikiem.
+Celowy dirty tree: poprzednie zmiany RA-055 oraz ADR-0027, README ADR,
+ten plan/ENGINEERING_FINISH_PLAN i pięć plików core z allowed paths powyżej.
+Prywatne pięć plików harnessu jest poza repo, w ui-harness-v1; nie oczekiwać
+ich w git diff ani traktować jako autonomicznego wyniku Engineering.
+
+Najbliższy krok wymaga decyzji zakresu opisanej w ENGINEERING_FINISH_PLAN:
+izolowany harness XCUITest (project/test host), wykraczający poza obecne
+Swift-only additive inputs ADR-0026. Nie rozszerzono jeszcze capability ani
+projektu. To nie pauza na zielonej bramce, tylko granica zatwierdzonego
+kontraktu. Nowy live nadal nieautoryzowany. RA-055 IN_PROGRESS.
+Celowo niezacommitowane nowe ścieżki tej ekstrakcji:
+`apps/agent-worker/test/engineering-live-legacy-contract.ts`,
+`apps/agent-worker/test/engineering-live-legacy-contract.test.ts`; zmieniony
+wywołujący harness `apps/agent-worker/test/engineering-live-ios.integration.test.ts`
+oraz qualification test pozostają częścią otwartego taska, razem z wcześniej
+opisanym dirty tree RA-055. Brak commita częściowego, push ani zmian ticketów.
+
+Najnowszy recovery checkpoint (po ekstrakcji legacy): pełna bramka primary
+exit `0`, 3485 passed / 2 opt-in skipped, 251 plików passed / 2 skipped,
+190.97 s; build 29/29, typecheck 46/46, cached 0, workflow 55 tasks OK.
+Komenda jak poniższe pełne bramki; log
+`/tmp/ra055-gate-20260908.5x7DtZ/post-legacy-extraction.log`.
+Własny focused legacy + qualification: 27/27, exit `0`, 1.89 s. Dwie mutacje
+wydzielonego helpera (ownership i limit kontekstu) dały po 1 failed / exit `1`;
+restore 27/27. Fixture izoluje tablice, zachowuje wymagany kontekst podczas
+mutacji limitu, po każdym negative ponawia fresh positive z/bez changelog.
+Wydzielenie jest odebrane lokalnie, bez nowego profilu/bypassu i bez live.
+
+Zakończony prywatny eksperyment Xcode rendered Close przez publiczne
+UIKit accessibility APIs. Primary session `43524` exit `1`, Xcode `FAILED` /
+exit `65`, 420131 ms, 2 executed / 2 failed. Obie metody nie znalazły rendered
+Close element; dodatkowy błąd `unwaited expectation` pochodzi z fixture
+tworzącego expectation przed wykryciem elementu. To nie dowód defektu
+produkcyjnego przycisku. Publiczny traversal w tym środowisku nie zapewnił
+interakcyjnego dowodu; nie osłabiać asercji ani nie zastępować callback call.
+Input digest `sha256:4b854822d6002ddb9cece52c81a5c7d78a6a674e03789674cea70e6d49173900`,
+xcresult digest `sha256:18c24c09d2d3abe489383e60ab5ccbe8f30ead3eb6946bf76ec137dbb80d0030`.
+Source unchanged `sha256:85352eba72a28f6a04bdbc622836c15d8cc041e750ef127ce10957cb2205458d`,
+augmented unchanged `sha256:7279ebd5e96c3bb36d63d01ad8921b3376636661b2e7757c949dedd93e0d0f5f`,
+protected unchanged `sha256:a1907c763d5cc1cc27b3dec58d1d20fc77563949dae29ef4d51d4d7b5d18b64e`.
+Nie ma aktywnego Xcode ani mutanta. Zachowany wynik:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/trusted-accessibility-xcode-1TySM9/result.json`.
+Komenda `. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-trusted-accessibility-xcode.mjs`.
+Nowe dwa prywatne pliki: ten runner i
+`RA055SafetyAlertAccessibilityEvaluatorTests.swift`. Dwa exact test IDs dla
+general/sharing. Test hostuje rzeczywisty SafetyAlert, bez bezpośredniego
+wywołania onClose; bounded traversal 512 unikalnych NSObject, settling do 1 s,
+callback przed aktywacją 0, potem dokładnie 1. To eksperyment (nie dowód do
+czasu xcresult i mutacji), nie full-flow/session interruption. Authoritative
+root wyłącznie zachowany positive-control, wejścia instalowane w disposable.
+Pierwsze wywołanie skryptu exit `1` przed Xcode: configPath zawierał `/../`.
+Primary poprawił go do canonical literal; dopiero drugie uruchomiło Xcode.
+Nie zmieniono poprzedniego evaluator-a ani czterech jego wyników.
+
+Przed tym przebiegiem usunięto WYŁĄCZNIE własną odrzuconą techniczną kopię
+`diagnostics/compile-reference-wadKN0/source` (453064 KiB, bez .git; błędne
+symlink bytes, nigdy nieużytą w Xcode). Walidacja exact realpath i directory
+przed usunięciem. Oryginalny failure workspace, reference, positive-control,
+restored action-mutant i wyniki pozostają. Materiał źródłowy do odtworzenia
+kopii zachowany. Usunięcie przez `rm -r` exact path exit `0`; `rm -rf` zostało
+wcześniej odrzucone bez wykonania. Wolne miejsce 39.65→40.08 GiB, admission
+nowego runnera 40 GiB bez obniżania progu. Provider calls/tokens: 0.
+
+Aktywny kolejny krok po Xcode controls: canonical preflight regression dla
+nowego bundle evaluator-enabled, bez zmiany manifest schema V1 i bez zmiany
+frozen benchmark. Allowed paths: istniejący
+`apps/agent-worker/test/engineering-live-qualification.test.ts`; jeden Luna
+writer, primary niezależnie czyta diff i wykonuje test. Wynik: rzeczywisty
+katalog/config/manifest identity dla legacy i evaluator, odmowa stale digest,
+brakującego exact selector i overlap z globalnym targetem przed model factory.
+Bramka: `. scripts/dev/env.sh && pnpm exec vitest run
+apps/agent-worker/test/engineering-live-qualification.test.ts`.
+Status `IN_PROGRESS`. Nie jest to jeszcze podłączenie nowego live harness.
+
+Odbiór focused preflight regression: primary 17/17, exit `0`, 2.03 s po
+odtworzeniu pakietu. Nowe testy używają rzeczywistego VerificationGateCatalog
+na tym samym root/executable/argv; config digest celowo stały (nie dowodzą
+hashowania przez loadEngineeringExecutionConfig). Zmieniane wyłącznie wejście
+evaluator-a zmienia catalog/manifest; stale legacy oraz stale trusted manifest
+odrzucone przed factory. Global overlap: drugi slice ma osobny gate bez
+evaluator-a, a zmiana wyłącznie kolidującej ścieżki na sibling daje GREEN.
+Primary usunął masking failure: ten sam gate wymagał wcześniej źródła nie
+należącego do drugiego slice'a. Tego pierwszego testu nie liczyć jako dowodu.
+
+Własne mutacje: pominięcie trusted_evaluator_inputs w catalog digest — exit
+`1`, 1 failed; ograniczenie overlap do targetów bieżącego slice'a — exit `1`,
+1 failed. Obie przywrócone, odbudowany pakiet i 17/17 GREEN powyżej. Komendy:
+`. scripts/dev/env.sh && pnpm --filter @remoteagent/test-evidence build &&
+pnpm exec vitest run apps/agent-worker/test/engineering-live-qualification.test.ts`
+z odpowiednio `-t 'binds trusted evaluator inputs'` / `-t 'ownership overlapping'`
+dla mutacji. Package build uruchamia bezpośrednio tsc, bez Turbo cache.
+Pierwsza mutacja bez package rebuild przeżyła: app importuje dist, więc nie
+wykonywała zmienionego źródła. To błąd procedury dowodowej, nie przeżywająca
+mutacja po rebuild. Nie ma aktywnego mutanta w źródle ani dist.
+
+Pełna bramka po korekcie rejestru: exit `0`, 3474 passed / 2 opt-in skipped,
+250 plików passed / 2 skipped, 191.64 s; build 29/29, typecheck 46/46,
+cached 0, workflow 55 tasks OK. Komenda `. scripts/dev/env.sh && pnpm lint &&
+pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest
+run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`;
+log `/tmp/ra055-gate-20260908.5x7DtZ/post-register-review.log`.
+Przebieg zawiera pierwszą wersję nowych preflight tests; primary jej NIE
+zaakceptował: fake catalog i ręcznie różne digests maskowały mechanizm identity,
+a overlap nie dotyczył targetu innego slice'a. Luna poprawia wyłącznie ten
+plik testów do rzeczywistego katalogu i porównania na tym samym root/argv.
+Zielony przebieg nie zastępuje odbioru tych asercji.
+
+Następny bounded krok po odbiorze preflight tests: wydzielić bez zmiany
+zachowania legacy MOBL-2023 checks z
+`engineering-live-ios.integration.test.ts` (od `liveGateSchedules` do
+`helpAssetInput`) do testowalnego helpera. Wejście: catalog, generatorCatalog,
+testPathAllowlist. Wynik: non-optional incrementalSafetyContract i
+finalSafetyContract, bo późniejsze seed probes nadal ich używają. Te probes
+pozostają poza helperem i nie wolno przez refactor zamienić ich w zapis ani
+usunąć oczekiwanego RED finalnego kontraktu na seed. Pozostałe locals są
+wewnętrzne. Allowed paths: ten harness, nowy helper i test pod
+`apps/agent-worker/test/`; żadnych zmian frozen bundle/provider route.
+Bramka: focused test helpera oraz existing qualification tests, potem lint,
+format i forced typecheck. Primary porównuje pełne warunki przed/po, także
+error messages i kolejność. Osobny wariant evaluator benchmark dopiero po
+tej równoważności; nie dodawać bypassu na samo istnienie evaluator field.
+Krok rozpoczęty: jeden Luna writer tylko harness, nowy
+`engineering-live-legacy-contract.ts` i jego `.test.ts` w tym samym katalogu.
+Pełny blok został mechanicznie przeniesiony; primary porównał treść przed
+formatowaniem: wszystkie warunki/error strings identyczne po zamianie
+`config.` na `input.` i usunięciu whitespace. Harness wywołuje helper raz,
+zachowuje seed probes i tworzenie modeli po preflight. Własny read-only replay
+`loadEngineeringExecutionConfig` + `assertLegacyMobl2023GateContract` na
+frozen `benchmark-20260907-changelog/engineering.json`: exit `0`, zwrócone
+dwa obiekty są dokładnie gate definitions katalogu. Nie dispatchowano poleceń.
+Własny focused qualification + disabled live harness: 17 passed / 1 opt-in
+skipped, exit `0`, 1.88 s. To nie odbiór nowych helper tests: pozytywny
+syntetyczny fixture wymaga jeszcze uzupełnienia. Aktualny writer
+`ra055_legacy_fixture` owns ONLY helper `.test.ts`; poprzedni Luna writer
+zatrzymany, primary owns helper/harness. Nie oznaczać kroku DONE przed
+działającą portable positive/negative bramką.
+
+Recovery checkpoint: `positive-control` wykonał ten sam evaluator input digest
+`126215aab6e732ada8809e7015d0d8a73e3fcad889816b7fee35fcdd91c740e9`;
+komenda `diagnose-trusted-evaluator-xcode.mjs positive-control` exit `0`, Xcode
+`PASSED`, 3/3 exact test IDs, 403516 ms. Prywatny wynik
+`diagnostics/trusted-evaluator-xcode-mUJxMU/result.json`; evidence digest
+`sha256:4260c859f46594b71df3bac2936eeb7d68b00a8e54ebe2f7a2691f26d504a54f`.
+Source before/after `sha256:85352eba72a28f6a04bdbc622836c15d8cc041e750ef127ce10957cb2205458d`,
+augmented before/after `sha256:7ed18a4178de92a07ccf4c47e106a9b75db8318fc61e5993d10e359f12eac5b7`.
+To pozytywna kontrola diagnostyczna, nie autonomiczny sukces i nie dowód
+full-screen/Close/inline suppression. Input evaluator pozostaje niezmieniony.
+
+Prywatny Xcode `action-mutant` zakończony: exit `1`, 3 executed / 2 failed,
+4 asercje rzeczywistych SMS/Safari URL; metoda sprawdzająca wyłącznie copy
+pozostała zielona. Wynik `diagnostics/trusted-evaluator-xcode-XKpqVb/result.json`,
+424335 ms, evidence `sha256:eef60c4f12d509286343ba5c39da440c11a7c7a04e5e2e13da2ad5743a519657`.
+Primary przywrócił oba URL i ponowił identyczną komendę z argumentem
+`action-mutant`: exit `0`, Xcode `PASSED`, 3 executed / 0 failed, 473185 ms.
+Restoration: `diagnostics/trusted-evaluator-xcode-ICyHGj/result.json`, evidence
+`sha256:20e9f461865df723962425d68b019cac46c240a29a39ef0f28fd88d1998a0005`.
+Source, augmented tree i protected digests nie zmieniły się podczas tego
+przebiegu i odpowiadają positive control. Evaluator input digest we wszystkich
+czterech przebiegach identyczny. Nie ma aktywnej mutacji ani procesu Xcode.
+To oddzielne kopie diagnostyczne, provider calls/tokens 0; nie autonomiczny
+sukces. Oryginalny failure workspace oraz frozen bundle pozostają zachowane.
+
+Pełna bramka po hardening: exit `1`, 3471 passed / 1 failed / 2 skipped,
+364.02 s; log `/tmp/ra055-gate-20260908.5x7DtZ/post-xcode-hardening.log`.
+Fail AC3 dotyczył przejściowego statusu CTF-027 w rejestrze; to nie flake
+obciążenia. Primary ponownie przeczytał diff i wykonał cały plik RA-046: 4/4,
+exit `0`, 15.77 s. Lokalny finding zamknięty na podstawie własnej weryfikacji
+i wcześniejszej pełnej bramki; test AC3 bez zmian. Następnie ponowić pełną
+bramkę bez równoległego Xcode. RA-055 nadal `IN_PROGRESS`.
+
+Nowe lokalne poprawki po ostatniej pełnej bramce (wymagają kolejnej pełnej):
+live admission 40 GiB zamiast 24 po zmierzonym peak ~29 GiB; własny focused
+test 14/14 exit `0`, mutation przywracająca porównanie do24 GiB exit `1`,
+restore14/14 exit `0`. Parser zachowuje dokładny XCTest assertion message,
+gdy redactor usunął host path; path/line pozostają null. Own mutation usuwająca
+branch redacted assertion exit `1`; restore23/23 exit `0`. Własny replay
+rzeczywistego pierwszego logu przez aktualny parser: 6 assertion diagnostics,
+9 łącznie, bez zmyślonych ścieżek, exit `0`. Zmiany ograniczone do istniejących
+qualification/adapter i ich testów; RA-055 nadal `IN_PROGRESS`.
+
+Actual Xcode overlay diagnostic zakończony: komenda prywatnego
+`diagnose-trusted-evaluator-xcode.mjs` exit `1`, Xcode `FAILED` / exit 65,
+417193 ms; wykonano wszystkie 3 dokładnie wymagane metody, 6 assertion failures
+(0 unexpected). Nie jest to compiler failure. Asercje wykazały klucze
+`safety-alert.*` zamiast zlokalizowanych nagłówków, akapitów i przycisków.
+URL/Safari/analytics nie zgłosiły błędów w tym przebiegu. Dowód:
+`diagnostics/trusted-evaluator-xcode-i3RY9b/result.json` w prywatnym katalogu
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/` oraz log artifact obok.
+Input digest `sha256:126215aab6e732ada8809e7015d0d8a73e3fcad889816b7fee35fcdd91c740e9`,
+xcresult evidence digest `sha256:586e0a4963e23a46d13b3e4fb5c7e80a35bf9c75968bb26e31c1bb2b97340e0c`.
+Source before/after `sha256:c40dcb25e7e62804436206ec95e37a2827ef47e08b6da99b65b38d67677a03c5`;
+augmented before/after `sha256:f1a5641ac601aeeec377041c53a3a9e59cddfd2e1cd859af51e80d70c29899c0`;
+protected digest identyczny before/after. Provider calls/tokens tego diagnostycznego
+przebiegu: 0 (nie obejmuje sesji primary). Peak free disk około 12 GiB; po
+automatycznym cleanup disposable około 41 GiB. Nie wysłano kill/cancel.
+
+Kolejny lokalny krok: osobna `compile-reference-wadKN0/positive-control`, nie
+zmiana powyższej zachowanej red reference. Allowed writes tylko lokalizacja
+`SafetyAlert.swift` do właściwego resource bundle i brakujące ostatnie zdanie
+`en.lproj/Localizable.strings`, zgodnie ze screenem właściciela. Identyczny,
+niezmieniony evaluator musi dostać rzeczywisty pozytywny control; nie zmieniać
+asercji, expected copy, URL ani eventów. To kwalifikacja testu, nie manualna
+naprawa oddawana jako autonomiczny sukces. Następna komenda jak powyżej z
+argumentem `positive-control`; status przed uruchomieniem `IN_PROGRESS`.
+
+Pełna bramka primary po wiring ADR-0026: exit `0`, 3471 passed / 2 opt-in
+skipped, 250 plików passed / 2 skipped, 190.77 s. Build 29/29 i typecheck
+46/46, cached 0; workflow 55 tasks OK. Dokładna komenda jak poprzedni checkpoint
+pełnej bramki; zachowany log `/tmp/ra055-gate-20260908.5x7DtZ/full-gate.log`.
+Były dwa pełne przebiegi: pierwszy exit `1` na polling flake RA-046, osobne
+powtórzenie exit `0`, poprawka testowego deadline, drugi pełny exit `0`.
+Szczegóły CTF-027. Nowa celowo niezacommitowana ścieżka:
+`test/engineering-approval-ingress/engineering-approval-ingress.integration.test.ts`.
+
+Wiring unit/integration primary: 77/77, exit `0`; 8-mode execution/recovery
+z realnym Node/PG, 6 ownership cases, legacy command identity regression.
+Łącznie dziewięć własnych mutation checks wiring: required method (2 faile),
+aggregate identity (1), command input digest (1), ambiguous short mapping (1),
+foreign target mapping (1), recovery semantic validation (2), global vs slice
+ownership (5), intrinsic mutable/mutation/test overlap (1), utrzymanie binding
+po naruszeniu boundary (3). Każda exit `1`; wszystkie mutacje przywrócono
+przed powyższą zieloną pełną bramką. Żadnego providera, żadnego commita.
+
+Następny ograniczony rezultat: prywatny niezależny evaluator wywołujący realne
+Swift API, rzeczywiste Xcode/xcresult z exact IDs. Allowed paths: nowe pliki
+pod `/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/`, bez
+zmian oryginalnego failure workspace ani frozen bundle. Wyłącznie nowa kopia
+`compile-reference-wadKN0/reference` może dostać minimalne compile-only poprawki
+(imports, wymagany argument i błędny helper Application/analytics). Jej hash
+przed poprawkami oraz źródło przed/po kopiowaniu identyczne:
+`sha256:6909c56fa902e3fbfd3be789c60128aeead62e6b8b2d77b1f0990d5a1e6ba80a`.
+Nie poprawiać tam tekstów/behavior żeby uzyskać PASS; wynik diagnostyczny nie
+jest autonomicznym sukcesem. Pierwsza techniczna kopia `compile-reference-wadKN0/source`
+odrzucona przez digest mismatch (brak verbatimSymlinks), nie używać do testu.
+Bramka: `. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-trusted-evaluator-xcode.mjs`.
+Status tego następnego kroku `IN_PROGRESS`, nie wykonano jeszcze Xcode overlay.
+
+Checkpoint bieżącego wiring ADR-0026 (nadal `IN_PROGRESS`): katalog bramek,
+command/config identity, wykonanie na augmented disposable tree oraz opcjonalny
+receipt binding są zaimplementowane, ale nie mają jeszcze kompletnego odbioru.
+Primary uruchomił `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+packages/test-evidence/test/engineering-gates.test.ts
+packages/test-evidence/test/engineering-gates.integration.test.ts` — exit `0`,
+67/67 (21 unit + 46 integration), jeden przebieg. Nowa macierz jest testem
+Node + PostgreSQL z syntetycznym platform evidence, nie dowodem Swift/Xcode.
+Compiler-failure wykonuje prawdziwy proces exit 65, nie nadpisuje wyniku exit 0.
+
+Primary wykonał trzy dodatkowe mutacje wiring: usunięcie required-method guarda
+(2 faile), wyłączenie aggregate receipt identity (1 fail), zastąpienie input
+digest liczbą bajtów w command identity (1 fail); każda komenda unit exit `1`.
+Wszystkie mutacje przywrócone, ponowna komenda unit: 21/21, exit `0`.
+Następne kroki: durable replay tamper matrix, pozostałe mutation checks,
+pełna bramka z niecache'owanym build/typecheck, następnie rzeczywisty evaluator
+Xcode. Bez nowego provider-live. Zamierzone niezacommitowane ścieżki tego kroku:
+`packages/test-evidence/src/engineering-gates.ts`, jego dwa pliki testów,
+wcześniejsze pliki disposable/trusted-evaluator i dokumentacja ADR-0026;
+pozostałe zastane zmiany RA-055 zachowane. Brak taskowego PASS/DONE/commita.
+
+Na prośbę właściciela o szczegółowy plan ciągłego domknięcia powstał
+[ENGINEERING_FINISH_PLAN](ENGINEERING_FINISH_PLAN.md). Zawiera diagnozę czterech
+prób, kolejność napraw, allowed paths, kryteria odbioru, bramki i granice zgód.
+Aktywna praca: Etap 2/R4–R5, repair context po rzeczywistym focused Xcode
+oraz exact selected-test evidence; wyniki i następne kroki poniżej.
+Nie trwa kolejny live. Ostatnie dodatkowe zatwierdzone wywołanie jest zakończone;
+sekcja R9 poniżej opisuje cel kwalifikacji, nie aktywny proces.
+
+Checkpoint nawigacji nie oznacza zmiany statusu RA-055. ENGINEERING_FINISH_PLAN.md oraz
+zmiany nawigacji w ENGINEERING_COMPLETION_PLAN.md i tym pliku pozostają celowo
+niezacommitowane wraz z wcześniej opisanym drzewem implementacji RA-055.
+
+### Wznowienie 2026-09-08 — R4/R5, lokalny reproducer
+
+- Baseline HEAD: `ce9b2ff62e3c947c72c0fafca47d192af983ce98`; zastane zmiany
+  RA-055 pozostają zachowane, bez aktywnego live.
+- Rezultat: wykonywalny syntetyczny corpus pokazujący false-negative starego
+  lexical predicate dla configuration/factory oraz jego false-positive dla
+  komentarza, nieużytego helpera i pominiętych akcji. Nie jest to dowód Swift.
+- Allowed paths: `test/engineering-evals/lexical-oracle-regression.test.ts`
+  i pomocniczy syntetyczny fixture w `test/engineering-evals/`; primary:
+  dokumentacja planu/ADR. Bez zmian starego prywatnego bundle ani iOS.
+- Jedna bramka kroku: `. scripts/dev/env.sh && pnpm exec vitest run
+  test/engineering-evals/lexical-oracle-regression.test.ts && git diff --check`.
+- Status lokalnego reproducer kroku: `DONE` na bramce z checkpointu poniżej.
+  Następny etap nadal wymaga rzeczywistego dowodu zachowania przed zmianą
+  kwalifikacyjnego harnessu; RA-055 pozostaje `IN_PROGRESS`.
+
+Finding w tym samym R4/R5: parser xcresult ignoruje Skipped przy innym Passed,
+liczy Expected Failure bez failed ID i dopasowuje pełny ID po samej nazwie
+suite. Decyzja przed zmianą: ADR-0025. Allowed paths rozszerzone o istniejący
+`apps/agent-worker/src/xcode-gate-adapter.ts` i jego integration test; jeden
+writer Luna. Rezultat: odmowa niekompletnego lub obcego evidence, zachowane
+Passed/Failed i jednoznaczne skrócone IDs. Bramka poprawki:
+`. scripts/dev/env.sh && pnpm exec vitest run apps/agent-worker/test/xcode-gate-adapter.integration.test.ts test/engineering-evals/lexical-oracle-regression.test.ts && git diff --check`.
+Wymagane najpierw RED regresji, potem mutacje i restore/GREEN. Bez nowego live.
+
+Kolejna ograniczona poprawka R2/R6: zachować typed observations z GateFailure
+v2 w najnowszym correction payload, regression history i compact epoch.
+Aktualny mapping kopiuje wyłącznie prose/compiler/test diagnostics, gubiąc
+criterion_id i evidence_ref. Allowed paths: engineering-execution.ts oraz
+engineering-execution.integration.test.ts. Zmiana dotyczy przenoszenia
+istniejącego kontraktu ADR-0018, nie authority: wymagane ścieżki nadal ustala
+engineeringGateFailureCorrectionAuthority. Regresja przez rzeczywisty executor
+z dwoma kryteriami jednej bramki, compact retention i unchanged scope; mutation
+usuwająca observations musi dać RED. Bramka: `. scripts/dev/env.sh &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts test/engineering-evals/repair-context.test.ts && git diff --check`.
+Start zapisu dopiero po zakończeniu poprzedniego zadania tego samego writera.
+
+Checkpoint primary 2026-09-08: lokalny reproducer oraz obie ograniczone
+poprawki mają własną bramkę exit `0`: `. scripts/dev/env.sh &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts test/engineering-evals/repair-context.test.ts apps/agent-worker/test/xcode-gate-adapter.integration.test.ts test/engineering-evals/lexical-oracle-regression.test.ts && git diff --check`
+— 150/150, cztery pliki. Corpus ma 15 przypadków diagnostycznych, nie wykonuje
+Swift i nie zastępuje kwalifikacji nowego oracle.
+
+Primary odczytał faktyczne pliki po raportach Luny i uzupełnił brakujące testy:
+adapter exit-0 z mieszanym Passed/Skipped, Expected Failure, obcym targetem
+i dodatkowym segmentem musi zwrócić INFRASTRUCTURE bez test_evidence.
+Cztery własne mutacje (skip return, dopuszczenie expected failure, usunięcie
+target guarda, liberalny segment count) każda dała dwa faile, exit `1`;
+przywrócony adapter i corpus: 35/35 exit `0`.
+
+Retencja observations ma własną regresję przez produkcyjny executor z dwoma
+kryteriami jednej bramki oraz dwoma historycznymi attempts. Asercja sprawdza
+exact observations/evidence_ref i niezmienione required_mutation_paths.
+Osobno compact epoch zachowuje bieżące i historyczne observations.
+Cztery własne mutacje primary usuwające kolejno każdy z tych transferów:
+każda jeden fail, exit `1`; wszystko przywrócone przed 150/150.
+Prompt version podniesiona do `ra055-criterion-retention-implementation-v14`
+w istniejącym configDigest; schema odpowiedzi implementera bez zmian.
+Primary poprawił również błędne umiejscowienie typu observations i readonly
+JSON boundary z implementacji Luny. Direct strict tsc czterech zmienionych
+suite'ów po poprawce exit `0` (opcje jak wcześniejszy direct tsc w tym planie).
+
+Pełna bramka taska primary (session 56199), jeden przebieg:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`
+— exit `0`: 3424 passed / 2 opt-in skipped, 249 plików passed / 2 skipped,
+197.22 s testów; build 29/29 i typecheck 46/46, cached 0. Workflow 55 tasks OK.
+Lokalne poprawki parsera i retencji observations: `DONE` w opisanym bounded
+zakresie, nie całe etapy R4/R5/R6 ani task RA-055. Brak nowego live,
+dodatkowy provider usage live `0`.
+Stary benchmark i wszystkie iOS worktree pozostały nietknięte. Następny etap
+nie jest automatycznym retry: evaluator-owned testy i rzeczywisty focused
+Xcode w nowej izolowanej kwalifikacji. Wyszukanie dostępnych narzędzi MCP nie
+zwróciło XcodeBuildMCP; zgodnie ze skill poproszono o jego włączenie, bez
+instalacji ani zmian konfiguracji klienta przez agenta.
+
+Zmiany tej sesji pozostają celowo niezacommitowane w istniejącym RA-055 tree:
+cztery wymienione pliki src/test (execution i adapter), nowy
+`test/engineering-evals/lexical-oracle-regression.test.ts`, ADR-0025,
+`docs/decisions/README.md`, ENGINEERING_FINISH_PLAN.md oraz ten WORK_UNITS.
+Nie ma zgody na partial commit;
+pełny task i live AC nie są ukończone.
+
+### Kontynuacja 2026-09-08 — realny focused Xcode bez modelu
+
+Właściciel polecił kontynuować bez pauzy. Brak MCP nie jest blokadą lokalnego
+adaptera projektu; skill XcodeBuildMCP przeczytany, narzędzia ponownie
+niedostępne. Użyć istniejącego produkcyjnego adaptera i
+runInDisposableWorkspace, nie ręcznego uruchomienia modelu ani edycji iOS.
+Preflight primary: Xcode 26.1.1/17B100, PostgreSQL SELECT 1, 43 GiB wolnego
+dysku; zachowane końcowe worktree ma nadal dokładnie cztery staged pliki.
+
+Rezultat: zdiagnozować, czy ostatni test SafetyAlertTests kompiluje się i co
+naprawdę wykonuje. Allowed paths: nowy prywatny skrypt i artefakty pod
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/`, ten plan;
+tylko disposable copy i katalogowe build outputs mogą się zmieniać. Źródło,
+seed, frozen bundle i zachowane worktree pozostają read-only. Skrypt ładuje
+istniejącą definicję Xcode, tworzy osobny diagnostyczny gate z jednym
+`-only-testing:SharedTests/SafetyAlertTests`, timeout 20 minut i własnym ID;
+nie zastępuje to kwalifikacji ani historii poprzedniego invocation.
+
+Bramka diagnostyki: `. scripts/dev/env.sh && node
+/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/diagnose-safety-alert-xcode.mjs`.
+Skrypt zapisuje rzeczywisty TestRun i boundary evidence oraz kończy exit 0
+wyłącznie dla PASSED; FAIL zapisuje się jako diagnozę, nie DONE całego R4/R5.
+Brak provider calls, commitów, push, nowych zgód live i ręcznych napraw iOS.
+
+Wynik primary: komenda z dodatkowym `node --check` uruchomiona raz, exit `1`;
+rzeczywisty Xcode TestRun exit `65`, `FAILED`. Kompilacja zatrzymała się na
+`SafetyAlert.swift:1:8: Unable to find module dependency: 'DesignSystem'`.
+Nie wykonano testów; nie jest to dowód zachowania ani zaliczenie kwalifikacji.
+Pełny TestRun i definicja pozostają w prywatnym
+`diagnostics/safety-alert-xcode-4rhDyx/{result,definition}.json`.
+Authoritative oraz disposable tree przed i po:
+`sha256:6909c56fa902e3fbfd3be789c60128aeead62e6b8b2d77b1f0990d5a1e6ba80a`.
+Zachowane worktree nie zostało zmodyfikowane.
+
+Read-only replay rzeczywistego diagnostic, skrypt
+`diagnostics/replay-safety-alert-compiler-context.mjs`: primary uruchomił
+`. scripts/dev/env.sh && node --check <script> && node <script>`, exit `1`:
+brak consuming `Package.swift`. Pierwszy wariant skryptu ręcznie dopisywał
+manifest; został odrzucony podczas review i nie jest dowodem produkcyjnym.
+Naprawa bez nowego live: rozpoznane missing-module diagnostics mają wymagać
+konwencjonalnego manifestu w read-only repair context, bez poszerzenia write
+scope. Allowed paths: `apps/agent-worker/src/engineering-repair-context.ts`,
+`test/engineering-evals/repair-context.test.ts`, prywatny replay i ten plan.
+Bramka kroku: `. scripts/dev/env.sh && pnpm exec vitest run
+test/engineering-evals/repair-context.test.ts`, następnie build `--force`
+i ponowny dokładny replay. Regresja najpierw RED, potem GREEN; raportować
+rzeczywiste limity kontekstu oddzielnie od provider tokens (tutaj zero).
+
+Wynik naprawy context primary: `pnpm exec vitest run
+test/engineering-evals/repair-context.test.ts
+apps/agent-worker/test/engineering-execution.integration.test.ts` — exit `0`,
+122/122. `pnpm run build --force` i dokładny prywatny replay — exit `0`,
+COMPLETE, 6 calls / cap 10, 13803 bytes / 3451 estimated context tokens.
+Polityka context V3, niezmienione limity 48000 bytes / 12000 tokens.
+Mutation wyłączenia missing-module branch: exit `1`, 5 failures; restored
+GREEN 37/37, potem powyższe 122/122. Primary uzupełnił rzeczywiste testy
+braku/odmowy manifestu, deduplikacji i root Tests oraz poprawił wybór pierwszego
+konwencjonalnego Sources/Tests segmentu (RED 1 → GREEN). Nowy wymagany manifest
+dla test-target diagnostic ujawnił niepełny stary fixture integracyjny;
+uzupełniono jego manifest, bez osłabiania guardu. Ten plik testowy jest także
+zamierzoną niezacommitowaną zmianą kroku. Pełna bramka RA-055 nadal wymagana
+po kolejnej poprawce adaptera; nie wystawiono audytu PASS ani nowego live.
+Dodatkowy stary replay `diagnostics/replay-viewmodel-context.mjs` uruchomiony
+przez primary po build: exit `0`, COMPLETE, 24 calls / cap 48,
+25816 bytes / 6454 estimated tokens. Opcjonalne lookup misses pozostają
+jawne; required declaration i manifest zachowane. Bez provider calls.
+
+Następny ograniczony krok Etapu 2: zachować dokładne selectors metod Xcode
+przez parser i produkcyjny adapter (ADR-0025 pkt 6). Obecny helper redukuje
+`Target/Suite/test` do `Target/Suite`, przez co inny test tej suite może
+zastąpić wymagany test. Allowed paths:
+`apps/agent-worker/src/xcode-gate-adapter.ts` i jego integration test.
+Regresje: inna metoda tej samej suite, prawdziwe short/full IDs, brak jednej
+z kilku wybranych metod, rzeczywisty Failed, adapter exit 0 z błędnym ID.
+Bramka: `. scripts/dev/env.sh && pnpm exec vitest run
+apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`; mutation
+usunięcia exact-ID guard musi dać RED przed przywróceniem i GREEN.
+To przygotowanie do evaluator-owned tests, nie gotowy overlay ani kwalifikacja.
+Primary uruchomił suite adaptera: exit `0`, 22/22. Mutation usunięcia exact-ID
+guard: exit `1`, 2 failures (parser i rzeczywiste wywołanie adaptera z mocked
+process/xcresult); restore i ponowny przebieg exit `0`, 22/22. Nie jest to
+realny Xcode ani niezależny behavioral evaluator. Strict tsc dwóch context
+test files także exit `0`.
+
+Kolejny krok Etapu 2 (ADR-0026): bounded immutable evaluator input primitive.
+Allowed paths: `packages/test-evidence/src/disposable-workspace.ts`, nowy
+`packages/test-evidence/src/trusted-evaluator-inputs.ts`, export w `src/index.ts`
+i odpowiadające im testy. Wynik: exact candidate copy zweryfikowana przed
+instalacją nowych digest-bound plików, oddzielne candidate/evaluated digests,
+ochrona evaluator files podczas callback, zero authoritative writes.
+Bramka: `. scripts/dev/env.sh && pnpm exec vitest run
+packages/test-evidence/test/disposable-workspace.integration.test.ts
+packages/test-evidence/test/trusted-evaluator-inputs.test.ts`.
+Następnie osobny krok wiring katalogu/receipts/recovery. Sam primitive nie
+jest ukończoną capability i nie autoryzuje live. Nowe pliki ADR-0026 oraz
+zmiana indeksu ADR pozostają celowo niezacommitowane w RA-055.
+
+Primitive: primary uruchomił oba powyższe pliki testów, exit `0`, 29/29.
+Review rozszerzył testy o niezależne valid-digest limit fixtures, unknown/sparse
+inputs, Unicode, canonical IDs, kolizje i wewnętrzne symlinki, mutable-output
+overlap, caller-input snapshot przed await, callback cleanup i legacy shape.
+Primary dopiął path policy oraz exclusive/no-follow create i content-free
+walidację. Własne mutation checks: 7 schema guards (digest, bytes/file,
+bytes/total, file count, test-ID count, duplicate IDs, relative-path boundary)
+oraz 5 boundary mechanisms (mutable overlap, protected input, collision
+check + exclusive create razem, augmented identity, snapshot przed await).
+Każdy mutant dał exit `1`; wszystkie przywrócone, końcowo 29/29 exit `0`.
+Oddzielny build `--force` oraz typecheck `--force` zakończyły się exit `0`.
+Pełna bramka RA-055 uruchomiona po restore; wynik terminalny zapisać poniżej.
+Terminal primary session 93568: pełna komenda taska
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force &&
+RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force &&
+pnpm workflow:validate && git diff --check` — exit `0`, jeden pełny przebieg.
+Build 29/29 i typecheck 46/46, oba Cached 0; workflow 55 tasks OK.
+Pełny output testów był obcięty przez terminal; nie zgadujemy globalnej liczby
+testów. Focused dowody powyżej mają rzeczywiste liczniki. Dodatkowy strict tsc
+obu primitive test files exit `0`. Ta bramka odbiera lokalne zmiany, nie
+domyka live AC ani RA-055. Dalsza implementacja poniżej rozpoczyna nowy zakres
+zmian, wymagający ponownej bramki.
+Catalog/receipt/recovery jeszcze nie konsumują nowej capability; nie ma
+behavioral PASS ani nowej próby modelu. Te pięć ścieżek src/test oraz dokumenty
+ADR-0026/WU/finish plan są zamierzoną niezacommitowaną pracą RA-055.
+
+Następny krok po odbiorze primitive: podłączyć opcjonalne
+`trusted_evaluator_inputs` do VerificationGateDefinition, katalogu, execution,
+agregatu i durable recovery. Allowed paths:
+`packages/test-evidence/src/engineering-gates.ts`, helper trusted inputs i unit/integration
+tests; disposable helper wyłącznie dla utrzymania starego no-input fast path.
+Omitted field musi pozostać omitted: stare command/config/manifest/receipt IDs
+nie mogą zmienić się przez default. TestRun walidować względem digestu
+augmented copy z callback context; receipt.tree_digest pozostaje candidate.
+Opcjonalny receipt binding zawiera input digest i evaluated tree digest,
+uwzględniane w receipt ID i recovery. Wymagane test IDs sprawdzać z xcresult,
+nie z samego argv; deklarować je też jako dokładne selectors nowego gate.
+Compiler failure bez xcresult pozostaje compiler failure, nie fikcyjnym
+zaliczeniem testu. PASS wymaga kompletnego evaluator evidence.
+Zabronione są kolizje evaluator leaves z dowolnym modelowym mutation targetem,
+required paths oraz mutable outputs. Ochrona nie zależy od nazwania targetu TEST.
+Przypadki integracyjne mają używać prawdziwego PostgreSQL i istniejących
+`executorInput` / `exactBinding` fixtures, bez nowego orchestratora.
+Bramka: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run
+packages/test-evidence/test/engineering-gates.test.ts
+packages/test-evidence/test/engineering-gates.integration.test.ts`; potem
+mutation binding/IDs/recovery i pełna bramka RA-055. Bez schema-only akceptacji
+configu, który runner mógłby zignorować.
+
+## Aktywne wykonanie R9 — kontrolowany live MOBL-2023
+
+- Status: `IN_PROGRESS`
+- Depends on: `R8`
+- Rezultat: jeden świeży invocation dokładnego benchmarku MOBL-2023 przechodzi
+  produkcyjną ścieżkę przez realny PostgreSQL, izolowany Git worktree i
+  rzeczywiste gates Xcode. Sukces wymaga fresh review, finalnego verifiera i
+  dokładnie jednego lokalnego commit receipt; każdy inny wynik pozostaje
+  jawnym terminalem i zachowanym materiałem diagnostycznym.
+- Allowed paths i side effects:
+  - read-only preflight repozytorium RemoteAgent oraz zachowanych źródeł/seedów
+    iOS;
+  - `apps/agent-worker/test/engineering-live-ios.integration.test.ts` wyłącznie
+    jeśli preflight ujawni finding harnessu;
+  - `apps/agent-worker/src/engineering-live-qualification.ts`, jego testy,
+    `apps/agent-worker/src/engineering-workflow.ts`,
+    `packages/test-evidence/src/engineering-gates.ts` i
+    `packages/model-provider-codex-cli/**` wyłącznie dla findingów ujawnionych
+    przez deterministyczny preflight R9;
+  - `docs/work-units/RA-055/WORK_UNITS.md`;
+  - `docs/evidence/RA-055/CODEX_MOBL_2023_LIVE.md` po istniejącym dowodzie;
+  - nowy izolowany worktree, journal i artifacts tworzone przez produkcyjny
+    runner pod `/Users/marcinjackowski/.remoteagent/live-mobl-2023/`;
+  - lokalny commit wyłącznie wewnątrz nowego wynikowego worktree iOS, jako
+    wymagany efekt produkcyjnego Engineering; bez push/MR/Jira/Discord.
+- Weryfikacja:
+  `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 RA_RUN_LIVE_IOS_ENGINEERING=1 RA_LIVE_ENGINEERING_INVOCATION_ID='<fresh-unique-id>' RA_LIVE_ENGINEERING_IMPLEMENTER_PROFILE='codex-sol-live' RA_LIVE_ENGINEERING_REVIEWER_PROFILE='codex-sol-live' RA_ENGINEERING_MODEL_CONFIG_PATH='/Users/marcinjackowski/.remoteagent/live-mobl-2023/models-codex.json' RA_ENGINEERING_BENCHMARK_MANIFEST_PATH='/Users/marcinjackowski/.remoteagent/live-mobl-2023/benchmark-manifest.json' RA_ENGINEERING_BENCHMARK_OVERLAY_PATH='/Users/marcinjackowski/.remoteagent/live-mobl-2023/benchmark-overlay.json' RA_LIVE_ENGINEERING_OBJECTIVE="$(< /Users/marcinjackowski/.remoteagent/live-mobl-2023/objective.txt)" RA_ENGINEERING_CONFIG_PATH='/Users/marcinjackowski/.remoteagent/live-mobl-2023/engineering.json' RA_XCODEBUILD_PATH='/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild' DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer' pnpm exec vitest run apps/agent-worker/test/engineering-live-ios.integration.test.ts --reporter=verbose`
+- Limity: rozpoczynamy jedną próbę z istniejącym hard stopem `1.8m` accounted
+  tokens; nie powtarzamy pełnego runu przed sklasyfikowaniem jego terminala.
+  Brak API keys, Bedrock, Claude, OpenCode i zewnętrznych write surfaces.
+
+Deterministyczny preflight `2026-09-05` uruchomiono przez produkcyjne loadery,
+realny `codex login status`, `xcodebuild -version`, `statfs` i `psql SELECT 1`.
+Zwrócił exit `0`: source clean; Xcode `26.1.1` build `17B100`; booted destination
+`DADE0B09-F441-44CB-81F2-CE28F75C64D5`; dostępne `21461200896` bytes;
+PostgreSQL `1`; wszystkie cztery role używają `codex_cli`, profilu
+`codex-sol-live`, modelu `gpt-5.6-sol` i klienta `0.153.3`. Manifest
+`sha256:a8a9c0801afb0064451ae2bbdfde1a8f1980eb0e963a004084abf9b2b9c53bd4`,
+overlay `sha256:a48a7833a567951a4516f2970a130dd13bbb3733f9b0ee228e5fdcc6df37cc16`,
+mapping `sha256:072bc3e5f62341c021e2160ef08962ef2857d769a99b031bf0c94daac9e10bb3`.
+Ownership objął dokładnie dwa uporządkowane slice IDs, sześć gate IDs i
+dwanaście target IDs. Nie wykonano model call ani zapisu do worktree.
+
+Scalona bramka po korektach: build trzech dotkniętych pakietów, `158/158`
+testów, jeden live test świadomie pominięty, `git diff --check`, exit `0`.
+Jedenaście mechanizmów przeszło mutation RED (`exit 1`) → restore → GREEN:
+exact ordered slice IDs; planned-output ownership; dirty seed; exact
+`xcodebuild` path; format wersji Xcode; minimalny dysk; exact PostgreSQL `1`;
+komplet czterech ról; obowiązkowe host evidence przed factory; exact Codex CLI
+`0.153.3`; kompletność terminala `RUN_COMPLETED` v2. Jedna pierwsza mutacja
+slice guardu została odrzucona jako compile-only RED, a jedna omyłkowo dobrana
+nazwa filtra Codex dała skip; obie zostały powtórzone poprawnym targeted testem
+i dopiero te powtórzenia stanowią dowód.
+
+Właściwy live invocation `mobl-2023-qualified-20260905-070126` zakończył się
+fail-closed exit `1` po `329.77s`, bez review, final verification i commita.
+Provider zaraportował dokładnie `171355` tokenów w sześciu odpowiedziach:
+SystemDesign `13033`, ProgramDesign `17043` oraz cztery odpowiedzi implementera
+`40596`, `43503`, `43271`, `13909`. Jest to `22.8%` targetu `750000`, `14.3%`
+warningu `1200000` oraz `9.5%` hard limitu `1800000`; początkową estymatę
+`180k–450k` przebieg prawie osiągnął, lecz nie wyszedł poza pierwszy slice.
+Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-0a971825d1c7c4b3fc7a115bc182af9efb165a0f44b4fb9cccf82b69a363e0a5.{jsonl,summary.md}`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_9e585d62-35a8-4383-9067-d7fbd1d1c603-case/engineering-3542ea3df8ad2d29e9e2e8fe00f0002c`.
+Source checkout pozostał na `2724725dae3659f18cd308bc91e43d5550e7ab71` z
+wyłącznie istniejącym user-owned `help.imageset`, seed pozostał czysty na
+`cd46c82de01d6ec4c5e614bcab9dc15f07560642`. Worktree zachowuje cztery staged
+paths, `156` insertions, bez commita.
+
+Pierwszy slice utworzył produkcyjny `SafetyAlert`, lokalizację, server-owned
+SwiftGen accessor i focused test konstruujący realny
+`EmergencyResourcesViewModel`, wykonujący oba `tapAction()` oraz sprawdzający
+URL, analitykę i `safariUrl`. Asset gate przeszedł exit `0`, lecz incremental
+contract gate zwrócił exit `1`, ponieważ rozpoznawał wyłącznie nazwy kolekcji
+`openURLCalls|openUrlCalls`, a poprawny test użył `openedURLs`. To był
+fałszywie leksykalny benchmark failure, nie brak wymaganego zachowania. Cleanup
+harnessu dodatkowo odwoływał się do block-scoped `liveAuthority` i rzucił
+`ReferenceError`; journal mimo tego został zamknięty jako kompletne
+`RUN_COMPLETED` v2, a export/drop boundary wymagał korekty.
+
+Cleanup przechowuje teraz typed authority w zakresie całego testu i eksportuje
+tylko wtedy, gdy komplet identity istnieje. Gate akceptuje cztery jawne warianty
+nazwy kolekcji (`openURLCalls`, `openUrlCalls`, `openedURLs`, `openedUrls`),
+nie osłabiając wymagań realnego modelu, dwóch akcji, URL, analityki,
+`safariUrl` i dependency injection. Mutacja przywracająca dawny dwuwariantowy
+predicate zwróciła na zachowanym worktree exit `1` z dokładnym brakującym
+kryterium; restore gate zwrócił exit `0`. Nie-live test harnessu został
+uruchomiony i poprawnie pominięty, exit `0`; `git diff --check` exit `0`.
+
+Po zmianie private gate produkcyjny loader wyliczył config
+`sha256:3cb0559878c3edf9402ec1cc2a6eb60526183a6a9026641b866875769a54931a`
+i catalog
+`sha256:26180ac4c489a1c73faa281f339798c53eeedae76f95a68f579d204ba942ffcf`.
+Manifest oraz overlay zostały ponownie związane: canonical manifest
+`sha256:a82b51473d3bfcecc1f1aab2628455cc72f0516fed6fc2c7cf5a0f079290a267`,
+raw manifest
+`sha256:f64a793ea433387c651790a8247046e82205ae044bc6f1ff9f44ad967d4c8f53`,
+canonical overlay
+`sha256:e09ff05c92a94e2d226c7f10fb3bfcd93d0fda731f4c7187efb00322c8fb2ef0`;
+mapping pozostał
+`sha256:072bc3e5f62341c021e2160ef08962ef2857d769a99b031bf0c94daac9e10bb3`.
+Powtórzony produkcyjny preflight z realnym loginem Codex, Xcode, statfs i
+PostgreSQL zakończył się exit `0`. Następny krok: świeży invocation na tym
+exact związanym zestawie; nie wznawiamy ani nie commitujemy nieudanego worktree.
+
+Fresh invocation `mobl-2023-gate-semantic-20260905-0915` zakończył się
+fail-closed exit `1` po `423.87s`, bez final verification i commita. Journal i
+summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-e5060262c83af25453c3f8d0fae3d752337d1c5790fcbefce3d88607809efb3d.{jsonl,summary.md}`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_6ae1c8f3-74e5-4829-a5b2-eea287acb857-case/engineering-0974c8a8bc61efc19bc13ffb665a8304`.
+Provider zaraportował dokładnie `233361` tokenów w dziewięciu odpowiedziach
+(`31.1%` targetu, `19.4%` warningu, `13.0%` hard limitu). Wcześniejszy bieżący
+odczyt `1190783` został jawnie odrzucony: sumował kumulacyjne snapshoty zamiast
+per-response usage; companion summary jest autorytatywną projekcją i jego suma
+zgadza się z dziewięcioma rozłącznymi wierszami usage.
+
+Pierwszy attempt przeszedł oba FAST gates i uzyskał fresh review
+`CHANGES_REQUIRED` z dwoma findingami `HIGH` w `SafetyAlert.swift:69` i `:87`.
+Correction zbudowała produkcyjny `SafetyAlert`, którego initializer tworzy realny
+`EmergencyResourcesViewModel`; focused test tworzy teraz ten publiczny widok,
+wykonuje oba wynikowe `ButtonModel.tapAction()` oraz sprawdza `openedURLs`,
+`subject.emergencyResourcesViewModel.safariUrl` i analitykę. Drugi asset gate
+przeszedł, lecz incremental gate cofnął się do exit `1` wyłącznie dlatego, że
+wymagał leksykalnego `EmergencyResourcesViewModel(` bezpośrednio w teście.
+Warunek stał w konflikcie z fresh review, które skierowało test przez właściwy
+publiczny production view. Następna korekta gate może dopuścić tę ścieżkę tylko
+przy jednoczesnym `SafetyAlert(` i obserwacji `.emergencyResourcesViewModel`,
+zachowując wszystkie istniejące wymogi dwóch akcji oraz side effects; przed
+ponowieniem wymaga własnej mutacji RED→GREEN i pełnego rebindingu digestów.
+
+Korekta dokładnie tak zawęziła alternatywę. Mutacja przywracająca direct-only
+predicate zwróciła na worktree Run 91 exit `1`; po restore ten sam standalone
+gate zwrócił exit `0`. Nie-live harness test został uruchomiony z exit `0`
+(jeden oczekiwany live skip), a `git diff --check` zakończył się exit `0`.
+Produkcyjny loader wyliczył config
+`sha256:e775b25a7573161d415f080875633796dcd174a5dda78f012bebfc74deee8e50`
+i catalog
+`sha256:672021938f907f36a1a229f833fba1de0e77f6970ec2babb3d37b3be578534db`.
+Po rebindingu canonical manifest to
+`sha256:a71d13103290348b2da94014fccac36d3a5166872dbbb863fd7b69d3dfaac84b`,
+raw manifest
+`sha256:5df4d6b8302510dda40fd0e0bb6867db75e78f8476b72be877728a64ff5c697f`,
+canonical overlay
+`sha256:ab068ef7b124b5491f7695e7dacb2ae3570bacf6bdd58d46e945d23ad9c15538`,
+a mapping pozostał
+`sha256:072bc3e5f62341c021e2160ef08962ef2857d769a99b031bf0c94daac9e10bb3`.
+Pełny produkcyjny preflight z realnym loginem, Xcode, statfs i PostgreSQL został
+ponownie uruchomiony i zwrócił exit `0`.
+
+Fresh invocation `mobl-2023-production-route-20260905-0930` zakończył się
+fail-closed exit `1` po `251.45s`, bez review, final verification i commita.
+Provider zaraportował `94339` tokenów w czterech odpowiedziach (`12.6%`
+targetu, `7.9%` warningu, `5.2%` hard limitu). Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-fe7704143d33e582d7d81a5a58f33ea893e0f8ac1e901e2ff13a7d5b00cfb105.{jsonl,summary.md}`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_95182d5a-ca8d-4390-9c2c-2827c8457341-case/engineering-a559a37e338b288c8e76e66ad0421d07`.
+
+Implementer zachował test-first, ale utworzył wyłącznie `SafetyAlertTests.swift`
+(`91` linii), odwołujący się do nieistniejącego jeszcze
+`SafetyAlertContent`. Asset gate przeszedł, a incremental contract poprawnie
+zwrócił osiem braków produkcyjnych. Nie było refusal, ambiguity ani wyczerpania
+limitu: pozostało `7/8` rund i `31/32` calls, a budżet miał ponad `1.7m`
+tokenów rezerwy. Mimo tego initial FAST failure został bezpośrednio zamieniony
+na terminal `BLOCKED`, zamiast wejść w bounded gate-correction z exact mapped
+failure paths. To jest finding control-flow, nie finding kolejnego predicate'u:
+bramka zadziałała prawidłowo, lecz workflow odrzucił użyteczny feedback i
+zmusiłby operatora do ponowienia designu oraz całego invocation. Następny krok
+to deterministyczne zmapowanie tej ścieżki i najmniejsza fail-closed korekta:
+retry tylko dla bezpiecznego mapped gate failure z pozostałym budżetem, bez
+retry dla ambiguity, unmapped/unsafe failure, no-progress albo limitu; po
+skutecznej korekcie gates muszą zostać uruchomione ponownie przed fresh review.
+
+Root cause był dokładniejszy niż sam transition: `SupervisorRuntime` już
+obsługiwał `GateFailure -> CORRECT_SLICE`, ale slice gate runner tworzył
+server-owned podkatalog tylko z bramek aktywnego slice. Receipty poprawnie
+wiązały `config_digest` z tym selected catalog, podczas gdy
+`buildEngineeringGateFailureArtifact` porównywał je z digestem pełnego deployment
+catalog. Dla każdego slice, który nie wykonywał wszystkich globalnych bramek,
+poprawny failure był więc nieklasyfikowalny i spadał do `TerminalReason`.
+
+`VerticalSliceGateResult.BLOCKED` przenosi teraz exact selected-catalog digest.
+Builder nadal niezależnie sprawdza pełny catalog i benchmark mapping, następnie
+rekonstruuje selected catalog z server-owned `SliceContract.gate_ids` oraz
+pełnego katalogu i dopiero z tym digestem porównuje `FAILED/CURRENT` receipts.
+Nie korzysta z diagnostics ani danych modelu do poszerzania authority;
+niezgodny/brakujący selected digest, forged mapping, `CANCELLED`, ambiguity i
+infrastructure nadal zwracają terminal bez retry.
+
+Nowy load-bearing test używa realnego pełnego katalogu z dwiema bramkami oraz
+slice wybierającego jedną: selected-subset receipt tworzy `GateFailure`, full
+catalog digest i brak digestu zwracają `null`. Sol celowo zmutował przypisanie
+selected digest na full digest: build pozostał zielony, a exact regresja
+zaczerwieniła się exit `1` (`1 failed / 38 skipped`, received `null`). Po
+restore agent-worker build, pełny plik `39/39`, vertical-slice executor `21/21`
+i scoped `git diff --check` zakończyły się exit `0`.
+
+Pierwsze uruchomienie procesu `mobl-2023-qualified-20260905-065958` zakończyło
+się exit `1` po `453 ms`, jeszcze na lokalnej asercji harnessu po zielonym
+preflight: rewalidowany mapping był równy wartościowo, lecz nie miał tej samej
+referencji obiektu. Nie wykonano żadnego model call, nie utworzono worktree ani
+journala i nie zużyto budżetu kampanii; source i seed zachowały HEAD/status.
+Assertion zmieniono na pełną równość semantyczną plus exact `mapping_digest`.
+Po korekcie forced build i bramka `50/50` testów (jeden live skip) zwróciły exit
+`0`. Ponowienie po tej sklasyfikowanej korekcie jest pierwszym właściwym live
+runem, nie ślepym retry przebiegu modelowego.
+
+Fresh invocation `mobl-2023-selected-catalog-20260905-0947` zakończył się
+fail-closed exit `1` po `326.99s`, bez review, final verification i commita.
+Provider zaraportował dokładnie `278788` tokenów w dwunastu odpowiedziach
+(`37.2%` targetu, `23.2%` warningu i `15.5%` hard limitu). Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-b098329571b17b637bf4c8590749761532f6b6a13bde79d69866dc507dc558ff.{jsonl,summary.md}`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_080ba0fc-d55b-4944-abe2-b031316c41e6-case/engineering-7dbf3ec8375f804e78d4c1320f6d4947`.
+
+Selected-catalog fix został potwierdzony produkcyjnie: pierwszy attempt
+utworzył trwały `GateFailure`, workflow wszedł do `SLICE_IMPLEMENTATION`
+attempt `2` w tym samym invocation, a correction naprawiła produkcyjny source,
+lokalizację i test. Przebieg nie wpadł w `AMBIGUOUS`; zachowany worktree ma
+cztery zmienione ścieżki. Correction dwukrotnie próbowała jednak objąć atomowym
+patchem także `Assets+Generated.swift`. Tool boundary prawidłowo odmówił kodem
+`CODE_OWNED_GENERATOR_OUTPUT_RESERVED`, po czym próba zakończyła się
+`ToolLimitError/LIMIT_EXCEEDED`.
+
+Root cause jest w projekcji correction authority na modelowy kontrakt mutacji.
+Durable gate mapping słusznie zachowuje target server-owned generator output,
+ale ten exact path trafiał także do `required_mutation_paths` promptu oraz
+`requiredSuccessfulMutationPathsAll`. Było to sprzeczne z istniejącą granicą,
+która pozwala materializować output wyłącznie generatorowi. Naprawa ma odjąć
+wyłącznie exact output paths z server-owned generator catalog od modelowych
+required mutation/receipt paths. Nie wolno usuwać ich z trwałego
+`GateFailure`, mapping evidence ani zakresu wykonania generatora; podobne nazwy,
+sąsiednie source/test paths i brak pasującego catalog entry muszą pozostać
+wymagane. Przed następnym live konieczny jest focused RED→restore→GREEN test
+tej dokładnej granicy.
+
+Granica została wdrożona w produkcyjnej projekcji: authority jest nadal
+walidowane wobec pełnego trwałego slice, a dopiero modelowe
+`required_mutation_paths` odejmują exact wartości z
+`CodeOwnedGeneratorCatalog.output_paths`. Integracyjny test przechodzi przez
+realne `createEngineeringExecution`, zachowuje generator target w durable
+mapping/failure, przechwytuje request implementera i potwierdza, że source,
+test oraz podobny `.bak` są wymagane, zaś exact output nie występuje w
+model-facing slice ani correction receipt requirement. Mutacja odłączająca
+filtr wyłącznie w produkcyjnym call site zachowała kompilację, lecz
+zaczerwieniła ten test exit `1` (`1 failed / 40 skipped`), ponieważ output
+wrócił do immediate correction action. Po restore pełny plik zakończył się
+`41/41`, forced build dotkniętego grafu `20/20` z `Cached: 0`, a
+`git diff --check` zwrócił exit `0`.
+
+Fresh invocation `mobl-2023-generator-correction-20260905-1001` zakończył się
+fail-closed exit `1` po `713.84s`, bez final verification i commita. Provider
+zaraportował dokładnie `532097` tokenów w osiemnastu odpowiedziach (`70.9%`
+targetu, `44.3%` warningu i `29.6%` hard limitu). Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-b950781678553e192f56076dda4c210eb9cfcff97cd5311356ecb3441e63c6a6.{jsonl,summary.md}`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_e091ea21-daa3-4ae9-b7a5-1853e79493e7-case/engineering-77b6dd56e098f6fb2e430a9d6d55ab51`.
+
+Generator correction fix został potwierdzony live: żaden output generatora nie
+trafił do modelowego patcha, oba pierwsze gates przeszły, pierwszy slice uzyskał
+fresh review `PASS`, a drugi slice po czerwonym selector gate przeszedł do
+attemptów `2` i `3`. Attempt `3` skutecznie utworzył dwa brakujące task-owned
+test suites. Nie było provider failure ani `AMBIGUOUS`. Selector gate nadal
+zwracał dokładnie jeden brak: istniejące `AgentAIFlowTests.swift` i
+`AIMultiAgentChatViewModelTests.swift` nie dowodziły razem routingu
+`emergencyResources` do `safetyAlert`.
+
+Run ujawnił następny konflikt kontraktu, a nie brak budżetu: jedna szeroka
+manifest criterion wiąże wszystkie dwanaście target IDs ze wszystkimi sześcioma
+gates. Typed correction authority rozwiązywał więc pojedynczą awarię selectora
+do wszystkich ścieżek kryterium i wymagał fresh successful receipt dla każdej.
+Po dwóch rzeczywistych zmianach model próbował poprawić pozostałe testy, ale
+behavioral guard słusznie odrzucił batch zawierający ścieżkę bez zmiany
+wykonywalnego zachowania. Dwa późniejsze final reports nie mogły skasować
+nierozwiązanego failed targetu, więc terminal był
+`FINAL_WITHOUT_FAILED_MUTATION_RECOVERY`. Bezpieczniejszy i wykonalny kontrakt
+zachowuje broad typed observation jako evidence, lecz wybiera candidate paths
+wyłącznie z code-owned `required_mutation_paths ∪ required_test_paths` danej
+bramki. Gate correction wymaga co najmniej jednej rzeczywistej substantive — a
+dla testów behavioral — mutacji w tym zamkniętym zbiorze, po czym obowiązkowo
+uruchamia tę samą bramkę ponownie. Review findings nadal wymagają all-of exact
+paths; log prose nie dostaje authority, a pusta lub niespójna lista katalogowa
+pozostaje `UNCLASSIFIED_GATE_FAILURE`.
+
+## Wykonanie R8 — deterministyczna macierz całego handlera
+
+- Status: `DONE`
+- Depends on: `R7`
+- Rezultat: produkcyjny handler z realnym PostgreSQL i Git przechodzi
+  kontrolowane transcript fixtures dla pełnej ścieżki dwóch slices oraz
+  wszystkich interakcji guardów: correction/review/compiler repair, zbieżne
+  findingi, refusal recovery, no-progress/oscillation, crash reconciliation,
+  writer fence, cancellation/config drift, unknown provider output i próby
+  wyjścia poza authority. Test nie seeduje brakujących artifactów bezpośrednio
+  i sprawdza dokładnie jeden lokalny commit.
+- Allowed paths:
+  - `apps/agent-worker/test/engineering-qualification-*.integration.test.ts`
+  - `apps/agent-worker/test/engineering-qualification-fixture.ts`
+  - `apps/agent-worker/test/vertical-slice-e2e.integration.test.ts`
+  - `test/engineering-evals/**`
+  - właściciel odpowiedniego R1–R7 wyłącznie wtedy, gdy macierz ujawni realny
+    finding produkcyjny; expected result nie maskuje findingu
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+  - `docs/audits/CROSS_TASK_FINDINGS.md` wyłącznie dla rzeczywiście
+    rozstrzygniętych CTF-025/026 albo nowego findingu przekrojowego
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run test/engineering-evals apps/agent-worker/test/engineering-qualification-control.integration.test.ts apps/agent-worker/test/engineering-qualification-recovery.integration.test.ts apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts apps/agent-worker/test/engineering-qualification-adversarial.integration.test.ts apps/agent-worker/test/vertical-slice-e2e.integration.test.ts --reporter=dot && git diff --check`
+- Wymagane mutacje: pominięty verifier/commit receipt; correction omijająca
+  gate failure; scalone findingi na tej samej linii; failed A + success B
+  omijające refusal; wyłączony no-progress/oscillation stop; replay
+  `AMBIGUOUS`; wyłączony writer fence; restart akceptujący config/profile
+  drift; unknown usage/process/output traktowane jako sukces; modelowy zapis do
+  evaluator/generator/instructions albo obce `changed_files`. Każda ma RED,
+  restore i końcową zieloną bramkę.
+- Ograniczenia: kontrolowany model fixture, bez live provider invocation,
+  commita/pusha i bez zmian w zachowanych worktrees iOS.
+
+Wynik końcowy `2026-09-05`: pełna ścieżka dwóch slices startuje bez ręcznie
+seedowanych artifactów i obejmuje gate failure, receipt-backed correction,
+fresh review z dwoma niezależnymi findingami na tej samej linii, compiler
+regression/repair, final verifier oraz dokładnie jeden lokalny commit. Macierz
+obejmuje również trwałe crash/recovery granice, równoległe cases i single
+writer fence, cancellation/config drift, budget/usage/process/output failures
+oraz próby wyjścia poza filesystem authority. Pierwsza pełna bramka po korekcie
+fixture katalogu zakończyła się wymuszonym buildem `29/29`, `Cached: 0`, a
+następnie `9/9` plików i `112/112` testów, `git diff --check`, exit `0`.
+
+Dwanaście load-bearing grup mutacji dało RED z exit `1` i zostało
+przywróconych: brak końcowego verifiera; pominięcie GateFailure correction;
+location-only dedup findingów; failed A wyczyszczone przez success B;
+wyłączenie NO_PROGRESS/OSCILLATION; replay `AMBIGUOUS`; usunięcie writer fence;
+zaakceptowanie compatibility drift; missing usage jako zero; authority escape
+do evaluator/generator/instructions i obcych plików; przyjęcie malformed
+SliceContract bez `observable_result`; retry nieretrywalnego provider process
+exit. Dwie początkowe próby mutacyjne — identity collapse oraz provider retry —
+ujawniły próżne testy; testy zostały związane z realnym production boundary,
+a powtórzone mutacje poprawnie dały RED. Po każdym restore celowana bramka
+wróciła do exit `0`. Nie wykonano live model invocation, commita, pushu ani
+zmian w zachowanych worktrees iOS.
+
+Następny krok bez pauzy: R9 — read-only preflight, zamrożenie kampanii i dopiero
+potem pojedynczy kontrolowany live MOBL-2023 w świeżym izolowanym worktree.
+
+## Aktywne wykonanie R7 — mierzalny budżet, czytelny stop i recovery
+
+- Status: `DONE`
+- Depends on: `R6`
+- Rezultat: operator widzi osobno provider-reported usage, missing/partial
+  usage, conservative reservation i campaign total; bieżący stage/slice/attempt,
+  elapsed/deadline, tool/path/criterion progress, dokładny terminal reason oraz
+  bezpieczny następny krok. Brak usage nigdy nie jest raportowany jako zero.
+  Controlled cancellation kończy subprocess tree i zapisuje terminal evidence;
+  recovery z kompatybilnym profile/config zachowuje budżet, a zmiana profilu
+  wymaga nowego runu. Journal pozostaje content-free: bez promptów, raw prose,
+  sekretów, host paths i prywatnego toku rozumowania.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-debug-journal.ts`
+  - `apps/agent-worker/src/engineering-live-qualification.ts`
+  - `apps/agent-worker/src/worker.ts` (wyłącznie content-free compatibility
+    digest przekazywany do journal runnera; bez zmiany routingu modeli)
+  - `apps/agent-worker/test/engineering-debug-journal.test.ts`
+  - `apps/agent-worker/test/engineering-live-qualification.test.ts`
+  - `packages/agent-orchestrator/src/engineering/workflow.ts`
+  - `packages/agent-orchestrator/src/supervisor/runtime.ts`
+  - `packages/agent-orchestrator/test/engineering-workflow-runtime.test.ts`
+  - `packages/model-runtime/test/process-runner.test.ts` (wyłącznie dowód
+    przerwania całego subprocess tree; bez zmiany runtime'u procesu)
+  - `test/engineering-evals/budget-recovery.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run test/engineering-evals/budget-recovery.test.ts apps/agent-worker/test/engineering-debug-journal.test.ts apps/agent-worker/test/engineering-live-qualification.test.ts packages/agent-orchestrator/test/engineering-workflow-runtime.test.ts packages/model-runtime/test/process-runner.test.ts && git diff --check`
+- Wymagane mutacje: sumowanie globalnych snapshotów zamiast delta per rola;
+  zgubienie kosztu failed attempt z reported usage; potraktowanie missing usage
+  jako zera; wyzerowanie campaign total przy compatible resume; wyłączenie
+  cancellation/fence; dopuszczenie `SUCCEEDED` bez terminal evidence; retry
+  ambiguous write. Każda mutacja musi dać RED, zostać przywrócona, a końcowa
+  bramka ponownie zwrócić exit `0`.
+- Ograniczenia: istniejące limity `750k/1.2M/1.8M` pozostają bez kalibracji;
+  bez nowej persystencji DB bez zapisanej decyzji, bez live model invocation,
+  commita/pusha i bez zmian w zachowanych iOS worktrees.
+
+Wynik końcowy `2026-09-05`: każde wywołanie zapisuje osobno response-level
+provider usage, partial/missing estimate i aktywną rezerwę; hard preflight
+rozlicza `reported + estimated`. Integralne, terminalne journale tego samego
+case/run i dokładnego content-free compatibility digest są odtwarzane przed
+utworzeniem następnego journalu. Campaign reducer sumuje response deltas, nie
+cumulative snapshots; legacy identity, zmiana profile/config/model policy,
+niepełny lub naruszony journal oraz overflow kończą fail-closed przed modelem.
+Produkcyjny runner przenosi recovered usage do pierwszego preflightu, a summary
+rozdziela prior/current/campaign total. Nowe terminal v2 wymaga pełnych pól,
+commit/review/verification evidence i jednoznacznego next step; operator widzi
+stage/slice/attempt, czasy, lease deadline, tool/path/criterion progress,
+heartbeat, stop reason i reconciliation. Cancellation jest sprawdzane przed
+kolejnym STARTED, AMBIGUOUS nie jest replayowane, a realny test procesu dowodzi
+zabicia całej grupy potomnej.
+
+Primary uruchomił końcową bramkę R7 z wymaganym PostgreSQL: wymuszony build
+`29/29`, `Cached: 0`; pięć plików i `96/96` testów; `git diff --check`; exit
+`0`. Osiemnaście celowych mutacji dało exit `1` i zostało przywróconych:
+global cumulative zamiast response delta; zgubienie failed usage; missing jako
+zero; estimate dopisany do provider total; preflight ignorujący estimate;
+nieprawidłowa correction reserve; zerowe stage/model durations; brak terminal
+VerificationDecision; wyzerowany operator aggregate; cumulative campaign
+snapshots; wyzerowanie recovered seed; ignorowanie compatibility drift;
+ignorowanie legacy campaign identity; pominięcie incomplete journal;
+bezpośrednie zabicie tylko parent process; pominięcie cancellation refresh;
+replay operacji AMBIGUOUS. Nie wykonano live model invocation, commita, pushu
+ani zmian w zachowanych worktrees iOS.
+
+Następny krok bez pauzy: R8 — deterministyczna macierz całego handlera przed
+kolejnym live.
+
+## Aktywne wykonanie R6 — ranked, bounded compiler repair context
+
+- Status: `DONE`
+- Depends on: `R5C`
+- Rezultat: compiler/test repair dostaje deterministycznie wybrane fragmenty
+  według kolejności exact diagnostic location → declaration → usage → test
+  support → review regression. Context ma osobny limit entries, bajtów i
+  konserwatywnego token estimate; każdy pominięty fragment ma typed reason i
+  digest, required declaration nie znika po cichu, a unresolved symbol
+  przeżywa context epoch. Brak compiler diagnostics nadal nie uruchamia repair.
+  Bounded missing-symbol lookup używa wyłącznie istniejącego server-owned
+  `READ`/`SEARCH` scope i nigdy nie poszerza write/command/network authority.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-execution.ts`
+  - `apps/agent-worker/src/engineering-repair-context.ts`
+  - `apps/agent-worker/test/engineering-execution.integration.test.ts`
+  - `packages/model-runtime/src/types.ts`
+  - `packages/model-runtime/src/config.ts`
+  - `packages/model-runtime/src/tool-loop.ts`
+  - `packages/bedrock-runtime/test/tool-loop.test.ts`
+  - `test/engineering-evals/repair-context.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run test/engineering-evals/repair-context.test.ts apps/agent-worker/test/engineering-execution.integration.test.ts packages/bedrock-runtime/test/tool-loop.test.ts && git diff --check`
+- Wymagane mutacje: usuń exact declaration; przywróć bezwarunkowe configured
+  READs; ponownie wyklucz test declaration; omiń active scope; porzuć unresolved
+  no-match; wyczyść unresolved przy epoch; przywróć raw full context co call;
+  silently truncate required evidence. Każda musi dać RED, zostać przywrócona,
+  a końcowa bramka musi ponownie dać exit `0`.
+- Ograniczenia: bez live model invocation, commita/pusha i bez zmian w
+  zachowanych iOS worktrees.
+
+Wynik końcowy `2026-09-05`: ranked repair plan zachowuje kolejność exact
+diagnostic location → declaration → usage → test support → review regression,
+odrzuca unrelated configured context i rozlicza limit entries oraz dokładną
+serializację JSON rzeczywiście odczytanych fragmentów w bajtach i
+konserwatywnych tokenach. Required diagnostic/declaration nie jest skracany ani
+pomijany po cichu; pusty bounded `SEARCH` zachowuje typed unresolved state, a
+udany wynik rozlicza ten symbol. Metadata i context epoch zawierają provenance,
+digests, omissions i unresolved coordinates, ale nie duplikują raw repository
+bytes. Produkcyjna regresja przez realny `createEngineeringExecution(...).
+implementationExecutor.execute` potwierdza typed
+`REQUIRED_DECLARATION_UNRESOLVED`, zero wywołań transportu modelu i brak zmiany
+źródła.
+
+Primary uruchomił po formatowaniu dokładną bramkę kroku: wymuszony build
+`29/29`, `Cached: 0`; następnie `3/3` pliki i `93/93` testy z wymaganym
+PostgreSQL; `git diff --check`; exit `0`. Osiem celowych mutacji dało exit `1`
+i zostało przywróconych: usunięcie exact declaration; bezwarunkowe configured
+READs; wykluczenie test declaration; wyłączenie active-scope filtra; utrata
+unresolved no-match; wyczyszczenie unresolved w context epoch; ponowne
+wysyłanie raw context w correction call; ciche pominięcie oversized required
+evidence. Dwie początkowe regresje dla epoch i actual-byte overflow okazały się
+próżne, więc nie zaliczono ich pierwszego przebiegu, dopisano precyzyjne testy i
+powtórzone mutacje poprawnie zaczerwieniły bramkę. Nie wykonano live model
+invocation, commita, pushu ani zmian w zachowanych worktrees iOS.
+
+Następny krok bez pauzy: R7 — mierzalny budżet, jednoznaczny stop i recovery.
+
+## Wykonanie R5C — evaluator-owned Swift oracle i exact Xcode
+
+- Status: `DONE`
+- Depends on: `R5B`
+- Rezultat: nowy, zachowywany i izolowany fixture worktree zawiera evaluator
+  Swift poza write/test authority modelu. Evaluator nie zastępuje C1/C2
+  bezpośrednim wywołaniem koordynatora: routing jest dowodzony przez realny
+  publiczny flow albo istniejące produkcyjne flow suites, a testy koordynatora
+  są ograniczone do state/action/lifecycle C4-C9. Exact Xcode command wykonuje
+  wszystkie wymagane suites do niepustego `.xcresult`; `xcresulttool` raportuje
+  rzeczywiście wykonane test IDs/count, a parser R5A akceptuje ten payload.
+  Fixture powstaje z zachowanego snapshotu Run 89; źródłowy checkout, seed,
+  Run 89 i wszystkie wcześniejsze worktrees pozostają niezmienione.
+- Allowed paths:
+  - `/Users/marcinjackowski/.remoteagent/live-mobl-2023/evaluator-worktrees/ra055-r5c-mobl-2023/**`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `cd /Users/marcinjackowski/.remoteagent/live-mobl-2023/evaluator-worktrees/ra055-r5c-mobl-2023/SonderClient && DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project SonderClient.xcodeproj -scheme SonderClient-Beta -destination 'platform=iOS Simulator,id=DADE0B09-F441-44CB-81F2-CE28F75C64D5' -derivedDataPath .remoteagent-xcode/R5C-DerivedData -clonedSourcePackagesDirPath .remoteagent-xcode/R5C-SourcePackages ENABLE_TESTABILITY=YES -resultBundlePath .remoteagent-xcode/R5C-Qualified.xcresult -only-testing:SharedTests/AgentAIFlowTests -only-testing:SharedTests/AIMultiAgentChatViewModelTests -only-testing:SharedTests/AIMultiAgentFlowTests -only-testing:SharedTests/AIMultiAgentSessionTests -only-testing:SharedTests/AgentAIStreamingEngineTests -only-testing:SharedTests/SafetyAlertTests -only-testing:SharedTests/EmergencyResourcesRouterTests -only-testing:SharedTests/EmergencyResourcesTextFlowAdapterTests -only-testing:SharedTests/MOBL2023BehavioralOracleTests test`
+- Wymagane dowody: baseline evaluator RED przed korektą rzeczywistego kandydata;
+  końcowy Xcode exit `0`; niepusty result bundle; exact executed IDs/count i brak
+  failed IDs odczytane przez version-pinned `xcresulttool`; parser R5A akceptuje
+  ten sam payload; evaluator path nie należy do modelowego allowlistu. Żadnego
+  commita, pusha, SMS/telefonu/przeglądarki ani zewnętrznego side effectu.
+
+Wynik końcowy `2026-09-05`: primary uruchomił exact dziewięć selectorów do
+świeżego `R5C-Primary.xcresult`; Xcode zakończył się exit `0` i `TEST
+SUCCEEDED`. Produkcyjny parser schema `0.1.0` odczytał `170` unikalnych
+wykonanych testów, `0` failed, wszystkie dziewięć expected/observed suites,
+`75318` bajtów bounded JSON i result digest
+`sha256:ed9b54e3fe55fce3568d11e9b1bc4ca57aac028ac226ac0d20756546945901c8`.
+Evaluator tworzy dwie realne sesje w jednym dependency scope, uruchamia
+publiczne `startSessions`, wymaga zainstalowanych handlerów i dowodzi, że tylko
+active session może pokazać alert. Baseline bez poprawki oraz mutacja usuwająca
+wyłącznie active-session guard dały exit `65`; po restore targeted evaluator
+dwukrotnie dał exit `0`. Nie wystąpił realny request sieciowy ani zewnętrzny
+side effect. Seed pozostał czysty, a zachowany Run 89 nadal ma dokładnie 12
+staged ścieżek. R5C nie udaje visual/layout/accessibility proof dla C3/C10;
+ograniczenie pozostaje jawne dla review-oracle w R9.
+
+## Wykonanie R5B — offline behavioral oracle
+
+- Status: `DONE`
+- Depends on: `R5A`
+- Rezultat: ukryty przed modelem, code-owned oracle opisuje obserwowalne
+  kryteria MOBL-2023 jako event/state/effect traces i odrzuca implementacje,
+  które omijają production route, mylą akcje przycisków, odwracają sharing,
+  ignorują stale-session guard albo zastępują zachowanie komentarzem/tautologią.
+  Oracle offline dowodzi semantyki evaluatorów; nie udaje dowodu wykonania kodu
+  iOS. Rzeczywiste powiązanie z produktem i exact Xcode evidence nastąpi w R5C
+  w nowym izolowanym fixture worktree.
+- Allowed paths:
+  - `test/engineering-evals/behavioral-oracle.ts`
+  - `test/engineering-evals/behavioral-oracle.test.ts`
+  - `test/engineering-evals/fixtures/behavioral-oracle-corpus.json`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run test/engineering-evals/behavioral-oracle.test.ts apps/agent-worker/test/xcode-gate-adapter.integration.test.ts && git diff --check`
+- Wymagane mutacje: usuń production route; podłącz wszystkie buttons do Close;
+  odwróć sharing flag; usuń stale-session guard; zaakceptuj tautologię;
+  zaakceptuj wyłącznie komentowane markery — każda ma RED. Legalna zmiana nazwy
+  pola diagnostycznego `openURLCalls` ma pozostać GREEN. Każdy mutant zostaje
+  przywrócony przed końcową bramką.
+
+Wynik końcowy `2026-09-05`: bramka exit `0`; wymuszony build `29/29`,
+`Cached: 0`, `20/20` testów passed i `git diff --check` exit `0`. Strict,
+bounded oracle generuje deterministyczne wyniki C1-C10 wyłącznie z observation
+oraz one-to-one `EXECUTED_ASSERTION`, odrzuca unknown/duplicate/marker-only
+wejście i ignoruje bounded diagnostics w decyzji. Sześć mutacji jakości dało
+exit `1` i zostało przywróconych: brak production route, close-only dla C6/C7,
+brak bindingu sharing preference, brak stale-session guard, dopuszczenie
+COMMENT source i dopuszczenie niesubstantywnej/tautologicznej asercji. Legalna
+zmiana diagnostycznego pola `openURLCalls` na `urlCalls` zachowała GREEN,
+`1/1`, exit `0`. Końcowa pełna bramka po restore ponownie zakończyła się
+`20/20`, exit `0`. Oracle offline nie jest dowodem wykonania iOS; ten dowód
+należy do R5C.
+
+## Wykonanie R5A — non-vacuous Xcode test evidence
+
+- Status: `DONE`
+- Depends on: `R4E`
+- Rezultat: nowy Xcode TEST receipt nie może otrzymać `PASSED` na podstawie
+  samego exit code `0`. Server-owned, bounded odczyt `.xcresult` zapisuje
+  wykonane test IDs/count, wymagane i zaobserwowane suites, failed IDs oraz
+  digest result bundle; dowód jest objęty identity TestRun i
+  VerificationGateReceipt. Brak bundle, zero testów, brak wymaganej suite,
+  malformed/truncated/nieobsługiwany format lub niespójne county daje
+  `INFRASTRUCTURE`, nigdy `PASSED`. Historyczne receipts bez pola pozostają
+  czytelne; tekst stdout/stderr nie może stworzyć tego dowodu.
+- Allowed paths:
+  - `packages/test-evidence/src/contracts.ts`
+  - `packages/test-evidence/src/runner.ts`
+  - `packages/test-evidence/src/engineering-gates.ts`
+  - `packages/test-evidence/test/evidence.integration.test.ts`
+  - `packages/test-evidence/test/engineering-gates.test.ts`
+  - `packages/test-evidence/test/engineering-gates.integration.test.ts`
+  - `apps/agent-worker/src/xcode-gate-adapter.ts`
+  - `apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`
+  - `apps/agent-worker/test/engineering-live-ios.integration.test.ts`
+  - `docs/decisions/ADR-0019-non-vacuous-xcode-test-evidence.md`
+  - `docs/decisions/README.md`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/test-evidence/test/evidence.integration.test.ts packages/test-evidence/test/engineering-gates.test.ts packages/test-evidence/test/engineering-gates.integration.test.ts apps/agent-worker/test/xcode-gate-adapter.integration.test.ts apps/agent-worker/test/engineering-live-ios.integration.test.ts && git diff --check`
+- Wymagane mutacje: Xcode PASS bez bundle; zero tests; pominięta expected suite;
+  IDs policzone z tekstowego logu; test evidence pominięte w receipt digest;
+  malformed/truncated xcresult zaakceptowany. Każda mutacja ma RED, restore i
+  końcową zieloną bramkę.
+
+Wynik końcowy `2026-09-05`: bramka exit `0`; wymuszony build `29/29`,
+`Cached: 0`, cztery pliki testowe passed i jeden live skipped, `116/116`
+wykonanych testów passed na PostgreSQL `127.0.0.1:5432`, `git diff --check`
+exit `0`. Siedem wykonanych mutacji dało exit `1` i zostało przywróconych:
+Xcode TEST bez obowiązkowego result bundle, zero wykonanych testów (pierwsza
+wersja testu przeżyła i została wzmocniona), usunięcie wszystkich trzech warstw
+expected-suite validation, użycie stdout jako źródła evidence, pominięcie
+evidence w TestRun digest, pominięcie go w VerificationGateReceipt identity
+oraz przyjęcie niepełnego root shape. Legalny historyczny receipt bez evidence
+pozostaje czytelny. Końcowa bramka po restore ponownie zakończyła się exit `0`.
+Realny Xcode bundle ujawnił i domknął dodatkowe regresje: identyfikatory testów
+Xcode bez module prefix są mapowane do canonical expected suite, niejednoznaczne
+basename są odrzucane, a sortowanie evidence używa deterministycznego ordinal
+comparatora zgodnego z kontraktem. Mutacje usuwająca suite normalization oraz
+wracająca do `localeCompare` dały RED. Pierwszy pozornie błędny wynik parsera
+pochodził ze starego `dist`; po obowiązkowym forced build nie jest traktowany
+jako dowód.
+
+## Aktywne wykonanie R4E — receipt-backed GateFailure mapping i correction authority
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1-R4D.
+- Rezultat: wyłącznie zamrożona projekcja benchmark manifestu, code-owned gate
+  catalog i exact receipts mogą utworzyć nowy `GateFailure` v2. Artifact wiąże
+  digest projekcji; target IDs są rozwiązywane przez tę samą projekcję i
+  przecinane z active slice. `excerpt`/diagnostic wording nie wpływa na identity
+  ani correction paths. Legacy v1, `UNKNOWN` i `INFRASTRUCTURE` kończą jako
+  `UNCLASSIFIED_GATE_FAILURE` bez modelowego write authority. Brak projekcji nie
+  powoduje fallbacku do emitowania v1.
+- Allowed paths:
+  - `packages/contracts/src/engineering-workflow.ts`
+  - `packages/contracts/test/engineering-workflow.test.ts`
+  - `packages/contracts/test/__snapshots__/schema-snapshot.test.ts.snap`
+  - `apps/agent-worker/src/engineering-execution.ts`
+  - `apps/agent-worker/src/engineering-workflow.ts`
+  - `apps/agent-worker/src/engineering-live-qualification.ts`
+  - `apps/agent-worker/src/worker.ts`
+  - `apps/agent-worker/test/engineering-execution.integration.test.ts`
+  - `apps/agent-worker/test/engineering-workflow.integration.test.ts`
+  - `apps/agent-worker/test/engineering-live-qualification.test.ts`
+  - `apps/agent-worker/test/engineering-live-ios.integration.test.ts`
+  - `packages/database/test/engineering-context.integration.test.ts`
+  - `packages/database/test/engineering-recovery.integration.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/contracts/test/engineering-workflow.test.ts packages/contracts/test/schema-snapshot.test.ts apps/agent-worker/test/engineering-execution.integration.test.ts apps/agent-worker/test/engineering-workflow.integration.test.ts apps/agent-worker/test/engineering-live-qualification.test.ts packages/database/test/engineering-context.integration.test.ts packages/database/test/engineering-recovery.integration.test.ts && git diff --check`
+- Wymagane mutacje: producer wraca do v1; pominięte binding projection/receipt;
+  target IDs wybrane z prose; `UNKNOWN`/`INFRASTRUCTURE` dostają write;
+  legacy v1 zgaduje z logu; excerpt zmienia typed fingerprint; forged evidence
+  ref przechodzi. Każda musi RED, zostać przywrócona i poprzedzać zieloną
+  bramkę.
+
+Wynik końcowy `2026-09-05`: bramka exit `0`; wymuszony build `29/29`,
+`Cached: 0`, siedem plików testowych i `129/129` testów na PostgreSQL
+`127.0.0.1:5432`, `git diff --check` exit `0`. Osiem mutacji dało exit `1` i
+zostało przywróconych: v1 producer, brak CURRENT receipt binding (pierwsza
+wersja testu przeżyła i została wzmocniona), wpływ prose na paths,
+UNKNOWN/INFRASTRUCTURE write authority, legacy-v1 write fallback, wpływ excerpt
+na typed fingerprint, forged evidence ref oraz forged mapping digest.
+
+## Wykonanie R4D — typed GateFailure v2 contract
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1-R4C.
+- Rezultat: historyczny `EngineeringGateFailure` v1 pozostaje byte/schema
+  compatible, a strict v2 dodaje server-owned observations wiążące każde
+  blokujące kryterium i gate z zamkniętą klasą awarii, istniejącym receipt
+  evidence i pełnym zestawem related target IDs. Union parser zachowuje v1,
+  lecz nowe produkcyjne emitowanie będzie typowane jako v2 w R4E.
+- Allowed paths:
+  - `packages/contracts/src/engineering-workflow.ts`
+  - `packages/contracts/src/schema.ts`
+  - `packages/contracts/test/engineering-workflow.test.ts`
+  - `docs/decisions/ADR-0018-typed-engineering-gate-failures.md`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && pnpm exec vitest run packages/contracts/test/engineering-workflow.test.ts && git diff --check`
+- Wymagane mutacje: v2 bez observations; nieznana failure class; evidence ref
+  nieobecny w receipt IDs; brak observation dla blokującego gate. Każda musi
+  RED, zostać przywrócona i poprzedzać zieloną bramkę.
+
+Wynik `2026-09-05`: historyczny parser v1 pozostał semantycznie niezmieniony,
+a publiczny discriminated union i registry obsługują strict v2 z immutable
+observations. Kontrakt wymusza zamkniętą failure class, unikalne observation i
+target IDs, evidence ref istniejący w receipt IDs, gate należący do blocking
+set oraz co najmniej jedną observation dla każdego blocking gate. Primary
+uruchomił forced build `29/29`, `Cached: 0`, contract + JSON Schema snapshot
+`22/22` i `git diff --check`; exit `0`. Cztery niezależne mutation checks dały
+exit `1` i zostały przywrócone: dopuszczenie brakujących observations,
+nieznanej failure class, forged evidence ref oraz niepokrytego blocking gate.
+Final restore ponownie zakończył się `29/29`, `Cached: 0`, `22/22`, exit `0`.
+
+## Wykonanie R4C — pre-model benchmark preflight
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1-R4B.
+- Rezultat: jeden wspólny entrypoint zachowuje raw/canonical digest prywatnego
+  overlay, rozwiązuje manifest/config/routing/Xcode i R4B ownership oraz kończy
+  się odmową przed utworzeniem Engineering model composition. Produkcyjny worker
+  i harness live używają tej samej kolejności. Invalid preflight ma zero
+  Engineering model calls i zero source writes.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-live-qualification.ts`
+  - `apps/agent-worker/src/worker.ts`
+  - `apps/agent-worker/test/engineering-live-qualification.test.ts`
+  - `apps/agent-worker/test/engineering-live-ios.integration.test.ts`
+  - `test/engineering-evals/catalog.test.ts`
+  - `packages/test-evidence/src/engineering-gates.ts`
+  - `packages/test-evidence/test/engineering-gates.integration.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run test/engineering-evals/catalog.test.ts apps/agent-worker/test/engineering-live-qualification.test.ts packages/test-evidence/test/engineering-gates.integration.test.ts && git diff --check`
+- Wymagane mutacje: pominięty ownership check; preflight przesunięty za model
+  factory/call; overlay raw digest utracony; source write przed odmową. Każda
+  musi RED, zostać przywrócona i poprzedzać zieloną bramkę.
+
+Wynik `2026-09-05`: wspólny preflight produkcyjnego workera i live iOS harnessu
+wiąże canonical paths, zachowane raw/canonical digests manifestu i overlay,
+repo/seed/config/catalog/schema, Xcode, jawne role subskrypcyjne oraz R4B gate
+ownership zanim powstanie model composition. Invalid input daje zero model
+factory calls i zero source writes. Primary uruchomił forced build `29/29`,
+`Cached: 0`, trzy pliki testowe `81/81` z wymaganym PostgreSQL oraz
+`git diff --check`; exit `0`. Cztery mutation checks dały exit `1` i zostały
+przywrócone: pominięcie ownership check, wywołanie factory przed preflight,
+zastąpienie raw overlay digest canonical digestem oraz source write przed
+odmową. Final restore ponownie zakończył się `29/29`, `Cached: 0`, `81/81`,
+exit `0`.
+
+## Wykonanie R4B — wykonywalne ownership bramek
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1-R4A.
+- Rezultat: czysty, server-owned validator wiąże każde criterion i gate z
+  authority jego slice. `required_mutation_paths` i `required_test_paths` nie
+  mogą wyjść poza targety slice, a `implementation_context` jest odrębnym,
+  istniejącym read contextem. Wynik zawiera pełny union criterion IDs bez
+  short-circuitu na FAST gate.
+- Allowed paths:
+  - `packages/test-evidence/src/engineering-gates.ts`
+  - `packages/test-evidence/test/engineering-gates.integration.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/test-evidence/test/engineering-gates.integration.test.ts && git diff --check`
+- Wymagane mutacje: gate na złym slice; foreign production/test path; READ
+  nieobecny albo oznaczony `must_exist=false`; pominięcie ostatniego criterion
+  po wcześniejszym FAST failure. Każda musi RED, zostać przywrócona i
+  poprzedzać zieloną bramkę.
+
+Wynik `2026-09-05`: pure validator akumuluje stabilne, bounded i immutable
+naruszenia oraz zwraca pełny deterministic union criteria/gates/targets. Gate
+mutation/test paths i READ/SEARCH context są segment-safe związane wyłącznie z
+authority owning slice. Primary uruchomił forced build `29/29`, `Cached: 0`,
+integracyjny plik `39/39` z wymaganym PostgreSQL i `git diff --check`; exit `0`.
+Cztery mutation checks dały exit `1` i zostały przywrócone: bypass wszystkich
+path ownership checks (wrong-slice, production, test i prefix collision),
+pominięcie `must_exist=false`, pominięcie całej walidacji read context oraz
+ucięcie finalnego criterion union po pierwszym FAST gate.
+
+## Wykonanie R4A — zamrożony manifest benchmarku
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1-R3.
+- Decyzje: `ADR-0017`, `ADR-0018`; publiczny manifest zachowuje bytes i
+  deterministic authority mapping, prywatny overlay przechowuje fizyczne
+  ścieżki/objective/assets oraz jawnie wybrane profile subskrypcyjne.
+- Rezultat: strict manifest/overlay loader wiąże benchmark ID/version, repo i
+  seed, objective digest, criteria/slices/gates/selectors/targets, wersje
+  projection/schema, catalog/config digests, logical Xcode requirements i
+  provider-neutral role selection; config/profile drift nie ma fallbacku.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-live-qualification.ts`
+  - `apps/agent-worker/test/engineering-live-qualification.test.ts`
+  - `test/engineering-evals/catalog.test.ts`
+  - `test/engineering-evals/fixtures/`
+  - `docs/decisions/ADR-0018-typed-engineering-gate-failures.md`
+  - `docs/decisions/README.md`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && pnpm exec vitest run test/engineering-evals/catalog.test.ts apps/agent-worker/test/engineering-live-qualification.test.ts && git diff --check`
+- Wymagane mutacje: config/catalog/profile/seed/objective drift; brak gate albo
+  pusty selector; foreign target; credential w overlay. Każda musi RED, zostać
+  przywrócona i poprzedzać zieloną bramkę.
+
+Wynik `2026-09-05`: strict manifest i private-overlay schema wiążą zachowane
+bytes/canonical digest manifestu, objective, repo/seed, config/catalog/schema,
+cztery role subskrypcyjne, logiczne Xcode oraz code-owned target authority.
+Resolved snapshot jest głęboko immutable. Primary uruchomił forced build
+`29/29`, `Cached: 0`, dwa pliki testowe `36/36` i `git diff --check`; exit `0`.
+Dziewięć niezależnych mutation checks dało exit `1` i zostało przywróconych:
+objective, config digest, catalog digest, profile, seed, missing gate, empty
+selector, target authority (SOURCE/TEST/GENERATOR) oraz strict credential
+boundary (`api_key`/`oauth_token`).
+
+Kolejne bounded części R4: R4B pure gate ownership validator; R4C pre-model
+zero-call/zero-write integration; R4D `GateFailure` v2 contract + legacy
+adapter; R4E typed production mapping bez prose-driven authority.
+
+## Wykonanie R3B — rekonstrukcja i canonical evidence
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1/R2/R3A.
+- Decyzja: `ADR-0017`; content-free journal jest odtwarzalnym indeksem
+  diagnostycznym, ale nie zastępuje canonical artifacts/receipts.
+- Rezultat: ścisła rekonstrukcja wersjonowanego JSONL z kontrolą sequence i
+  digestów; przerwany terminal pozostaje `INCOMPLETE`; prywatny canonical export
+  powstaje przed teardownem izolowanej bazy live; awaria append/close nie ukrywa
+  kolejnych prób ani nie tworzy fałszywego sukcesu.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-debug-journal.ts`
+  - opcjonalnie `apps/agent-worker/src/engineering-run-report.ts`
+  - `apps/agent-worker/test/engineering-debug-journal.test.ts`
+  - `apps/agent-worker/test/engineering-live-ios.integration.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-debug-journal.test.ts apps/agent-worker/test/handlers.integration.test.ts apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts`
+- Wymagane mutacje: dropped terminal line; pominięcie digest match; uznanie
+  legacy/truncated journala za complete; pominięcie exportu przed teardownem;
+  poisoned append ukrywający późniejsze eventy. Każda musi RED, zostać
+  przywrócona i poprzedzać zieloną bramkę.
+
+Wynik `2026-09-05`: nowe JSONL records mają chain digest, a ścisła rekonstrukcja
+waliduje schema, timestamp, ciągłą sequence, lifecycle i integralność bez
+przepisywania raw history. Legacy i ucięty ostatni wiersz pozostają
+`INCOMPLETE`. Prywatny canonical export w katalogu `0700` zachowuje pełne,
+zwalidowane artifacts i gate receipts w pliku `0600` przed teardownem bazy;
+hard-link publication nie nadpisuje istniejącego dowodu. Kolejka append odzyskuje
+się po pojedynczym write failure, a close/export/drop zachowują kolejność i
+gwarantują próbę teardownu.
+
+Primary po restore uruchomił build `29/29`, `Cached: 0`, trzy wskazane pliki
+testowe `60/60` i `git diff --check`; exit `0`. Osiem mutation checks dało exit
+`1` i zostało przywróconych: brak terminala, pominięcie record digest, błędne
+zaakceptowanie finalnego wiersza bez newline, legacy jako complete, drop przed
+exportem, poisoned append chain, pominięcie stored artifact digest oraz
+nadpisanie istniejącego exportu. R3 jest gotowe do końcowego audytu RA-055;
+`CTF-026` pozostaje formalnie otwarty wyłącznie do tego audytu.
+
+## Wykonanie R3A — prawdziwy outcome produkcyjnego journala
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1/R2.
+- Decyzja: `ADR-0017`; resolved callback oznacza wyłącznie outcome handlera.
+- Rezultat: wersjonowany, backward-compatible `RUN_COMPLETED` rozdziela
+  `handler_outcome`, `engineering_outcome` i `diagnostic_completeness`.
+  `COMPLETED` dla commit-enabled Engineering wymaga durable commit receiptu;
+  terminal, brak artifacts albo awaria DB nie mogą być raportowane jako sukces.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-debug-journal.ts`
+  - `apps/agent-worker/test/engineering-debug-journal.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-debug-journal.test.ts apps/agent-worker/test/handlers.integration.test.ts apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts`
+- Wymagane mutacje: callback-only success; pominięcie commit receipt; usunięcie
+  diagnostic completeness; TerminalReason `BLOCKED` jako success; błąd DB jako
+  success. Każda musi RED, zostać przywrócona i poprzedzać zieloną bramkę.
+
+R3B po R3A zajmuje się rekonstrukcją/exportem canonical evidence i retencją;
+nie jest zastępowane samą poprawką statusu. Bez live i commita częściowego.
+
+Wynik `2026-09-05`: `RUN_COMPLETED` schema v2 rozdziela handler outcome,
+Engineering outcome i kompletność diagnostyki. Durable `BLOCKED`, nieudany albo
+niekonkluzywny verify, brak `LocalCommitReceipt`, brak artifacts oraz awaria
+odczytu diagnostycznego nie mogą zostać pokazane jako `COMPLETED`; historyczne
+v1 pozostaje jawnie obsługiwane. Primary po restore uruchomił build `29/29`,
+`Cached: 0`, trzy wskazane pliki testowe `54/54` oraz `git diff --check`; exit
+`0`. Mutation checks dały czerwone przebiegi dla callback-only success, braku
+commit guard, błędnej klasyfikacji `BLOCKED`, fałszywej kompletności po błędzie
+DB, błędnego `COMPLETED` po błędzie DB oraz ignorowania FAILED verifiera; każdy
+mutant został przywrócony przed zieloną bramką. R3B nadal jest wymagane przed
+uznaniem całego R3 i `CTF-026` za zamknięte.
+
+## Aktywne wykonanie R2 — kompletna identity findingów review
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98` +
+  odebrane niezacommitowane R1.
+- Decyzja architektoniczna:
+  `docs/decisions/ADR-0017-engineering-evidence-identity-and-outcomes.md`.
+- Rezultat: server-owned effective `path:line` pozostaje kotwicą authority, ale
+  nie zlewa dwóch niezależnych required fixes; dedup dotyczy wyłącznie
+  identycznej kanonicznej projekcji findingu.
+- Allowed paths:
+  - `packages/review-loop/src/pre-commit.ts`
+  - `packages/review-loop/src/contracts.ts`
+  - `packages/review-loop/test/pre-commit.integration.test.ts`
+  - istniejące testy `packages/review-loop/test/` wymagające korekty semantyki
+    `mergeReviewReports`
+  - `docs/decisions/ADR-0017-engineering-evidence-identity-and-outcomes.md`
+  - `docs/decisions/README.md`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/review-loop/test/pre-commit.integration.test.ts packages/review-loop/test/review.integration.test.ts apps/agent-worker/test/vertical-slice-e2e.integration.test.ts apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts`
+- Wymagane mutacje: powrót do location-only dedup; usunięcie drugiego findingu;
+  potraktowanie foreign-scope findingu jako blocking write target; utrata
+  stabilności ID identycznej projekcji. Każda mutacja musi RED, potem restore i
+  pełna bramka kroku musi dać exit `0`.
+
+Wynik `2026-09-05`: `ADR-0017` zapisuje rozdzielenie authority anchoru od
+identity. `serverFindings` używa wersjonowanej canonical projection effective
+anchoru, severity, summary, required fix i evidence digest. Dwa niezależne
+findingi na jednej linii zachowują dwa IDs, exact duplicate jest jeden, a
+wynik nie zależy od kolejności modelowego outputu. `mergeReviewReports` używa
+tej samej semantyki obserwacji, zachowuje wyższą severity i deterministyczny
+tie-break ID.
+
+Primary uruchomił po restore pełną bramkę kroku: build `29/29`, `Cached: 0`,
+następnie `4/4` pliki i `62/62` testy, w tym produkcyjny handler boundary;
+`git diff --check`; exit `0`. Cztery mutacje dały exit `1` i zostały
+przywrócone: location-only identity/drop drugiego findingu; foreign-scope
+anchor jako blocker; nondeterministyczny nonce w ID; first-wins duplicate przy
+odwróconej kolejności raportów. Przed mutacjami primary znalazł i zlecił dwie
+korekty determinism, dlatego implementer summary nie był końcowym odbiorem.
+
+Następny krok bez pauzy: R3 — prawdziwy outcome zadania i kompletność evidence.
+Bez live i bez commita częściowego.
+
+## Aktywne wykonanie R0/R1 — mutation state i receipt fallback
+
+- Status: `DONE`
+- Baseline wykonania: `ce9b2ff62e3c947c72c0fafca47d192af983ce98`
+- Rezultat: zewnętrzny fallback nie może zaakceptować wcześniejszego successful
+  receiptu, jeżeli późniejsza mutacja tego samego albo innego wymaganego targetu
+  pozostaje `FAILED` lub `AMBIGUOUS`; rzeczywisty późniejszy sukces dokładnie tego
+  targetu może stan rozwiązać.
+- Allowed paths:
+  - `apps/agent-worker/src/engineering-execution.ts`
+  - `apps/agent-worker/test/engineering-execution.integration.test.ts`
+  - `apps/agent-worker/test/vertical-slice-e2e.integration.test.ts`
+  - `packages/model-runtime/src/tool-loop.ts`
+  - `packages/model-runtime/src/errors.ts`
+  - `packages/model-runtime/src/types.ts`
+  - `packages/bedrock-runtime/test/tool-loop.test.ts`
+  - `docs/work-units/RA-055/WORK_UNITS.md`
+- Weryfikacja:
+  `. scripts/dev/env.sh && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/bedrock-runtime/test/tool-loop.test.ts apps/agent-worker/test/engineering-execution.integration.test.ts apps/agent-worker/test/vertical-slice-e2e.integration.test.ts`
+- Wymagane mutacje po zielonej implementacji: usunięcie unresolved-failure
+  guarda; wyczyszczenie failure po sukcesie obcego targetu; dopuszczenie
+  ambiguity fallback; osłabienie all-of do any-of. Każda musi dać exit różny od
+  zera, zostać przywrócona, a następnie bramka musi ponownie dać exit `0`.
+- Ograniczenia: bez live, commita, pushu i zmian w zachowanych worktree iOS.
+
+Wynik `2026-09-05`: outer fallback przyjmuje tylko dwa jawne terminale
+`FINAL_WITHOUT_REQUIRED_{MUTATION,CORRECTION}_RECEIPT` i odrzuca każdy
+unresolved failure albo sticky ambiguity. Tool-loop oraz worker prowadzą stan
+failed targetów per path; wyłącznie server-owned `changed_files` z późniejszego
+sukcesu tej samej ścieżki może go rozliczyć. Request target i sukces sąsiedniej
+ścieżki nie są dowodem naprawy.
+
+Primary uruchomił pełną bramkę tego kroku: build `29/29`, `Cached: 0`, następnie
+`3/3` pliki i `72/72` testy, `git diff --check`; exit `0`. Pięć load-bearing
+mutacji dało exit `1` i zostało przywróconych: usunięcie unresolved-failure
+guarda; wyczyszczenie failure A po sukcesie B; dopuszczenie ambiguity fallback;
+osłabienie all-of do any-of; dopuszczenie dowolnego `ToolLimitError`. Pierwsza
+wersja testu all-of przeżyła mutację, ponieważ odmawiał ją wcześniejszy guard
+terminala; wynik odrzucono, dodano dozwolony terminal do regresji i powtórzona
+mutacja poprawnie zaczerwieniła test. CTF-025 jest naprawiony, lecz pozostaje
+formalnie otwarty do końcowego audytu RA-055 zgodnie z regułą rejestru.
+
+Następny krok bez pauzy: R2 — stabilna identity niezależnych findingów review i
+zachowanie dwóch wymaganych poprawek na tej samej effective linii.
+
+## Aktywny checkpoint audytowy — 2026-09-05
+
+Właściciel zamówił niezależny audyt i szczegółowy plan, bez wdrażania nowych
+poprawek ani następnego live runu w tej sesji. Przeczytaj najpierw
+[plan wykonawczy Engineering](ENGINEERING_COMPLETION_PLAN.md) oraz
+[audyt techniczny checkpointu](../../audits/ENGINEERING_LOOP_TECHNICAL_AUDIT_2026-09-05.md).
+Historyczna chronologia poniżej pozostaje zachowana, ale wcześniejsze zalecenie
+„najpierw kolejny compiler-context fix, potem full live” zastępuje plan R0–R9.
+RA-055 pozostaje `IN_PROGRESS`; nie powstał formalny audit PASS ani handoff.
+
+Własna pełna bramka na `ce9b2ff` przed zmianami dokumentów: exit `0`, jeden
+przebieg, build `29/29` i typecheck `46/46` bez cache, Vitest `3173 passed / 2
+skipped`, workflow `OK — 55 tasks`. Sondy potwierdziły cztery konkretne defekty
+opisane w audycie; nie mutowano produkcyjnego kodu. Dwa preexistujące findingi
+zarejestrowano jako otwarte `CTF-025`/`CTF-026`; blokują końcową acceptance
+zgodnie z jej przeznaczeniem. Nie zamykać ich samym planem.
+
+Następny krok po zleceniu wdrożenia: R0/R1 — failing regression unresolved
+mutation fallback, bounded implementacja, własna primary weryfikacja. Nie
+naprawiać ręcznie i nie commitować zachowanego niezweryfikowanego Run 89.
+
+Zamierzone niezacommitowane pliki tej sesji (wyłącznie dokumentacja):
+
+- `docs/work-units/RA-055/WORK_UNITS.md`
+- `docs/work-units/RA-055/ENGINEERING_COMPLETION_PLAN.md`
+- `docs/audits/ENGINEERING_LOOP_TECHNICAL_AUDIT_2026-09-05.md`
+- `docs/audits/CROSS_TASK_FINDINGS.md`
+
+Nie wykonano commita/pusha, zmian źródeł/testów produkcyjnych ani usuwania
+worktree/logów. Wynik końcowej walidacji dokumentów należy odczytać z audytu.
 
 Właściciel zaakceptował `2026-08-29` pełny live rerun MOBL-2023 wyłącznie przez
 Codex subscription. Dozwolony side effect live flow to jeden lokalny commit w
@@ -216,11 +5517,18 @@ contracts/model-runtime/Codex-provider/implementation-tools/agent-worker,
   - `packages/review-loop/src/contracts.ts`
   - `packages/review-loop/src/pre-commit.ts`
   - `packages/review-loop/test/pre-commit.integration.test.ts`
+  - `packages/contracts/src/engineering-workflow.ts`
+  - `packages/contracts/test/engineering-workflow.test.ts`
+  - `packages/contracts/test/__snapshots__/schema-snapshot.test.ts.snap`
+  - `apps/agent-worker/src/vertical-slice-executor.ts`
+  - `apps/agent-worker/test/vertical-slice-executor.integration.test.ts`
   - `packages/test-evidence/src/engineering-gates.ts`
   - `packages/test-evidence/test/engineering-gates.integration.test.ts`
   - `apps/agent-worker/test/vertical-slice-e2e.integration.test.ts`
   - wszystkie ścieżki należące do `WU-01A`, `WU-01B` i `WU-01C`
   - `docs/work-units/RA-055/WORK_UNITS.md`
+  - `docs/decisions/ADR-0022-typed-review-correction-target-authority.md`
+  - `docs/decisions/README.md`
   - `docs/evidence/RA-055/CODEX_MOBL_2023_LIVE.md`
   - `/Users/marcinjackowski/.remoteagent/live-mobl-2023/engineering.json`
 - Weryfikacja:
@@ -3269,6 +8577,393 @@ Live Codex/iOS testy były jawnie skipped w tej bramce. Ten wynik kwalifikuje
 checkpoint do commita/pusha, ale nie spełnia live AC 3--4 i nie uprawnia do
 audytu `PASS`, handoffu ani statusu `DONE`.
 
+### Checkpoint R9 — declaration recovery i ochrona zasobów (2026-09-05)
+
+Dodano server-only prefetch deklaracji dla brakującego typu: root `SEARCH`
+akceptuje wyłącznie bezpieczny exact filename albo dopasowanie deklaracji, a
+następnie promuje wynik do exact `READ`; wynik usage-only pozostaje
+nierozstrzygający (fail-closed). Targeted mutation wyłączenia lookupu dała RED,
+po restore test `engineering-execution.integration.test.ts` zakończył się
+`55/55`, exit `0`; forced build `29/29`, `Cached: 0`, forced typecheck `46/46`,
+`Cached: 0`, a `git diff --check` zakończył się exit `0`.
+
+Fresh live invocation
+`mobl-2023-declaration-recovery-20260905T162731Z` aktywował declaration
+lookup i pierwszy slice ostatecznie zakończył `PASS`; drugi slice dotarł do
+Xcode. Invocation zakończył się po około `2437s` jako
+`INCOMPLETE` / `RECONCILE`, bez commita, przy około `1.136M` provider tokens.
+Journal:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-1716cdb88e189c73734f3552faf73f772be170ee71244b0e35445846de2948cb.jsonl`;
+summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-1716cdb88e189c73734f3552faf73f772be170ee71244b0e35445846de2948cb.summary.md`;
+evidence:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-private-evidence/evidence-c1201995e60c99ab7f15446e75c563d3cddc5a90e7790f9a324c4fd17d99150a.json`;
+worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_fce41a82-6491-4369-a824-b8cd8f062e16-case/engineering-115f4d1306401e05e169e503eb0e62ce`.
+
+Bezpośrednia rekonsyliacja tych samych ośmiu selectorów wykazała linker
+`errno=28` / brak miejsca na dysku. Zachowano
+`/tmp/ra055-xcode-reconcile.NDAHff/Qualified.xcresult`; usunięto wyłącznie
+wygenerowane tymczasowe `DerivedData` i `SourcePackages`, a następnie dokładnie
+dwa najstarsze globalne cache `SonderClient` w Xcode `DerivedData`. Worktrees,
+źródła i journal/evidence zachowano; po czyszczeniu dostępne było około `35 GiB`.
+
+Guard kwalifikacji podniesiono do minimum `24 GiB` dostępnego miejsca, a adapter
+Xcode rozpoznaje wąski zestaw sygnałów disk exhaustion (`errno=28`, `No space
+left on device`, `write() failed` z `errno=28`) przed parsowaniem xcresult i
+zwraca stabilne `RESOURCE_LIMIT`. Mutation progu `24 GiB -> 10 GiB` dała RED,
+po restore focused suite zakończył się `33/33`, exit `0`; forced typecheck
+`46/46`, `Cached: 0`, oraz `git diff --check` również exit `0`. Task i WU
+pozostają otwarte; ten checkpoint nie jest audytem ani handoffem.
+
+### Checkpoint R9 — fizyczne linie excerptu i typed review targets (2026-09-06)
+
+Invocation `mobl-2023-framework-persistence-20260906T0223CEST` zakończył się
+bezpiecznie exit `1` po około `18m34s`, z `736087` provider tokens, bez commita.
+Pełny Xcode gate ujawnił fałszywe `REQUIRED_DIAGNOSTIC_TRUNCATED`: odczyt
+newline-terminated pliku traktował końcowy pusty segment jako dodatkową linię
+fizyczną. `readSafeFileExcerpt` liczy teraz wyłącznie fizyczne linie i clampuje
+żądanie `119..125` do `119..124`. Mutacja przywracająca dawny licznik dała
+targeted RED exit `1`; po restore focused gate zakończył się `113/113`, exit
+`0`, a forced build `29/29`, typecheck `46/46`, oba `Cached: 0`.
+
+Fresh invocation `mobl-2023-eof-repair-recovery-20260906T0254CEST` potwierdził,
+że poprawka jest load-bearing: nie wystąpiły compiler/test diagnostics ani
+`REQUIRED_DIAGNOSTIC_TRUNCATED`. Run zakończył się bezpiecznie exit `1` po
+`768614ms`, z `422894` provider tokens, bez commita. Journal:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-3dc9297795c47469fc490b1beadedd1a605df192adac195e5cfdca6f9d15c0b1.jsonl`;
+evidence:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-private-evidence/evidence-48c6e2359363ea43f16a4fb0f275fb563cc8e438d530f40a79bf324b17f76729.json`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_4ca2048c-608c-40c7-bfe4-5774d7dcf370-case/engineering-a19b395d0847445768b696e2ad5f00eb`.
+
+Trzy fresh reviews raportowały ten sam brak wymaganej aktualizacji
+`SonderClient/TestFlight/WhatToTest.en-US.txt`, ale kotwiczyły finding w
+zmienionych liniach `Localizable.strings` albo `SafetyAlert.swift`. Runtime
+traktował anchor jak correction target, nie prefetchnął bieżących bajtów
+TestFlight i ostatecznie poprawnie zatrzymał powtórzony patch jako
+`PRE_COMMIT_REVIEW_NO_CHANGE`. Nie był to brak tokenów ani błąd gate'a.
+
+ADR-0022 rozdziela server-validated changed-line anchor od typed
+`required_fix_paths`. Pre-commit review akceptuje wyłącznie dokładne,
+model-editable leaf paths już obecne w aktywnym `SliceContract.allowed_paths`,
+odrzuca katalogi, foreign paths i generator outputs, normalizuje unię jako
+sorted/unique i utrwala ją w `ReviewDecision.required_mutation_paths`. Następna
+korekta prefetchnie bieżące bajty targetu i wymaga mutation receipt dla
+wszystkich typed paths; prose ani anchor nie tworzą fallback authority. Legacy
+schema v1 pozostaje odczytywalne, ale decyzja bez typed paths nie może uruchomić
+write i kończy się fail-closed.
+
+Primary focused gate po audycie diffu uruchomiono z wymaganym PostgreSQL:
+`5` plików, `129/129` testów, exit `0`. Load-bearing mutacja celowo zastąpiła
+typed target anchorem: targeted producer test zakończył się exit `1`, oczekując
+`src/base.ts`, lecz otrzymując `src/slice-one.ts`. Po restore ten sam test dał
+exit `0`. Final forced build zakończył się `29/29`, typecheck `46/46`, oba z
+`Cached: 0`; `git diff --check` zakończył się exit `0`. Następny krok to świeży
+pełny live invocation; poprzednie worktree i journal/evidence pozostają
+zachowane.
+
+Fresh invocation `mobl-2023-typed-review-targets-20260906T0338CEST` przeszedł
+preflight, System/Program Design, pierwszą implementację i oba FAST gates, lecz
+zakończył się bezpiecznie exit `1` po `269733ms` na pierwszym review. Provider
+zaraportował `172757` tokenów dla ukończonych odpowiedzi; dwa reviewer calls
+zakończyły się po około dwóch sekundach identycznym `PROCESS_EXIT_FAILED`, bez
+usage. Nie powstał `ReviewDecision`, stan `AMBIGUOUS` ani commit. Journal i
+summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-d4fdc6c65d2144fd093631fde580cb26859b0052ec200b23381108154e5825f9.{jsonl,summary.md}`;
+zachowany worktree należy do case
+`ra045_a70c8f39-c426-4124-80b1-5e86b4d19647-case`.
+
+Przyczyną nie była subskrypcja: modelowy `required_fix_paths` miał
+`.default([])`, więc dokładna produkcyjna projekcja `z.toJSONSchema(...,
+{ io: "input" })` zawierała `default` i nie umieszczała pola w `required`.
+Codex strict structured output odrzucał schema przed model turn. Pole modelowe
+jest teraz obowiązkowe; wyłącznie trwały `ReviewDecision` zachowuje default dla
+legacy read compatibility. Mutacja przywracająca `.default([])` dała targeted
+RED exit `1`; po restore schema test dał GREEN exit `0`. Bezpośredni production
+Codex transport smoke z dokładnym `preCommitReviewOutput` zakończył się exit
+`0` w jednym attempt: `RA055_REVIEW_SCHEMA_OK`, `8769` input + `81` output =
+`8850` provider tokens.
+
+Aktualizacja fixture'ów ujawniła i naprawiła przekrojowy test ownership: jeden
+syntetyczny gate nie może reprezentować różnych targetów dwóch slice'ów. E2E
+używa teraz `unit-slice-one/FIRST_SLICE` dla `src/one-view.ts` oraz
+`unit-slice-two/LAST_SLICE` dla `src/two.ts`. Rozszerzona bramka z realnym
+PostgreSQL zakończyła się `7` plików, `144/144` testów, exit `0`; forced build
+i typecheck zostały następnie powtórzone po finalnym schema-test type fix:
+odpowiednio `29/29` i `46/46`, oba `Cached: 0`; `workflow:validate` zwrócił
+`OK`.
+
+Fresh invocation `mobl-2023-strict-review-targets-20260906T0411CEST`
+potwierdził produkcyjnie naprawę strict schema: pierwszy slice wykonał korektę,
+ponowne FAST gates i fresh review `PASS`. Drugi slice utworzył produkcję i testy,
+a kolejne gate correction zredukowało awarię selector gate do dwóch brakujących
+kryteriów dotyczących observable routing w istniejących flow tests. Run
+zakończył się bezpiecznie exit `1` po `885084ms`, bez stanu `AMBIGUOUS`, Xcode,
+final verification ani commita. Provider zaraportował `1000834` tokenów.
+Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-291d437528366923a9f0005b05aca5cfad2dfcbab8699237c151ec8a295034a0.{jsonl,summary.md}`;
+evidence:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-private-evidence/evidence-f93e845f18efdcbb8f060ccfe3267458eb4b8621d6be9e05b82eaad38514f290.json`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_02358e77-b1f9-4b0d-af0d-d7e14a78cc2d-case/engineering-3378e769f962b6c515a5e29a6275a225`.
+
+Attempt 5 najpierw skierował patch do właściwego
+`AIMultiAgentChatViewModel.swift` i jego testu, lecz atomic batch zakończył się
+`REPLACEMENT_MISMATCH`, a kolejna produkcyjna mutacja została odrzucona jako
+`CORRECTION_BEHAVIORAL_MUTATION_REQUIRED`. Runtime zachował nierozstrzygnięte
+ścieżki, ale po compact epoch ogólny recovery prompt nie przekazywał ich nazw.
+Codex wykonał potem sześć udanych sibling mutations wyłącznie w
+`EmergencyResourcesRouterTests.swift`; każda niepoprawnie zerowała bounded
+completion recovery, aż attempt zakończył się `ToolLimitError LIMIT_EXCEEDED`.
+
+ADR-0023 zachowuje exact server-owned failed target paths przez compact epoch.
+`MUTATION_RECOVERY_REQUIRED` zawiera teraz sorted
+`unresolved_failed_mutation_paths` oraz flagę unscoped failure, a sukces siblinga
+nie zeruje licznika braku postępu. Candidate-ANY i obowiązkowy rerun gate z
+ADR-0021 pozostają bez zmian. Primary load-bearing mutations potwierdziły oba
+mechanizmy: przywrócenie bezwarunkowego resetu dało targeted RED `1 failed`,
+exit `1` po uprzednim buildzie; wyzerowanie strukturalnej listy failed paths
+dało drugi targeted RED `1 failed`, exit `1`. Po każdym restore build i cały
+`tool-loop.test.ts` zakończyły się exit `0`, finalnie `42/42`; `git diff --check`
+również exit `0`. Następny krok to świeży live invocation z tym samym prywatnym
+benchmarkiem, po czym — wyłącznie przy pełnym sukcesie — WU-02 i task gate.
+
+### Checkpoint R9 — compiler-repair batching i mierzalny postęp (2026-09-06)
+
+Fresh invocation `mobl-2023-exact-failure-recovery-20260906T0445CEST`
+potwierdził produkcyjnie ADR-0023: po failed batchu agent wrócił do dokładnych
+trzech plików flow zamiast zapętlać sibling test. Pierwszy slice przeszedł FAST
+gates i fresh review `PASS`; drugi dotarł do sześciu realnych przebiegów Xcode.
+Invocation zakończył się kontrolowanie jako `BLOCKED / NO_PROGRESS`, exit `1`,
+po `3150589ms`, `10` próbach i `1158158` provider tokens. Nie powstał final
+review, final verification ani commit. Source i seed pozostały niezmienione.
+Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-b3ff7489b1911dc4e55db1af9c581c79db0179907520960ef9adade3f9a7a069.{jsonl,summary.md}`;
+evidence:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-private-evidence/evidence-4afb6a9dc7c9ea896f32ad72c64145181ae5d68f8d776edf1f0fb6da22161646.json`;
+zachowany worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_47aa9de4-1d3f-42e2-9288-51ab15f6ed17-case/engineering-8dd44f4c8e57dee529b12d0330672ae7`.
+
+Run ujawnił, że compiler repair przekazywał powtarzające się diagnostyki i
+wycinki wyłącznie wokół linii błędu, bez nagłówków/importów. Implementer naprawiał
+po jednym pliku, a po każdej zmianie uruchamiał pełny Xcode przez `216–353s`.
+Rozpoznane root diagnostics są teraz deterministycznie deduplikowane per
+path/category/symbol przed repair planem, promptem i compact epoch; nieznane
+diagnostyki pozostają dokładne. Każdy diagnostic path otrzymuje scalony,
+bounded header `1..24` oraz niepokrywające się okna wokół błędów. Prompt wymaga
+jednego batcha dla niezależnych ścieżek, ale dopuszcza pojedynczą root fix dla
+kaskad. ADR-0021 pozostaje candidate-ANY — diagnostics nie stają się authority.
+
+Compiler-specific progress porównuje dwa kolejne, niepuste znormalizowane
+zestawy: identyczny zestaw kończy się `NO_PROGRESS` na drugim boundary; subset
+albo zmieniony zestaw pozwala kontynuować. Istniejący trzy-boundary guard nadal
+jest backstopem, a ADR-0023 nadal utrzymuje failed mutation paths niezależnie.
+Primary wykonał trzy mutation checks: pominięcie runtime comparison dało RED
+exit `1` (3 gate calls zamiast 2), odrzucenie unknown diagnostics dało RED exit
+`1` (2 wpisy zamiast 4), a usunięcie headera dało RED exit `1` (`17..23`
+zamiast `1..24`). Po restore targeted gate zakończył się `105/105`, exit `0`;
+forced build `29/29`, `Cached: 0`; forced typecheck `46/46`, `Cached: 0`;
+`workflow:validate OK — 55 tasks`; `git diff --check` exit `0`. Następny krok:
+fresh live invocation i porównanie liczby Xcode runs, czasu oraz tokenów z tym
+baseline'em.
+
+### Checkpoint R10 — ordinary-gate persistence i exact signature context (2026-09-06)
+
+Fresh invocation `mobl-2023-batched-compiler-repair-20260906T061500CEST`
+zakończył się kontrolowanie exit `1` po `768236ms`, bez Xcode, review,
+final verification ani commita. Pierwszy slice osiem razy uruchomił
+`mobl-2023-safety-alert-contract-incremental`; każdy przebieg zakończył się exit
+`1` z identycznym `log_digest`, podczas gdy model oscylował między
+`tapAction?()` i wrapperem z `XCTUnwrap`. Provider zaraportował `523548`
+tokenów. Source i seed pozostały niezmienione, a worktree porażki zachowano.
+Journal i summary:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-a3af8ba763d6d22e052f80b82ad9e43fcee3ce59db1777b67ba1417efd95e6d2.{jsonl,summary.md}`;
+worktree:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/workspaces/ra045_25b9d509-2830-4216-b96a-a044ecb5a50a-case/engineering-2d1c0ccac4772a73392be1039f003a55`.
+
+Zwykły required gate bez rozpoznanej compiler/test identity otrzymuje teraz
+konserwatywny stable fingerprint z dokładnych pól `slice_id`, `gate_id`,
+`outcome` i niepustego `log_digest`. Fingerprint jest niezależny od attemptu,
+tree/diff i rotujących v2 receipt/evidence refs; różne gate'y albo logi nie są
+łączone. Trzy-boundary ordinary persistence zatrzyma taką pętlę, a istniejąca
+compiler-specific druga granica pozostaje bez zmian. Historyczna causal
+semantyka `engineeringGateFailureEvidenceDigests` nie została zmieniona.
+
+Prompt korekty wymaga zachowania dokładnej pisowni sygnatur nazwanych przez
+diagnostykę. Prywatny gate incremental prefetchnie dodatkowo scoped deklarację
+`public func tapAction()` z `ButtonModel.swift`; warunek benchmarku nie został
+osłabiony. Load-bearing mutation wyłączyła ordinary fingerprint i dała targeted
+RED exit `1`; po restore ten sam test dał GREEN exit `0`. Pełna lokalna bramka
+dla trzech krytycznych suite'ów zakończyła się `151/151`, exit `0`; forced build
+`29/29`, `Cached: 0`; forced typecheck `46/46`, `Cached: 0`;
+`workflow:validate OK — 55 tasks`; `git diff --check` exit `0`.
+
+Powstał też czterostronicowy diagram techniczny procesu:
+`docs/architecture/ENGINEERING_LOOP_DIAGRAM.pdf`, generowany deterministycznie
+przez `scripts/docs/render-engineering-loop-pdf.swift`.
+
+### Kontynuacja R10 — budżet operacji prefetch (2026-09-06)
+
+Invocation `mobl-2023-ordinary-gate-signature-20260906T0640CEST` zakończył się
+`FAILED`, bez commita, po `1725805ms` i `857166` provider tokens. Pierwszy
+slice uzyskał fresh review `PASS`. Drugi przeszedł FAST gates i uruchomił
+dwa rzeczywiste przebiegi Xcode (exit `65`); przed kolejną korektą runtime
+zgłosił `CORRECTION_CONTEXT_CAP_EXCEEDED`. Journal i summary zachowano pod
+`engineering-385782395a56ca42744689cf756151479fbef2f4598e52ca5f5f4b87b944161a`
+w prywatnym katalogu `artifacts/engineering-debug`. Source checkout zachowuje
+wyłącznie wcześniejszy untracked asset użytkownika; seed pozostaje czysty.
+
+Plan naprawy w istniejącym R10, baseline HEAD
+`ce9b2ff62e3c947c72c0fafca47d192af983ce98`: wspólne deterministyczne liczenie
+operacji lookup oraz scalonych okien diagnostic READ już podczas wyboru planu.
+Opcjonalny kontekst nie mieszczący się w limicie ma jawną przyczynę pominięcia;
+obowiązkowy kontekst nadal fail-closed. Nie zwiększać limitu `48` operacji,
+write scope, tokenów ani nie zmieniać benchmarku. Allowed paths:
+`apps/agent-worker/src/engineering-repair-context.ts`,
+`apps/agent-worker/src/engineering-execution.ts` oraz
+`apps/agent-worker/test/engineering-execution.integration.test.ts`.
+Komenda kroku:
+`. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts && git diff --check`.
+Po regression i mutation RED→GREEN primary samodzielnie sprawdza diff,
+powtarza komendę, forced build/typecheck i uruchamia nowy isolated invocation.
+Primary potwierdził load-bearing planner mutation: zastąpienie limitu przez
+`Number.POSITIVE_INFINITY` zaczerwieniło test
+`retains required diagnostic reads while pruning optional lookup calls`
+(exit `1`, dokładnie dawny wyjątek discovery cap). Po przywróceniu limitu
+trzy targeted regresje zakończyły się exit `0`. Wcześniejszy własny przebieg
+trzech suite'ów dał `154/154`, exit `0`; forced build/typecheck dały exit `0`,
+typecheck `46/46`, `Cached: 0`. Pełny lint następnie ujawnił nieużywane
+zmienne w szerszym dirty diffie RA-055 (exit `1`); trwa korekta bez zmiany
+semantyki i ponowna bramka przed live. Nie jest to zakończenie taska.
+
+Pełną bramkę powtórzono po lint/format cleanup: lint i format exit `0`,
+build `29/29`, `Cached: 0`, Vitest exit `1` po `188.78s`: `3377` passed,
+`8` failed, `2` opt-in live skipped (`243` pliki passed, `5` failed).
+Findingi naprawiane w tym samym kroku: dwie kontrole rejestru CTF-025/026,
+trzy scenariusze typed review correction w kwalifikacji/routingu providerów,
+trzy evale actual-byte context i missing-usage reserve. Nie zmieniać asercji
+na aktualne zachowanie bez sprawdzenia kontraktu. Dodatkowe allowed paths to
+odpowiednie testy kwalifikacji/fixture, `test/engineering-evals/`, lint-only
+zmiany już dotkniętych plików oraz rejestr findingów.
+
+CTF-025/026 zostały następnie niezależnie zweryfikowane przez primary:
+odczyt mechanizmów, dwie targeted mutacje RED exit `1`, restore i cztery
+suite'y `162/162`, exit `0`. Zamknięto wyłącznie te konkretne defekty;
+`test/acceptance/criteria.test.ts` dał `19/19`, exit `0`, bez zmiany testu.
+Końcowy audyt RA-055 nadal nie powstał. Zastany kod używa rezerw korekty
+`128000/128000`, a nie historycznych `64000/32000`; globalny hard limit
+pozostaje `1800000`. To konserwatywna rezerwa przed dispatch/missing usage,
+nie podniesienie limitu całego invocation. Eval rozliczenia missing usage
+wiąże teraz kumulację z tymi produkcyjnymi stałymi.
+
+Końcowa przyczyna kwalifikacji providerów była wcześniejsza niż review:
+`ProgramDesign` zawierał duplikaty ścieżek, ponieważ fixture kopiował listę
+prób (`one.ts`, `one.ts`, `two.ts`) do unique scope. Zdeduplikowano wyłącznie
+`allowed_paths/test_paths`, zachowując powtórzoną próbę korekty; produkcyjnej
+walidacji nie zmieniono. Primary odczytał diff i wykonał pełną komendę taska
+ponownie `2026-09-06` wieczorem: exit `0`; lint/format OK; build `29/29`,
+`Cached: 0`; Vitest `248` plików passed, `2` opt-in live skipped,
+`3385` testów passed, `2` skipped; forced typecheck `46/46`, `Cached: 0`;
+`workflow:validate OK — 55 tasks`; `git diff --check` exit `0`.
+Preflight lokalny potwierdził canonical CLI `0.153.3`, `Logged in using
+ChatGPT` i około `51 GiB` wolnego miejsca. Następny krok to nowy izolowany
+live invocation `mobl-2023-prefetch-call-budget-20260906T204600Z`.
+
+Invocation wystartował przez produkcyjny harness. Journal:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/artifacts/engineering-debug/engineering-9e451849de992437616caccb2c9ca47543bf123f1f8a4992ef350aaabf945651.jsonl`.
+Case `ra045_20ae95fe-1753-42a2-ba5f-2035c408e2b5-case`,
+run `run_aa3c9445-091f-4983-a564-8c76031d0b56`, seed
+`cd46c82de01d6ec4c5e614bcab9dc15f07560642`. Nie uruchamiać drugiego
+invocation przed sprawdzeniem terminala tego journala; brak `RUN_COMPLETED`
+nie oznacza porażki ani zgody na replay. Na moment zapisu trwa pierwszy slice.
+
+Stan pozostaje `IN_PROGRESS`; wszystkie istniejące zmiany RA-055, PDF,
+journale i worktrees są zamierzone i nie są przeznaczone do usunięcia.
+
+Podczas aktywnego live primary odczytał dodatkowo diff `model-runtime/tool-loop`
+i wykrył niepełną trwałość unscoped mutation failure: gałąź późniejszego sukcesu
+oblicza `unresolvedMutationFailure` wyłącznie z zestawu ścieżek, pomijając
+zachowany `unresolvedUnscopedMutationFailure`. Read-only analiza Luny
+potwierdziła osiągalną sekwencję: odmowa mutacji bez targetu → sukces innego
+targetu → final report. Nie jest to jeszcze wynik uruchomionego reproduktora.
+Po terminalu aktywnego invocation, przed jakimkolwiek odbiorem, należy dodać
+regresję tej sekwencji, potwierdzić RED, zachować sticky flag także w gałęzi
+sukcesu i uzyskać GREEN. Allowed paths istniejącego R1:
+`packages/model-runtime/src/tool-loop.ts`,
+`packages/bedrock-runtime/test/tool-loop.test.ts` oraz odpowiedni eval recovery.
+Komenda: `. scripts/dev/env.sh && pnpm exec vitest run packages/bedrock-runtime/test/tool-loop.test.ts test/engineering-evals/budget-recovery.test.ts && git diff --check`.
+Nie mutować runtime/configu podczas trwającego live. Ta obserwacja blokuje
+końcowy odbiór R1/RA-055 do czasu wyjaśnienia i uruchomionej weryfikacji.
+
+Terminal invocation `mobl-2023-prefetch-call-budget-20260906T204600Z`:
+exit `1`, `BLOCKED / NO_PROGRESS`, `2204858ms`, `968627` provider tokens,
+dziesięć prób implementacji, bez final verification i commita. Cztery Xcode
+receipts zakończyły się exit `65`, odpowiednio `231165`, `219640`, `232657`
+i `233465ms`. Pierwszy slice miał fresh review PASS. Call-budget naprawa
+usunęła poprzedni natychmiastowy wyjątek prefetch, lecz model nadal zgadywał
+importy i initializer: brak `EmergencyResources` → nieistniejący moduł
+`SharedLibrary` → brak typu; dodatkowo błędne argumenty `ButtonView`.
+Nie ponawiać bez zmiany wyjaśnionej przyczyny. Wszystkie artefakty zachowano.
+
+Następna ograniczona korekta istniejącego R6/R10: źródłowy kontekst SwiftPM
+manifestów dla znalezionej deklaracji oraz jej konsumenta, bez inferowania
+nazw modułów z nazw katalogów/pakietów. Dla initializer diagnostics planować
+deklarację typu wywołania na podstawie exact diagnostic excerpt/odczytanego
+okna kodu, nie samego komunikatu kompilatora. Dodatkowe odczyty/lookup muszą
+mieścić się w dotychczasowym limicie `48` operacji oraz actual byte/token
+limits; optional context ustępuje wymaganemu. Brak danych nie może tworzyć
+pozornego dowodu. Allowed paths: `engineering-repair-context.ts`,
+`engineering-execution.ts`, ich istniejące integration tests i
+`test/engineering-evals/repair-context.test.ts`. Bez zmian evaluatorów,
+manifestu benchmarku, iOS source, write authority ani globalnych limitów.
+Komenda: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts test/engineering-evals/repair-context.test.ts && git diff --check`.
+Checkpoint naprawy (nie odbiór): dodano manifest evidence, call-site slot
+z okna diagnostic READ oraz wymaganie evidence per `path:line`. Wstępny
+przebieg dał `97/97`, exit `0`, lecz własny odczyt primary wykrył brak
+egzekwowania całkowicie nieobecnych required READs, niepełną kontrolę dynamic
+manifest envelopes i powielanie współdzielonej tablicy przez recursive
+`prefetched.push(...resolved)`. Po zaostrzeniu completeness ostatni przebieg
+workera dał `88 passed / 9 failed`, exit `1`: częściowe fixtures wymagają
+uczciwego uzupełnienia. Primary nie przyjął poprawki; trwa ograniczona korekta
+tych defektów, fixture'ów i testów multiple slots/manifest dedup. Nie uruchamiać
+live ani nie deklarować GREEN na podstawie wcześniejszych 97 testów.
+
+Pre-audit AC3 znalazł dodatkową rozbieżność harnessu: opt-in live wywoływał
+`createImplementerHandler` bezpośrednio, pomijając rejestrację przez
+`createWorkerHandlers`. Korekta w istniejącym R8/WU-01 dotyczy wyłącznie
+`apps/agent-worker/test/engineering-live-ios.integration.test.ts`: wywołać
+zarejestrowany `agent.implementer`, a rzeczywisty `RuntimePumpResult` przejąć
+przez istniejący `engineeringInvocation.run` callback. Nie zmieniać produkcyjnego
+`Promise<void>` scheduler handlera, nie syntetyzować terminala ani receipts.
+Weryfikacja: forced worker typecheck i kwalifikacyjne integration suite'y;
+dowód tej konkretnej ścieżki live dopiero przez następny opt-in invocation.
+Zmiana harnessu została następnie odczytana przez primary i zweryfikowana
+bezpośrednio (package/root typecheck nie obejmują tego pliku testowego):
+`. scripts/dev/env.sh && pnpm exec tsc --noEmit --target ES2023 --lib ES2023 --module NodeNext --moduleResolution NodeNext --moduleDetection force --resolveJsonModule --isolatedModules --verbatimModuleSyntax --strict --noImplicitOverride --noUncheckedIndexedAccess --exactOptionalPropertyTypes --noFallthroughCasesInSwitch --noImplicitReturns --noUnusedLocals --noUnusedParameters --forceConsistentCasingInFileNames --skipLibCheck --types node apps/agent-worker/test/engineering-live-ios.integration.test.ts && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-qualification-control.integration.test.ts apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts && git diff --check`
+— exit `0`, typecheck bez cache, dwa pliki `14/14` testów. Przed GREEN
+usunięto realne błędy generic capture, readonly rows i jawnego `undefined`
+przy `exactOptionalPropertyTypes`. Wynik pochodzi z pełnych ustawień
+`tsconfig.base.json`, nie z łagodniejszego samodzielnego wywołania TypeScript.
+
+Primary znalazł również materialną sprzeczność scope: zatwierdzony lokalny
+`objective.txt` wymaga aktualizacji TestFlight changeloga, ale zamrożony
+`benchmark-manifest.json` ma wyłącznie 12 source/test/generator targets,
+bez ścieżki changeloga. Nie rozszerzono grantów ani nie usunięto wymagania.
+Wysłano właścicielowi pytanie asynchroniczne: nowa wersja benchmarku
+obejmująca changelog albo jawnie osobny krok. Pozostałe lokalne naprawy
+kontynuować; nie deklarować pełnego spełnienia objective bez tej decyzji.
+
+R1 unscoped recovery po poprawce: primary wymusił build model-runtime
+(`2/2`, cached `0`) i uruchomił tool-loop/process-runner/budget-recovery
+(`71/71`, exit `0`), po własnym wcześniejszym RED. CTF-025 ponownie zamknięto
+na tym dowodzie; `workflow:validate OK — 55 tasks`, exit `0`. Rekonstrukcja
+zakończonego journala przez `reconstructEngineeringDebugJournal` zakończyła
+się exit `0`: 791 rekordów, `COMPLETE`, integrity valid, terminal present,
+bez uciętej końcowej linii i bez legacy records. Export zawiera 27 artefaktów
+i 42 gate receipts:
+`artifacts/engineering-private-evidence/evidence-ebd9840abba364743479462563e48e3f1c1b5f370f03396a77521b07481eec4e.json`.
+
 ## WU-02 — evidence, mutation audit i task gate
 
 - Status: `PENDING`
@@ -3288,6 +8983,612 @@ audytu `PASS`, handoffu ani statusu `DONE`.
 - Weryfikacja:
   `. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`
 
+## Recovery checkpoint — 2026-09-07
+
+R6 po pierwszej korekcie workera: komenda dwóch suite'ów opisana wyżej
+zwróciła `97/97`, exit `0`, lecz przywrócenie self-append nie dało RED.
+Primary nie zaakceptował tego dowodu. Trwa korekta z wymaganymi testami:
+dwa call-site slots, jeden współdzielony manifest pakietu, brak required
+diagnostic/consuming manifest, niekompletny dynamic manifest oraz
+wieloliniowy comment decoy. Nie traktować tego checkpointu jako PASS.
+Nie uruchomiono nowego live; materialna decyzja o changelogu nadal oczekuje
+na właściciela. `pnpm workflow:validate`: exit `0`, `55 tasks`.
+
+Późniejszy checkpoint R6: worker uzyskał rzeczywiste RED→GREEN dla
+self-append, dynamic envelope, zachowania linii komentarza i same-package
+manifest `query:null`. Primary odczytał predykat oraz parametryzowany
+produkcyjny prefetch→finalize test dla obu pakietów. Pełna komenda bramki
+uruchomiona przez primary: lint/format/build `29/29`, cached `0`; Vitest
+`3394 passed / 2 opt-in live skipped`, `248 passed / 2 skipped` plików.
+Cały łańcuch zakończył się jednak exit `2` w root typecheck: nowe trzy
+syntetyczne plany testowe nie miały kompletnych metadanych kontraktu
+(`repair-context.test.ts:295,339,343,395`, TS2345). Trwa wyłącznie korekta
+fixture typing, bez osłabiania kontraktu; pełna bramka wymaga powtórzenia.
+
+Po uzupełnieniu pełnego kontraktu syntetycznych planów primary ponowił
+całą komendę bramki: exit `0`, build `29/29` cached `0`, Vitest
+`3394 passed / 2 opt-in live skipped` (248 plików passed, 2 skipped),
+typecheck `46/46` cached `0`, workflow `55 tasks`. Nie jest to jeszcze
+finalny odbiór: dodatkowy bezpośredni strict `tsc` pliku
+`apps/agent-worker/test/engineering-execution.integration.test.ts`
+(nieobjętego standardowym typecheckiem) zwrócił exit `2`. Ujawnił drift
+fixture typing: stare SliceContract schema, union narrowing, projekcję
+RepairContextPlanEntry i nieaktualny kształt factory. Trwa ograniczona
+naprawa wyłącznie tego pliku, bez zmian produkcji, scenariuszy ani asercji.
+Po naprawie wymagane direct strict tsc, suite oraz ponowna pełna bramka.
+
+Końcowy lokalny checkpoint `2026-09-07`: primary przejął jedynie fixture
+typing po powtarzających się nieukończonych zleceniach; worker nie miał już
+ownership. Uzupełniono aktualny SliceContract schema 2, jawne typy mutable
+fixture arrays, zawężenia null/union i lokalną dyskryminowaną projekcję
+READ/SEARCH bez osłabiania kontraktu. Nie zmieniono produkcji ani asercji.
+Bezpośrednia komenda:
+`. scripts/dev/env.sh && pnpm exec tsc --noEmit --target ES2023 --lib ES2023 --module NodeNext --moduleResolution NodeNext --moduleDetection force --resolveJsonModule --isolatedModules --verbatimModuleSyntax --strict --noImplicitOverride --noUncheckedIndexedAccess --exactOptionalPropertyTypes --noFallthroughCasesInSwitch --noImplicitReturns --noUnusedLocals --noUnusedParameters --forceConsistentCasingInFileNames --skipLibCheck --types node apps/agent-worker/test/engineering-execution.integration.test.ts`
+— exit `0`. Zachować tę dodatkową kontrolę przy kolejnych zmianach: root i
+package tsconfig nie obejmują tego pliku. Następnie primary uruchomił oba
+suite'y z wymaganym środowiskiem: `101/101`, exit `0`, scoped ESLint i
+`git diff --check` exit `0`.
+
+Własna mutacja primary: tymczasowe usunięcie gałęzi akceptującej kompletny
+manifest `query:null` w `boundEngineeringRepairPrefetchedEvidence`.
+`. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts -t 'resolves a call-site type'`
+dało RED exit `1` (same-package `REQUIRED_DECLARATION_TRUNCATED`, drugi
+wariant PASS), a po przywróceniu dokładnie tej gałęzi GREEN exit `0`,
+`2 passed / 74 filtered`. Żaden mutant nie pozostał.
+
+Ostatnia pełna komenda WU-02 wykonana przez primary po tych zmianach:
+exit `0`, lint/format OK, build `29/29` cached `0`, Vitest `3394 passed /
+2 opt-in live skipped` w `248 passed / 2 skipped` plikach (181.18 s),
+typecheck `46/46` cached `0`, workflow `55 tasks`, diff check `0`.
+To jest odbiór lokalnej poprawki, nie audyt PASS RA-055 ani dowód nowego live.
+Nie trwa żaden test live. Nie utworzono commita/pusha, audytu ani handoffu.
+PDF diagramu jest gotowy w `docs/architecture/ENGINEERING_LOOP_DIAGRAM.pdf`.
+
+Następny krok wymaga decyzji właściciela opisanej wyżej: czy nowy benchmark
+ma objąć changelog, czy changelog jest jawnie osobnym krokiem. Nie ponawiać
+kosztownego live z objective, którego zamrożony scope nie pozwala wykonać.
+Po decyzji zachować stare manifesty/journale/worktree, przygotować zgodny
+scope, wykonać fresh preflight i nowy invocation. Dopiero rzeczywisty
+sukces, pełna weryfikacja oraz audyt mogą domknąć RA-055. Wcześniejszy
+samodzielny run workera bez `env.sh` z błędnym portem PostgreSQL nie jest
+dowodem ani nierozstrzygniętym flake: poprawny run z env i dwa kolejne pełne
+przebiegi potwierdziły działanie na wykrytym PostgreSQL.
+
+Całe poniższe brudne drzewo jest zamierzonym, niezacommitowanym stanem
+prac RA-055 i dokumentacji odziedziczonym oraz rozwijanym w tej sesji.
+Nie usuwać ani nie przywracać tych plików. Brak zgody na commit częściowy;
+brak finalnego gate/audytu zamykającego task. Dokładne ścieżki:
+
+- `apps/agent-worker/src/engineering-debug-journal.ts`
+- `apps/agent-worker/src/engineering-execution.ts`
+- `apps/agent-worker/src/engineering-live-qualification.ts`
+- `apps/agent-worker/src/engineering-repair-context.ts`
+- `apps/agent-worker/src/engineering-workflow.ts`
+- `apps/agent-worker/src/handlers.ts`
+- `apps/agent-worker/src/vertical-slice-executor.ts`
+- `apps/agent-worker/src/worker.ts`
+- `apps/agent-worker/src/xcode-gate-adapter.ts`
+- `apps/agent-worker/test/engineering-debug-journal.test.ts`
+- `apps/agent-worker/test/engineering-execution.integration.test.ts`
+- `apps/agent-worker/test/engineering-live-ios.integration.test.ts`
+- `apps/agent-worker/test/engineering-live-qualification.test.ts`
+- `apps/agent-worker/test/engineering-qualification-adversarial.integration.test.ts`
+- `apps/agent-worker/test/engineering-qualification-boundaries.integration.test.ts`
+- `apps/agent-worker/test/engineering-qualification-control.integration.test.ts`
+- `apps/agent-worker/test/engineering-qualification-fixture.ts`
+- `apps/agent-worker/test/engineering-qualification-recovery.integration.test.ts`
+- `apps/agent-worker/test/engineering-workflow.integration.test.ts`
+- `apps/agent-worker/test/vertical-slice-e2e.integration.test.ts`
+- `apps/agent-worker/test/vertical-slice-executor.integration.test.ts`
+- `apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`
+- `docs/architecture/ENGINEERING_LOOP_DIAGRAM.pdf`
+- `docs/audits/CROSS_TASK_FINDINGS.md`
+- `docs/audits/ENGINEERING_LOOP_TECHNICAL_AUDIT_2026-09-05.md`
+- `docs/decisions/ADR-0017-engineering-evidence-identity-and-outcomes.md`
+- `docs/decisions/ADR-0018-typed-engineering-gate-failures.md`
+- `docs/decisions/ADR-0019-non-vacuous-xcode-test-evidence.md`
+- `docs/decisions/ADR-0020-benchmark-bound-slices-and-planned-context.md`
+- `docs/decisions/ADR-0021-gate-correction-candidate-authority.md`
+- `docs/decisions/ADR-0022-typed-review-correction-target-authority.md`
+- `docs/decisions/ADR-0023-failed-mutation-recovery-target-continuity.md`
+- `docs/decisions/ADR-0024-measured-compiler-repair-context-budget.md`
+- `docs/decisions/README.md`
+- `docs/work-units/RA-055/ENGINEERING_COMPLETION_PLAN.md`
+- `docs/work-units/RA-055/WORK_UNITS.md`
+- `packages/agent-orchestrator/src/engineering/workflow.ts`
+- `packages/agent-orchestrator/src/supervisor/runtime.ts`
+- `packages/agent-orchestrator/test/engineering-workflow-runtime.test.ts`
+- `packages/bedrock-runtime/test/tool-loop.test.ts`
+- `packages/contracts/src/engineering-workflow.ts`
+- `packages/contracts/src/planner-port.ts`
+- `packages/contracts/test/__snapshots__/schema-snapshot.test.ts.snap`
+- `packages/contracts/test/engineering-workflow.test.ts`
+- `packages/implementation-tools/src/read-tools.ts`
+- `packages/implementation-tools/src/toolset.ts`
+- `packages/implementation-tools/test/read-tools.test.ts`
+- `packages/implementation-tools/test/toolset.integration.test.ts`
+- `packages/model-provider-codex-cli/src/invocation.ts`
+- `packages/model-provider-codex-cli/test/preflight.test.ts`
+- `packages/model-provider-codex-cli/test/transport.test.ts`
+- `packages/model-runtime/src/tool-loop.ts`
+- `packages/model-runtime/test/process-runner.test.ts`
+- `packages/repository-planner/src/discovery-policy.ts`
+- `packages/repository-planner/src/index.ts`
+- `packages/repository-planner/src/read-tools.ts`
+- `packages/repository-planner/test/read-tools.test.ts`
+- `packages/review-loop/src/contracts.ts`
+- `packages/review-loop/src/pre-commit.ts`
+- `packages/review-loop/test/pre-commit.integration.test.ts`
+- `packages/review-loop/test/review.integration.test.ts`
+- `packages/test-evidence/src/contracts.ts`
+- `packages/test-evidence/src/engineering-gates.ts`
+- `packages/test-evidence/test/engineering-gates.integration.test.ts`
+- `packages/test-evidence/test/engineering-gates.test.ts`
+- `packages/test-evidence/test/evidence.integration.test.ts`
+- `scripts/docs/render-engineering-loop-pdf.swift`
+- `test/engineering-evals/behavioral-oracle.test.ts`
+- `test/engineering-evals/behavioral-oracle.ts`
+- `test/engineering-evals/budget-recovery.test.ts`
+- `test/engineering-evals/catalog.test.ts`
+- `test/engineering-evals/fixtures/synthetic-manifest.json`
+- `test/engineering-evals/repair-context.test.ts`
+
+## Zatwierdzona kontynuacja — benchmark z changelogiem, 2026-09-07
+
+Właściciel odpowiedział „tak zatwierdxam” na pytanie o nową wersję benchmarku
+obejmującą changelog. Poprzednia blokada zakresu jest rozstrzygnięta.
+Bazowy commit nadal `ce9b2ff62e3c947c72c0fafca47d192af983ce98`.
+Istniejące manifest/config/overlay/objective, seed, source i wcześniejsze
+worktree pozostają niezmienione. Nie rozszerzać tej zgody na push/MR/Jira.
+
+Kontynuacja WU-01: utworzyć prywatny, odrębny bundle
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/benchmark-20260907-changelog/`
+z nowym benchmark ID, zachowując schema version `1`. Dodać dokładny SOURCE
+target `SonderClient/TestFlight/WhatToTest.en-US.txt` do drugiego slice'a,
+wymagany READ i osobne criterion/gate sprawdzające wpis MOBL-2023 oraz
+zachowanie istniejących notatek. Ogólny write allowlist już zawiera tę ścieżkę;
+nie zwiększać go. Wszystkie stare gates, modele, budżety i seed SHA bez zmian.
+Przeliczyć config/catalog/manifest/raw/overlay digests przez produkcyjne
+loadery. Zatwierdzenie dotyczy zakresu, nie pominięcia bramek.
+
+Allowed paths dla tej ograniczonej zmiany: nowy prywatny bundle powyżej,
+`apps/agent-worker/test/engineering-live-ios.integration.test.ts`, niniejszy
+plan oraz istniejący runbook `ENGINEERING_COMPLETION_PLAN.md`. Dokładnie jeden
+dodatkowy READ changeloga może zwiększyć task-specific limit kontekstu
+harnessu z 18 do 19 wyłącznie przy obecności zwalidowanego nowego gate;
+globalne limity i dotychczasowy benchmark pozostają bez zmian.
+Weryfikacja: prywatny gate na seedzie RED i na izolowanym poprawnym fixture
+GREEN, mutation brak wpisu/utrata istniejącej notatki RED, produkcyjny
+preflight bez wywołania modelu, direct strict tsc harnessu oraz pełna bramka
+WU-02. Potem nowy jawny invocation Codex subscription, bez ręcznych zmian iOS.
+
+Nowy bundle zweryfikowany przed live: `verify-changelog.mjs` exit `0`
+(brak wpisu, duplikat, usunięta notatka i nieadekwatny opis dają gate exit `1`;
+poprawny wpis exit `0`). `--mutant-preservation` daje exit `1`, a normalny
+skrypt po tej niemutującej plików próbie ponownie exit `0`.
+`preflight.mjs` korzysta z produkcyjnego resolvera i auth preflight, bez
+wywołania modelu: exit `0`, 13 targets / 3 criteria / 7 gates, czysty seed,
+Codex CLI `0.153.3`, wszystkie role `codex-sol-live` / `gpt-5.6-sol`,
+Xcode `26.1.1` / `17B100`, PG SELECT `1`, ok. 48.8 GiB wolnego miejsca.
+Source HEAD `2724725dae3659f18cd308bc91e43d5550e7ab71`, wyłącznie wcześniej
+nieśledzone `help.imageset/Contents.json` oraz `help.pdf`; seed bez zmian.
+
+Digests nowej wersji:
+- config `sha256:72c30ae946d10f199b59632bf3b3e226fe6c2488dc62023961d937a95cf25a04`
+- catalog `sha256:b6f67654cabb5e00b8e0ccffd741efd0b612685de351b5858d5df89e1ffea50f`
+- manifest `sha256:9aec67e86f22cc3e7e550c0c9d359b8863b065baa5de92080abee5b3b636b78b`
+- overlay `sha256:7253939088c1c0033ac172abe0156e6a0f78c37b4324afa6b9e74d1c8d5f8f50`
+
+Primary przeczytał nowy gate, bindingi, scenariusze testowe i zmianę harnessu.
+Direct strict tsc harnessu oraz pełna komenda WU-02: exit `0`, build `29/29`
+cached `0`, Vitest `3394 passed / 2 opt-in live skipped` (195.24 s),
+typecheck `46/46` cached `0`, workflow `55 tasks`, lint/format/diff check `0`.
+Poprzednie config/manifest/overlay niezmienione; prywatny nowy bundle wraz
+z README i dwoma skryptami jest zamierzonym artefaktem poza git repo.
+To umożliwia nowy invocation, nie oznacza jego sukcesu.
+
+Nowy live wystartował `2026-09-06T23:52:05Z` (lokalnie 2026-09-07):
+invocation `mobl-2023-changelog-20260906T235142Z`,
+case `ra045_445ed310-a850-46a8-ae78-b677238d4cdd-case`,
+run `run_6eff9f5b-1b51-4d51-864b-0738ec384b95`.
+Journal `artifacts/engineering-debug/engineering-6ec4fd5a2e6ebf6f94c4916b79e282887405197d9dcf27d1938777995f9c28b8.jsonl`.
+Rzeczywisty preflight w harnessie potwierdził nowy manifest i profile;
+pierwszy etap `SYSTEM_DESIGN`. Podczas invocation nie edytować runtime,
+bundle ani worktree. Monitorować terminal i rzeczywiste provider tokens;
+sam start nie jest dowodem sukcesu. Wszystkie poprzednie artefakty zachowane.
+
+Checkpoint terminal nowego invocation: zakończony `2026-09-07T00:30:52.152Z`,
+harness exit `1`, status `FAILED`, bez commita i bez final verification.
+Czas journalu `2326958 ms`, provider tokens `1036388` (estimated/missing/partial
+`0`), 12 zakończonych prób implementacji. Pierwszy slice uzyskał review PASS
+w próbie 7; drugi zatrzymał się po trzech buildach CURRENT exit `65`.
+Nowy gate changeloga rzeczywiście dał exit `0` trzy razy. Ostatnie diagnostyki
+dotyczą wygenerowanych testów Swift: brakujących typów/helpers i argumentów
+inicjalizacji. Operacja implementacji 13 została rozpoczęta, lecz nie ma jej
+wywołania modelu ani receiptu; przyczyna przygotowania korekty wymaga diagnozy,
+nie wolno nazywać tego limitem prób bez dowodu.
+
+Primary uruchomił produkcyjne `reconstructEngineeringDebugJournal` dla tego
+journalu z asercjami integralności, terminala i kompletności: exit `0`,
+`integrity_valid=true`, `terminal_present=true`, `diagnostic_completeness=COMPLETE`.
+Prywatny eksport: `artifacts/engineering-private-evidence/evidence-d1ddfc3b220c60d43e97022bc29272498faaa6d3b659ab6c8f5bc163f57a42d7.json`.
+Worktree `workspaces/ra045_445ed310-a850-46a8-ae78-b677238d4cdd-case/engineering-26fa41941c1e3262ddedb87bb309efad`
+zachowany, HEAD nadal seed `cd46c82de01d6ec4c5e614bcab9dc15f07560642`,
+13 zmienionych plików, 375 additions / 19 deletions. Seed czysty; źródłowy
+checkout zachowuje wyłącznie dwa wcześniejsze nieśledzone pliki ikony.
+Nie ma aktywnego live. Następny krok: read-only reprodukcja przyczyny wyjątku
+przed modelem w próbie 13, następnie ewentualna naprawa frameworka z RED/GREEN;
+bez ręcznego naprawiania iOS ani ślepego ponawiania benchmarku.
+
+Diagnoza journalu: seq `854` to `SEARCH_TEXT / FAILED / OVERSIZE`, a seq `855`
+to `EngineeringImplementationContextError / IMPLEMENTATION_CONTEXT_READ_FAILED`.
+Primary potwierdził, że fallback wyszukiwania deklaracji w
+`prefetchEngineeringImplementationContext` obsługuje tylko `OUTPUT_TOO_LARGE`.
+Lokalny krok naprawczy: zachować istniejące ograniczenia i fail-closed, ale
+obsłużyć oba kody odmowy rozmiaru w tym jednym fallbacku. Allowed paths:
+`apps/agent-worker/src/engineering-execution.ts`,
+`apps/agent-worker/test/engineering-execution.integration.test.ts` oraz ten plan.
+Weryfikacja kroku: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts`;
+nowy test najpierw RED, potem GREEN, direct strict tsc testu, własny diff review
+primary. Osobna read-only reprodukcja na zachowanym worktree ma rozstrzygnąć,
+czy fallback pomaga rzeczywistemu przypadkowi, czy limit wynika ze skanowania
+plików, a nie liczby trafień. Nie uznawać lokalnej poprawki za dowód sukcesu live.
+
+Checkpoint lokalnej poprawki OVERSIZE: primary przeczytał zmienioną gałąź
+i parametryzowany test, następnie własnoręcznie usunął obsługę `OVERSIZE`:
+focused regression exit `1` (OVERSIZE failed, OUTPUT_TOO_LARGE passed).
+Po przywróceniu kodu focused exit `0` (2 passed), cały execution suite exit
+`0` (77 passed). Direct strict tsc testu oraz pełna komenda taska uruchomione
+przez primary: exit `0`, lint/format OK, build `29/29` cached `0`, Vitest
+`3395 passed / 2 opt-in live skipped`, 248 plików passed / 2 skipped,
+183.48 s, typecheck `46/46` cached `0`, workflow `55 tasks`, diff check `0`.
+Wcześniejsze `101/101` oznaczało dwa suite'y łącznie, nie 101 testów execution.
+
+Ograniczenie dowodu: istniejący scoped fallback test używa mocka katalogu,
+podczas gdy produkcyjne `search(relative_path)` wymaga pliku. Faktyczny port
+uruchomiony read-only na zachowanym worktree potwierdził ten kontrakt, a
+root `EmergencyResources` i `struct EmergencyResources` odnalazły prawdziwą
+deklarację. Nie jest to jeszcze reprodukcja zatrzymania: primary odczytał
+source z diagnostyki `SafetyAlertTests.swift:26` i ustalił wymagany call-site
+symbol `EmergencyResourcesViewModel`. Następny krok to dokładne wyszukiwanie
+tego symbolu, nie ponawianie live na podstawie mocka. Brak aktywnego live.
+
+Rzeczywista reprodukcja właściwego symbolu wykazała `OVERSIZE` dla
+`EmergencyResourcesViewModel` i jego globalnych zapytań struct/class.
+Natomiast locator `EmergencyResourcesView` zwrócił dokładnie jeden plik
+`ChatEmergencyResourcesView.swift`; exact-file SEARCH potwierdził deklarację,
+READ zwrócił 4551 bytes. Komenda read-only produkcyjnego planner port: exit `0`.
+Sama obsługa kodu OVERSIZE nie zamyka więc rzeczywistego defektu.
+
+Ograniczona decyzja implementacyjna: dla symbolu `*ViewModel` dodatkowy locator
+usuwa wyłącznie końcowe `Model`, wybiera najwyżej 3 deterministyczne obserwowane
+kandydaty `.swift` z pasującym basename i sprawdza oryginalną deklarację przez
+exact-file SEARCH. Dopiero potwierdzony plik trafia do READ/manifest evidence.
+Bez hardkodowanych ścieżek projektu; brak dopasowania nadal fail-closed.
+Koszt najwyżej 4 dodatkowych odczytowych wywołań jest uwzględniony w planie
+(dla call-site przed poznaniem symbolu: konserwatywnie), limit 48 bez zmian.
+Allowed paths poprzedniego kroku rozszerzone wyłącznie o
+`apps/agent-worker/src/engineering-repair-context.ts` i
+`test/engineering-evals/repair-context.test.ts`.
+Weryfikacja: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts test/engineering-evals/repair-context.test.ts`,
+real-port fixture RED/GREEN, przypadki pozornej deklaracji i odmowy, strict tsc,
+pełna bramka. Poprawić nierealistyczny directory mock; nie poszerzać kontraktu
+narzędzia w celu dopasowania go do mocka. Live nadal nieaktywny.
+
+Primary zachował dodatkową niemutującą reprodukcję poza zamrożonym bundle:
+`/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/replay-viewmodel-context.mjs`.
+Odtwarza slice, cumulative paths i ostatnie compiler diagnostics z dokładnego
+eksportu, ładuje produkcyjny config, planner i `createImplementationReadTools`,
+wykonuje prefetch/finalize bez modelu i zapisuje wyłącznie strukturalne wyniki
+odczytów. Na dist po samej obsłudze OVERSIZE, przed locator fallbackiem:
+`. scripts/dev/env.sh && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/replay-viewmodel-context.mjs`
+— exit `1`, `IMPLEMENTATION_CONTEXT_READ_FAILED`, 26 wywołań / cap 48,
+24 plan entries. Po naprawie należy zbudować aktualny dist z `--force`
+i powtórzyć identyczną komendę; dawny build nie jest dowodem nowego kodu.
+Prywatny skrypt jest zamierzonym zachowanym artefaktem, nie zmianą benchmarku.
+
+Checkpoint locatora: po powtarzających się nieukończonych korektach fixture
+primary przejął ograniczoną korektę testów; Luna zwolniła ownership. Real-port
+fixture musi mieć wcześniejszy duży plik o nazwie NIEpasującej do locatora
+(`UnrelatedLarge.swift`); inaczej test blokuje też filename lookup albo omija
+cały fallback. Własna mutacja primary wyłączyła suffix branch: real-port test
+exit `1`; po przywróceniu obu suite'ów exit `0`, `107/107` (82 execution +
+25 eval). Dodano required/optional READ denial i limit 3 kandydatów; poprawiono
+directory mock na exact-file scope. Direct strict tsc obu suite'ów po korekcie
+zawężenia union w fixture: exit `0`; build `29/29` cached `0`, exit `0`.
+Pełna bramka dla TEGO locatora jeszcze nie zakończona — poprzednie `3395`
+dotyczyło wcześniejszej jednoliniowej poprawki OVERSIZE.
+
+Identyczny prywatny replay na aktualnym dist znalazł już deklarację i manifest
+(25 calls / cap 48, 20 entries), ale zakończył się exit `1` w
+`boundEngineeringRepairPrefetchedEvidence` (`REQUIRED_DECLARATION_TRUNCATED`)
+przy pakowaniu całkowitego evidence. Manifest envelope ma 11938 bytes,
+declaration envelope 4947 bytes, wymagane diagnostic windows ok. 5k bytes.
+Następny krok: rozstrzygnąć kompletność i priorytety source-backed fragments
+przy budżecie 24k bytes / 6k estimated tokens. Bez podnoszenia globalnych
+limitów i bez nowego live, dopóki identyczny replay nie da exit `0`.
+
+Diagnoza pakowania: dwa zweryfikowane READ-envelope return paths zachowywały
+oryginalny JSON jako evidence zamiast już zweryfikowanego `content`, przez co
+ponowne kodowanie zużywało budżet na powtórzone metadane. Wprowadzono
+bezstratne `evidence: content` dla kompletnego odczytu bez anchors i dla
+zweryfikowanego excerptu, zachowując digest, ścieżkę i zakres. Primary przeczytał
+obie zmiany i przebudował dist: build `29/29` cached `0`, exit `0`.
+Identyczny replay przeszedł pakowanie, ale dał teraz exit `1`,
+`REQUIRED_DECLARATION_UNRESOLVED`: finalizer dopuszczał tylko basename równy
+symbolowi, mimo source-backed deklaracji w pliku o innej nazwie.
+
+Ograniczona korekta w tych samych czterech plikach: wymagany direct declaration
+READ dostaje server-owned marker `__declaration_lookup__:<symbol>` (dotychczasowy
+call-site marker z `@path:line` bez zmian). Finalizer uznaje marker wyłącznie
+wraz ze zweryfikowanym READ i rzeczywistą deklaracją symbolu; marker ani usage
+nie wystarczają. Dynamiczne wymagane READ i manifest muszą mieć ten sam priorytet
+w sortowaniu co w kontroli budżetu. Zachować wszystkie walidacje kompletności,
+digestów, ścieżek, manifestu i limitów. Weryfikacja: RED/GREEN dla pliku o innej
+nazwie, negatywne brak deklaracji/manifestu, oba suite'y, strict tsc, identyczny
+prywatny replay oraz pełna bramka. Bez nowego live przed replay exit `0`.
+
+Checkpoint rzeczywistej reprodukcji po korektach: primary uzupełnił brakujący
+w zleceniu wspólny predicate wymagalności w sortowaniu i kontroli budżetu.
+Nowy test najpierw dał exit `1`, bo wcześniejsze opcjonalne evidence wypierało
+wymagany manifest; po korekcie oba suite'y exit `0`, `109/109`.
+Primary dodał też negatywne brak manifestu / usage zamiast deklaracji oraz
+asercję markera na rzeczywistym porcie. Własna mutacja markera:
+real-port test exit `1`; produkcyjny marker przywrócony.
+Po naprawieniu dwóch niezgodności typów nowych fixtures (union failure_code
+oraz null zamiast string w syntheticRead) direct strict tsc obu suite'ów exit
+`0`, build `29/29` cached `0`, exit `0`.
+
+IDENTYCZNY prywatny replay na aktualnym dist zakończył się exit `0`:
+`COMPLETE`, 25 calls / cap 48, 20 plan entries, 15 retained evidence entries.
+To dowód naprawy odtworzonego przygotowania korekty, nie sukces nowego live.
+Pełna komenda taska plus replay wystartowała ponownie; poczekać na terminal
+exit code, zanim kolejny invocation zostanie uruchomiony. Wszystkie mutacje
+przywrócone; brak aktywnego live, brak zmian iOS/configu/benchmarku.
+
+Pełna bramka po komplecie powyższych korekt i po przywróceniu mutacji:
+`. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check && node /Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/replay-viewmodel-context.mjs`
+— primary exit `0`: 3402 tests passed / 2 opt-in live skipped, 248 plików
+passed / 2 skipped, 190.23 s; build 29/29 cached 0; typecheck 46/46 cached 0;
+workflow 55 tasks; identyczny replay COMPLETE (25/48 calls, 15 evidence entries).
+Ponowny produkcyjny preflight exit `0`, niezmienione digests benchmarku,
+wszystkie role Codex ChatGPT subscription, PG SELECT 1, Xcode 26.1.1,
+ok. 46.7 GiB wolnego miejsca. Następna próba jest drugą próbą nowego bundle;
+koszt pierwszej 1036388 provider tokens zostaje zachowany w bilansie kampanii.
+
+Drugi invocation nowego bundle wystartował `2026-09-07T01:15:34.953Z`:
+`mobl-2023-context-recovery-20260907T011533Z`,
+case `ra045_a1d94149-a773-4b97-9864-91feacdbe1bc-case`,
+run `run_e1611fe6-3360-403f-969a-003aee0959a8`.
+Journal `artifacts/engineering-debug/engineering-6e3feaf30ffbcf5a8e74d6655beed46e26943e5cd48f0739e32af95e6c106f5a.jsonl`.
+Rzeczywisty preflight harnessu potwierdził to samo zamrożone źródło i config.
+Checkpoint po SYSTEM_DESIGN: PROGRAM_DESIGN, 12571 provider tokens.
+Invocation jest AKTYWNY; nie zmieniać runtime, configu, benchmarku ani iOS.
+Monitorować terminal i usage, zachować nowy worktree/journal oraz wszystkie
+poprzednie artefakty. Start nie oznacza sukcesu. Następny krok po terminalu:
+odczytać receipts/export, zrekonstruować journal i ocenić faktyczny wynik.
+
+Terminal drugiego invocation: `2026-09-07T01:39:14.511Z`, harness exit `1`,
+FAILED, 1419558 ms, 713928 provider tokens (estimated/missing/partial 0),
+bez commita. Pierwszy slice przeszedł review po próbie 1. Szybki gate
+non-vacuous odrzucił próby 2 i 3 za brak rzeczywistych testów zachowania.
+Build próby 4 wykrył brak typu EmergencyResources; korekta 5 została wykonana.
+Build 5 ujawnił dalsze błędy testów Swift; przygotowanie korekty 6 wykonało
+odczyty, ale finalizacja evidence odmówiła `REQUIRED_DECLARATION_TRUNCATED`.
+Brak aktywnego live. Bilans dwóch prób tej wersji: 1750316 provider tokens.
+
+Primary `reconstructEngineeringDebugJournal` z asercjami integralności,
+terminala i COMPLETE: exit `0`. Prywatny eksport:
+`artifacts/engineering-private-evidence/evidence-d7d707ec3631166da390fd94dee76ad4b1c358ce568d0a2d3318ba3059fcf741.json`.
+Worktree `workspaces/ra045_a1d94149-a773-4b97-9864-91feacdbe1bc-case/engineering-c574a0ec8a6076a11a9979b68411c3dd`
+zachowany: HEAD seed cd46c82de01d6ec4c5e614bcab9dc15f07560642, 13 files,
+379 additions / 15 deletions. Nie wykonano ręcznych korekt iOS.
+
+Prywatny replay przyjmuje teraz opcjonalny path eksportu; bez argumentu
+nadal odtwarza pierwszy przypadek. Drugi przypadek z powyższym eksportem:
+exit `1`, 25/48 calls, 14 plan entries. Opcja `--measure` nie zmienia
+produkcji ani wyniku komendy: kopie limitów w pamięci wykazały failure przy
+24k i 28k, a kompletne evidence przy 32k (31415 bytes / 7854 tokens).
+
+Decyzja techniczna `ADR-0024`: 48k bytes / 12k estimated tokens wyłącznie dla
+kontekstu korekty; globalny budżet live, calls, scope i benchmark bez zmian.
+Allowed paths: engineering-execution.ts, engineering-repair-context.ts,
+oba istniejące suite'y execution/evals, ADR-0024, completion plan i ten plan.
+Krok: wersjonowana code-owned polityka w stage config digest, regresja ponad
+starym limitem oraz odmowa ponad nowym; mutation RED/GREEN, strict tsc, pełna
+bramka i oba read-only replaye. Dopiero potem ewentualna trzecia (ostatnia)
+próba bieżącej kampanii. Nie oznaczać sukcesu z samego pomiaru większego limitu.
+
+Checkpoint ADR-0024: primary odczytał politykę, jej użycie w builderze i binding
+`compiler_repair.context_policy` w implementation-stage configDigest oraz nowe
+regresje finalizera. Własna mutacja wyłączająca kontrolę bytes/tokens w finalizerze:
+test pakietu 49k exit `1` (brak oczekiwanej odmowy); kontrola przywrócona.
+Następnie własne dwa suite'y: `111/111`, exit `0`; direct strict tsc obu plików
+exit `0`. Build `--force`: 29/29, cached 0, exit `0`.
+Oba produkcyjne prywatne replaye na świeżym dist exit `0`, bez `--measure`:
+pierwszy COMPLETE, 25/48 calls, 22 evidence, 25987 bytes / 6497 estimated tokens;
+drugi COMPLETE, 25/48 calls, 22 evidence, 31415 bytes / 7854 estimated tokens.
+To lokalne dowody przygotowania korekty, nie sukces live. Pełna bramka taska
+uruchomiona ponownie; wynik terminalny jeszcze wymagany przed trzecią próbą.
+
+Pełna bramka po ADR-0024 (primary, identyczna komenda taska): exit `0`,
+3404 passed / 2 opt-in skipped, 248 plików passed / 2 skipped, 188.58 s.
+Build 29/29 cached 0, typecheck 46/46 cached 0, workflow 55 tasks OK.
+Preflight nowego bundle ponownie exit `0`, niezmienione digests i profile,
+49501048832 bytes dostępnego dysku. Trzecia próba zatwierdzonej kampanii
+może ruszyć; limit liczby prób oraz dotychczasowe 1750316 provider tokens
+nie są resetowane. Żaden mutant nie pozostał w kodzie.
+
+Trzeci invocation wystartował `2026-09-07T02:00:15Z`:
+`mobl-2023-context-policy-v2-20260907T020013Z`,
+case `ra045_b69e23b9-28a6-446b-ac8c-f91d32f614fd-case`,
+run `run_4a547e71-5f44-48b2-98ae-0def2484a742`.
+Journal `artifacts/engineering-debug/engineering-5a9152735adc68aefed12ea33e8b5286a6b159070d8c111811984e854b7df1ef.jsonl`.
+Harness potwierdził rzeczywisty preflight i rozpoczął SYSTEM_DESIGN.
+Invocation AKTYWNY: nie edytować runtime, benchmarku, configu ani iOS.
+Monitorować terminal i provider usage; jest to ostatnia próba bieżącej kampanii.
+
+Terminal trzeciego invocation `2026-09-07T02:39:30.557Z`: harness exit `1`,
+FAILED, 2355266 ms, 999408 provider tokens (estimated/missing/partial 0),
+bez commita. Bilans kampanii: 2749724 provider tokens; wykorzystane 3/3 próby.
+Nie uruchamiać czwartego live bez nowej zgody na kampanię. Brak aktywnego live.
+Pierwszy slice: review próby 1 CHANGES_REQUIRED, próby 2 PASS. Próby 3 i 4
+odrzucone przez non-vacuous FAST gate (brak testów); Xcode prób 5..8 exit 65.
+Korekty kompilacji 6, 7 i 8 dotarły do modelu, także diagnostyki z pięciu
+plików testowych. Ostatnia przygotowywana korekta 9 odmówiła
+`REQUIRED_DECLARATION_UNRESOLVED`, nie błędem limitu 48k.
+
+Primary rekonstrukcja journalu z asercjami integralności, terminala i COMPLETE:
+exit `0`, 790 rekordów. Prywatny eksport:
+`artifacts/engineering-private-evidence/evidence-f89c5b8f5534cb0539938ebd765be53784d330a22d51caa5abed9aa874acb965.json`.
+Worktree `workspaces/ra045_b69e23b9-28a6-446b-ac8c-f91d32f614fd-case/engineering-9592a211606dccd2ffbdeabdfc2ce752`
+pozostaje zachowany. Następny krok: lokalna reprodukcja exact unresolved
+declaration z eksportu, ograniczona naprawa i własna bramka; bez ręcznej zmiany iOS.
+Read-only eksploracja wskazała również brak required receiver declaration dla
+diagnostyki `value of type 'AgentAIPreferences' has no member ...`:
+dynamiczny lookup obejmuje missing-type, a receiver member-error pozostaje
+opcjonalnym USAGE SEARCH. To wyjaśnia ryzyko dwóch kolejnych zgadywanych
+właściwości; minimalna korekta ma odzyskać deklarację receivera bez nadawania
+member name uprawnień i bez zmiany limitów/scope.
+
+Potwierdzenie zachowania wyniku trzeciej próby: HEAD nadal seed
+`cd46c82de01d6ec4c5e614bcab9dc15f07560642`; 13 staged files, 429 additions /
+15 deletions (`git diff HEAD --stat`, nie samo `git diff`). Source checkout
+ma wyłącznie wcześniej dodany przez właściciela help.imageset.
+Lokalna korekta R6 receiver evidence: allowed paths istniejący helper
+engineering-repair-context.ts i eval repair-context.test.ts. Rozpoznać
+wyłącznie receiver z typed member diagnostic, odzyskać jego source-backed
+deklarację i manifest istniejącą ścieżką; member pozostaje usage. Bez zmian
+budżetu/autoryzacji. Weryfikacja: negatywne parsing/scope, dedup, required
+failure i mutation RED/GREEN, oba suite'y, strict tsc, replay i pełna bramka.
+
+Exact terminal replay: prywatny skrypt przyjmuje teraz `--latest` (dotychczasowy
+domyślny filtr isVoice zachowany). Primary uruchomił go z trzecim eksportem
+na tym samym dist co live: exit `1`, REQUIRED_DECLARATION_UNRESOLVED, 25/48 calls,
+17 plan entries. Required lookup: Application, wyprowadzony z constructor
+call-site, nie z samego diagnosticSymbols. Root SEARCH SUCCEEDED zwrócił
+wyłącznie usages; nie wykonano keyword fallback. Wcześniejsza hipoteza
+read-only agenta o stale dist była niepoparta i została odrzucona przez replay.
+Rzeczywista deklaracja istnieje w
+SharedLibrary/Sources/Utilities/Utilities/UIApplication+DependencyKey.swift.
+Ograniczona korekta istniejącego R6 obejmuje dodatkowo engineering-execution.ts
+i jego integration test: uruchomić ten sam bounded declaration fallback także
+dla poprawnego SUCCEEDED search bez deklaracji, zachować odmowę dla malformed
+envelope, limity i required/optional READ semantics. Real-port regresja,
+mutation RED/GREEN i exact replay trzeciego eksportu są obowiązkowe.
+
+Checkpoint korekty po trzeciej próbie: primary odczytał rzeczywisty diff i
+uzupełnił brakujące w raporcie implementera testy oraz kontrolę malformed
+search envelope. Poprawił też niezamierzone połknięcie required FAILED search
+przez `lookupPath === null`. Nowy real-port fixture odwzorowuje filename-only
+wynik Application, następnie keyword SEARCH, exact READ i kompletny manifest.
+Negatywne malformed/OUT_OF_SCOPE wykonują dokładnie jeden SEARCH bez fallbacku.
+Receiver parser jest zakotwiczony, uwzględnia statyczny dostęp, zachowuje
+dotychczasową opcjonalność test-only symboli i nie promuje compound/aka ani prose.
+
+Własne mutacje primary: wyłączenie success-without-declaration fallback — RED
+exit `1`; wyłączenie receiver extraction — RED exit `1`; wyłączenie walidacji
+search envelope — RED exit `1`. Wszystkie przywrócone. Oba suite'y po pierwszych
+dwóch mutacjach: 115/115 exit `0`; direct strict tsc exit `0`.
+Build --force 29/29 cached 0 exit `0`, exact trzeci replay --latest exit `0`:
+COMPLETE, 28/48 calls, 17 plan entries, 26 evidence entries, 25261 bytes /
+6316 estimated tokens. Faktyczne READ: UIApplication+DependencyKey.swift oraz
+SharedLibrary/Package.swift. Nie wykonano żadnej zmiany iOS ani nowego live.
+Pełna bramka po przywróceniu ostatniej mutacji została uruchomiona; poczekać
+na terminal. Kampania pozostaje wyczerpana, RA-055 IN_PROGRESS.
+
+Końcowe trzy replaye primary na świeżym dist, jedna komenda exit `0`:
+pierwszy COMPLETE 25/48 calls, 44547 bytes / 11137 estimated tokens;
+drugi COMPLETE 25/48 calls, 31415 bytes / 7854 estimated tokens;
+trzeci COMPLETE 28/48 calls, 25261 bytes / 6316 estimated tokens.
+Większy pierwszy pakiet wynika z dodatkowego odzyskanego evidence po fallbacku;
+nadal mieści się w niezmienionym limicie 48k/12k. Nie porównywać tego lokalnego
+token estimate z provider-reported kosztem live. Żaden replay nie wywołuje modelu.
+
+Końcowa pełna bramka primary po wszystkich powyższych zmianach i odtworzeniu
+mutacji: `. scripts/dev/env.sh && pnpm lint && pnpm format && pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run typecheck --force && pnpm workflow:validate && git diff --check`
+— exit `0`, 3408 passed / 2 opt-in skipped, 248 plików passed / 2 skipped,
+193.80 s, build 29/29 cached 0, typecheck 46/46 cached 0, workflow 55 tasks OK.
+
+Stan do wznowienia: brak aktywnego live i writerów; RA-055 IN_PROGRESS.
+Zamierzone dirty tree z listy ścieżek powyżej pozostaje niezacommitowane,
+bo task nie spełnia live AC i nie ma nowej zgody na partial commit.
+Nie usunięto ani nie zmieniono ręcznie żadnego iOS worktree. Nie wykonano push.
+Trzy lokalne reprodukcje COMPLETE nie zastępują kwalifikacji end-to-end.
+Następny wymagany dowód: świeży live na tym samym frozen bundle po NOWEJ zgodzie
+właściciela na dodatkową kampanię/próbę (3/3 wykorzystane, koszt 2749724).
+Proponowany minimalny opt-in: jedna dodatkowa próba, bez zmiany hard cap 1.8M,
+scope/model/gates; preflight ponownie przed startem. Bez zgody nie uruchamiać.
+Po rzeczywistym sukcesie nadal wymagane: pełny diff od bazowego ce9b2ff,
+każde AC osobno, pełna bramka, formalny audyt/handoff/status i lokalne commity
+domknięcia. Nie deklarować gotowości produktu ani PASS przed tymi dowodami.
+
+Nowy opt-in właściciela `2026-09-07`: odpowiedź „tak” zatwierdza dokładnie
+jedną dodatkową próbę live po poprawkach, hard cap 1800000 provider/accounted
+tokens. Poprzedni koszt 2749724 pozostaje w bilansie; nie resetować historii.
+Ten sam frozen bundle, seed, objective i wszystkie role codex-sol-live;
+bez Jira/Discord/Bedrock/Claude/OpenCode/API keys, push ani ręcznych zmian iOS.
+Preflight primary exit `0`: niezmienione digests, Codex 0.153.3, Xcode 26.1.1,
+PG SELECT 1, 48561029120 bytes dostępnego dysku. Brak procesów Xcode/live.
+Ostatnia pełna bramka 3408/2 exit `0` i trzy replaye COMPLETE pozostają bazą
+niezmienionego kodu; następny krok to świeży invocation i nadzór do terminala.
+
+Dodatkowa zatwierdzona próba wystartowała `2026-09-07T06:01:53Z`:
+`mobl-2023-approved-extra-20260907T060151Z`,
+case `ra045_f1f8a2df-e087-46af-a472-b316b7de0469-case`,
+run `run_02d19a7c-9cdb-4072-888d-c38a63f627dc`.
+Journal `artifacts/engineering-debug/engineering-ec02da8b05edeb192acbf348523314b3890784611b0cfdb3e152e644da40495e.jsonl`.
+Invocation AKTYWNY, etap SYSTEM_DESIGN. Nie edytować runtime/configu/benchmarku
+ani iOS podczas przebiegu. Monitorować do terminala, następnie własna
+rekonstrukcja journalu, receipts/export i ocena wyniku; nie zaczynać kolejnej próby.
+
+Terminal dodatkowej próby: `2026-09-07T06:19:32.110Z`, harness exit `1`,
+1058767 ms, 597581 provider tokens, bez commita. Journal rozróżnia poprawnie
+handler SUCCEEDED od Engineering BLOCKED, status FAILED, reason NO_PROGRESS,
+diagnostic COMPLETE, reconciliation false. Zatwierdzone 1/1 dodatkowe live
+wykorzystane; brak aktywnego przebiegu, nie uruchamiać kolejnego bez zgody.
+Łączny koszt czterech prób tego frozen bundle: 3347305 provider tokens.
+Nie osiągnięto drugiego slice'a ani Xcode; wykonano 7 prób implementacji
+pierwszego slice'a. Review prób 1/3/4/6 CHANGES_REQUIRED, incremental FAST
+gate prób 2/5/7 odrzucił ten sam brak konstrukcji EmergencyResourcesViewModel
+w SafetyAlertTests. Zabezpieczenie NO_PROGRESS zatrzymało dalszy churn.
+
+Primary rekonstrukcja journalu z asercjami integralności, terminala i COMPLETE:
+exit `0`, 484 rekordy. Canonical private export:
+`artifacts/engineering-private-evidence/evidence-28af8035efc740c2ad5ea576b1c09645104d132171588d6e8c6cb74701d4b502.json`.
+Worktree zachowane:
+`workspaces/ra045_f1f8a2df-e087-46af-a472-b316b7de0469-case/engineering-c1bd3eda6f1174a8bcf14a5819c6fc7c`.
+Trwa bounded read-only klasyfikacja konfliktu review/bramki z exact exportu;
+nie traktować tej próby jako dowodu regresji albo sukcesu compiler repair,
+ponieważ etap kompilacji nie został osiągnięty. Runtime/config/benchmark/iOS
+nie były ręcznie modyfikowane podczas invocation. RA-055 pozostaje IN_PROGRESS.
+
+Primary doprecyzował przyczynę churn: gate był PASSED przed review prób
+1/3/4/6; nie był stale niespełniony. Semantyczne uwagi review stopniowo
+przenosiły test z samodzielnie konstruowanego EmergencyResourcesViewModel
+na produkcyjną SafetyAlertConfiguration, oprócz korekt wiring/localization
+i nieistniejącego wariantu. Exact warunek frozen incremental gate akceptuje
+wyłącznie `EmergencyResourcesViewModel(` albo parę `SafetyAlert(` oraz
+`.emergencyResourcesViewModel`. Nie rozpoznaje SafetyAlertConfiguration.
+
+Własna read-only sonda primary na zachowanym końcowym SafetyAlertTests.swift:
+exit `0`, asercje: dotychczasowy lexical gate false, konstrukcja
+SafetyAlertConfiguration true, użycie .emergencyResourcesViewModel true;
+2 tapAction(), obecne trackCalls i safariUrl. To dowód zbyt wąskiej heurystyki
+bramki, NIE dowód kompilacji ani poprawności działania testu. Ostateczny iOS
+worktree: HEAD seed cd46c82, 4 staged files / 165 additions, bez commita.
+Nie przyjmować wcześniejszego count-only raportu eksploratora „brak konfliktu”
+jako rozstrzygnięcia; exact kod bramki i sonda ujawniły lexical false-negative.
+
+Następny sensowny krok PRZED kolejnym live: lokalnie zakwalifikować oracle
+dla produkcyjnego construction path (pozytywne direct/configuration oraz
+negatywne bypass/comment/vacuous cases), uzgodnić nową wersję frozen benchmarku
+i dopiero po jej zatwierdzeniu nowy invocation. Nie poprawiać starego bundle
+ani iOS worktree pod benchmark i nie podnosić token cap. Bieżąca zgoda była
+na jedną próbę i została wykorzystana. Status/koszty/artefakty pozostają jawne.
+Końcowe workflow:validate, prettier tego planu i git diff --check: exit `0`;
+brak produkcyjnych zmian RemoteAgent podczas tej dodatkowej próby.
+
 ## Ustalenia trwałe
 
 - Początkowa estymata dla tego przekrojowego UI taska wynosiła `180k–450k`
@@ -3296,8 +9597,8 @@ audytu `PASS`, handoffu ani statusu `DONE`.
   totals i zachowuje obie wartości do porównania.
 - Globalne progi jednego Engineering invocation pozostają: target `750000`,
   warning `1200000`, hard stop `1800000`; initial implementer/designer reserve
-  to `105000`, exact receipt-backed correction używa `64000` dla pierwszego
-  call i `32000` po compact epoch, a tools-disabled reviewer/verifier używa
+  to `105000`, zastany aktualny kod exact receipt-backed correction używa
+  `128000` dla pierwszego call i `128000` po compact epoch, a tools-disabled reviewer/verifier używa
   `32000`.
 - Worktree po sukcesie lub wartościowej porażce pozostaje do inspekcji. Nie
   usuwać istniejących worktree ani journalów z poprzednich prób.

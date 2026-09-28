@@ -11,6 +11,9 @@ rollback. Zmiana zaakceptowanej decyzji wymaga nowego ADR zastępującego poprze
 
 Aktualne decyzje:
 
+- [ADR-0030 — kontrolowany pilot Engineering](ADR-0030-controlled-engineering-pilot.md)
+- `ADR-0029` — właściciel zawęża MOBL-2023 do alertu tekstowego; osobny profil
+  dziewięciu testów modelu i czterech UI bez zmiany historycznej kwalifikacji voice.
 - `ADR-0001` — foundation tooling i przypięte wersje;
 - `ADR-0002` — SQL i migracje trwałego stanu;
 - `ADR-0003` — historyczny workflow lokalnego implementera; zastąpiony przez ADR-0004.
@@ -40,3 +43,33 @@ Aktualne decyzje:
 - `ADR-0016` — provider-neutral Engineering przez oficjalne klienty Codex CLI i Claude Code
   uwierzytelnione subskrypcją; role są wybierane konfiguracją, a Bedrock i OpenCode nie należą
   do aktywnej ścieżki.
+- `ADR-0017` — server-owned identity findingów rozróżnia niezależne wymagane
+  poprawki na tej samej linii, a outcome handlera, zadania Engineering i
+  kompletność diagnostyki są raportowane oddzielnie.
+- `ADR-0018` — nowe `GateFailure` v2 wiąże kryteria, klasy awarii, evidence i
+  code-owned target IDs; legacy v1 nie może tworzyć write authority przez prose.
+- `ADR-0019` — Xcode TEST może otrzymać PASS tylko z niepustym, bounded i
+  digest-bound `.xcresult`; exit code i tekst logu nie są dowodem wykonania testów.
+- `ADR-0020` — manifest kwalifikacyjny wiąże exact ordered slice IDs z plannerem,
+  a brakujący read context jest dozwolony wyłącznie jako planned output targetu
+  mutacji należącego do tego samego slice'a.
+- `ADR-0021` — `GateFailure` zachowuje szerokie typed observations, ale modelowa
+  korekta gate dostaje wyłącznie katalogowy candidate set i musi substantively
+  zmienić co najmniej jeden path przed obowiązkowym rerunem; review pozostaje ALL.
+- `ADR-0022` — pre-commit review rozdziela changed-line anchor od dokładnych
+  typed target paths; tylko server-validated targety aktywnego slice'a mogą
+  zasilić correction prefetch i wymagane mutation receipts.
+- `ADR-0023` — failed-mutation recovery zachowuje dokładne server-owned targety
+  przez compact epoch; sibling mutation nie zeruje bounded no-progress guardu.
+- `ADR-0024` — zmierzony kontekst korekty kompilacji ma wersjonowany limit
+  48000 bytes / 12000 estimated tokens, związany z config digest etapu;
+  globalny budżet invocation i wymóg kompletnego evidence pozostają bez zmian.
+- `ADR-0025` — static precheck i synthetic trace nie zastępują wykonania;
+  parser Xcode odrzuca skip/expected failure oraz niezgodny target testu.
+- `ADR-0026` — niezmienne evaluator-owned test inputs są instalowane przed
+  protected baseline disposable copy; source i evaluated tree mają oddzielne
+  związane identity, bez zmiany historycznych receipts ani zgód live.
+- `ADR-0027` — jawny tryb izolowanego XCUITest harnessu obejmuje własny projekt,
+  scheme i test host w protected inputs, bez nadpisywania projektu kandydata.
+- `ADR-0028` — jawny profil full-flow wybiera związana manifestem wersja
+  evaluation; legacy pozostaje bez zmian, a nowy profil wymaga osobnej kwalifikacji.

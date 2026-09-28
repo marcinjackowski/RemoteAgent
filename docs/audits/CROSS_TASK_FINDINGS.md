@@ -50,8 +50,118 @@ LOW musi mieć jawną decyzję przed odbiorem. Ustalone przy planowaniu RA-026
 | `CTF-022` | LOW | **ZAMKNIĘTY** `2026-08-25` — RA-038-WU-00, realny `SELECT 1`, integracja 8/8 + mutation RED→GREEN | `env.sh` szanuje explicit config, preferuje 5433 i wykrywa local fallback PG15/5432 jako dyskretne `RA_PG*` |
 | `CTF-023` | LOW | **ZAMKNIĘTY** `2026-08-26` — pełna bramka RA-040 | Root typecheck ujawnił dwa testowe source/dist/inference defects pominięte przez bramki pakietowe; oba naprawione i objęte root `tsc` |
 | `CTF-024` | HIGH | **ZAMKNIĘTY** `2026-08-29` — `AUDIT-01` RA-054, owner-enabled live GREEN | exact auth channels, strict schema i realny `gpt-5.6-sol` subscription smoke |
+| `CTF-025` | HIGH | **ZAMKNIĘTY** `2026-09-14` — malformed outcome i intra-batch ambiguity zweryfikowane | Mutation RED→restore, własne tool-loop49/49 oraz pełny zestaw kodowy bez failure; RA-055 nadal wymaga live |
+| `CTF-026` | MEDIUM | **ZAMKNIĘTY** `2026-09-06` — niezależna weryfikacja R3A/R3B, mutation RED→GREEN, 162/162 | Production journal utożsamiał resolved handler z sukcesem zadania; task/live nadal otwarte |
+| `CTF-027` | LOW | **ZAMKNIĘTY** `2026-09-08` — własny review diffu i pełna bramka exit 0; RA-055 pozostaje otwarty | Zbyt krótki polling publikacji outbox w testach RA-046 pod obciążeniem pełnego suite |
+| `CTF-028` | HIGH | **ZAMKNIĘTY** `2026-09-08` — własna weryfikacja29/29, dwa unsafe-acceptance mutation RED→restore GREEN, forced build/typecheck0 | Adapter Xcode akceptował exit-zero z błędami niezarejestrowanymi przez framework testowy; RA-055/task live pozostaje otwarty |
+| `CTF-029` | HIGH | **ZAMKNIĘTY** `2026-09-09` — własny diff, forced build2/2 Cached0,128/128 i typecheck0, post-cancel mutation RED→restore GREEN | Model/control CLI runner kasował eskalację SIGKILL po śmierci leadera; RA-055 i pełna bramka pozostają otwarte |
 
 ---
+
+## `CTF-029` — przedwczesny wynik zatrzymania przed eskalacją process group
+
+- Severity: **HIGH** — proces potomny mógł wykonywać pracę po zwróceniu
+  zakończonego anulowania. Dotyczy istniejącego `packages/model-runtime`.
+- Wykryty: `2026-09-09`, RA-055, podczas rozstrzygania failure pełnej bramki
+  `root-gate-SlXCHr` (3660 passed/1 failed/2 skipped, exit1).
+- Status: **ZAMKNIĘTY** na podstawie poniższej własnej weryfikacji mechanizmu,
+  nie końcowego audytu RA-055 ani sukcesu live.
+
+Pierwotny fixture miał marker200ms od readiness, więc sam jego fail pod
+obciążeniem nie dowodził zapisu PO anulowaniu; solo11/11 exit0. Nowy fixture
+instaluje ignore-SIGTERM w potomku, czeka na PID/readiness, a zezwolenie na
+zapis markera daje dopiero PO wyniku anulowania. Potwierdził rzeczywisty defekt:
+`runSubscriptionProcess.finish` oraz `runSubscriptionControlCommand` close/fail
+kasowały killTimer, gdy leader zamykał się przed potomkiem z ignorowanym TERM.
+
+Oba runnery zachowują teraz informację o zakończeniu leadera i czekają na
+zaplanowany group SIGKILL przed zakończeniem promise. Timer eskalacji pozostaje
+referenced. Normalne zakończenie nie dodaje takiego oczekiwania. Fixture używa
+bounded polling zakończenia potomka zamiast stałego czasu na kernel reap,
+waliduje PID przed zapisaniem go do cleanup state i sprząta własne procesy także
+przy błędzie readiness. Nie jest to dowód obsługi potomka, który sam celowo
+ucieknie do innej process group, ani dodatkowa kwalifikacja Windows.
+
+Mutacje i dowód (primary odczytał rzeczywiste logi):
+`diagnostics/process-runner-tree-mutations-1788906500/parent-only-kill-both-red.log`
+— oba fixtures zapisały `bad` PO wyniku stopu, exit1;
+`premature-finish-red.log` oraz `control-premature-finish-red.log` — odpowiednie
+fixtures również zapisały `bad`, exit1. Każdy mutant został przywrócony.
+
+Własna komenda primary (session56865):
+`. scripts/dev/env.sh && pnpm run build --filter=@remoteagent/model-runtime --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run packages/model-runtime/test packages/model-provider-codex-cli/test packages/model-provider-claude-code/test && pnpm exec tsc --noEmit -p packages/model-runtime/tsconfig.json && git diff --check`.
+Exit0: build2/2 Cached0;128 passed/1 opt-in skipped,11 wykonanych plików,
+w tym12 testów process-runner i oba zestawy transport/preflight adapterów.
+Nie uruchomiono provider live. Cała bramka RA-055 wymaga teraz ponowienia.
+
+Ponowienie primary `2026-09-09`: `root-gate-yEZogG/full-gate.log`, pełna
+lint/format/build --force/Vitest RA_REQUIRE_POSTGRES=1/typecheck --force/workflow
+bramka exit0,3662 passed/2 opt-in skipped, build29/29 i typecheck46/46 Cached0.
+RA-055 nadal wymaga osobnego live i końcowego odbioru; finding jest zamknięty.
+
+## `CTF-028` — ukryte błędy frameworku przy pozornie zielonym XCTest
+
+- Severity: **HIGH**, nieprawdziwy dowód wykonania bramki; owner RA-055.
+- Wykryty: `2026-09-08` w istniejącym adapterze Xcode podczas prywatnych
+  state/voice diagnostics. Realne runs `JJy5KG`, `uWSE5c`, `McJVE3`, `0unDRx`
+  miały exit0 i passed tests, ale pełne logi zawierały `Unimplemented:
+  ContinuousClock` oraz komunikaty o issue/failure bez podłączonego frameworku.
+  Primary odrzucił je jako czystą kwalifikację. Szczegóły w RA-055 WORK_UNITS.
+- Wpływ: zielony xcresult nie wyklucza jawnego błędu zgłoszonego poza XCTest.
+  Head/tail truncation może dodatkowo usunąć taki raport ze zwracanego outputu.
+- Zmiana: adapter TEST klasyfikuje dwie konkretne frazy framework-link jako
+  INFRASTRUCTURE, nie publikuje test evidence, zachowuje bounded marker podczas
+  stream capture. Timeout/cancel oraz zwykłe warnings zachowują dotychczasowy
+  kontrakt. Nie jest to ogólny parser wszystkich potencjalnych runtime warnings.
+- Dowód po zmianie: primary `. scripts/dev/env.sh && pnpm exec vitest run
+  apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`, session67853,
+  exit0,29/29. Guard-off mutation: exit1,2 failed; stream-marker-off mutation:
+  exit1,1 failed; realne assertions PASSED zamiast INFRASTRUCTURE. Logs:
+  `diagnostics/xcode-framework-mutations.fSL17R/`. Primary odczytał diff i logi,
+  następnie uruchomił `. scripts/dev/env.sh && pnpm run build --force && pnpm
+  exec vitest run apps/agent-worker/test/xcode-gate-adapter.integration.test.ts`,
+  session73183 exit0, build29/29 Cached0 oraz29/29 testów po restore.
+- Domknięcie findingu na podstawie niezależnego odczytu kodu, wykonanych
+  regresji i rzeczywistych mutation checks powyżej; nie jest to PASS taska.
+  Pełny przebieg session73031/PagEAc zakończył się exit1:3575passed/2failed/
+  2opt-in skipped,198.46s. Oba faile w test/acceptance/criteria.test.ts były
+  skutkiem pozostawienia tego już naprawionego findingu jako OTWARTY, nie
+  defektu adaptera. Nie pominięto ich ani nie zmieniono severity/testów.
+  Komendy po przerwanym chain: `. scripts/dev/env.sh && pnpm run typecheck
+  --force && pnpm workflow:validate && git diff --check`, session88378 exit0,
+  typecheck46/46 Cached0,8.079s i workflow55OK. Pełna bramka taska będzie
+  ponowiona z prawidłowym stanem rejestru; dotychczasowy exit1 pozostaje dowodem.
+  Ponowienie session13391/wGXq6z: exit0,3577passed/2opt-in skipped,200.37s,
+  build29/29 i typecheck46/46 Cached0, workflow55OK. Pełny log:
+  `/Users/marcinjackowski/.remoteagent/live-mobl-2023/diagnostics/root-gate-wGXq6z/full-gate.log`.
+  Brak zmiany kryteriów acceptance; oba poprzednie błędy dotyczyły wyłącznie
+  nieaktualnego statusu naprawionego findingu.
+
+## `CTF-027` — polling publikacji outbox nie tolerował obciążenia pełnego suite
+
+- Severity: **LOW**, test infrastructure; owner RA-055, decyzja `fix`.
+- Dowód: pełna bramka primary 2026-09-08, exit `1`: 3470 passed / 1 failed /
+  2 opt-in skipped. `keeps deny and policy-independent stop authority-free and
+  generic buttons inert` odpadł w `awaitProposalPublished` na helperze
+  `eventually` (100 prób co 10 ms), nie na asercji uprawnień ani timeout Vitest.
+- Powtórzenie bez zmian: `. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec
+  vitest run test/engineering-approval-ingress/engineering-approval-ingress.integration.test.ts
+  -t 'keeps deny'` — exit `0`, 1 passed / 3 skipped, 457 ms testów.
+- Naprawa: monotoniczny limit 15 s zamiast liczby 100 prób, bez zmiany predicate,
+  asercji authority ani kodu produkcyjnego. Cały plik: 4/4, exit `0`.
+- Powtórzona pełna bramka: `. scripts/dev/env.sh && pnpm lint && pnpm format &&
+  pnpm run build --force && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run && pnpm run
+  typecheck --force && pnpm workflow:validate && git diff --check` — exit `0`,
+  3471 passed / 2 opt-in skipped; build 29/29, typecheck 46/46, cached 0;
+  workflow 55 tasks OK. Log `/tmp/ra055-gate-20260908.5x7DtZ/full-gate.log`.
+- Nie jest to dowód zakończenia RA-055 ani autoryzacja nowego live.
+- Własny review primary potwierdził zmianę wyłącznie deadline helpera, bez
+  zmiany asercji ani kodu produkcyjnego. Dodatkowe powtórzenie całego pliku
+  2026-09-08: 4/4, exit `0`, 15.77 s. Finding lokalnie zamknięty; nie czeka na
+  formalne zamknięcie całego RA-055. Przejściowy status `NAPRAWIONY` błędnie
+  pozostawiał go w rejestrze otwartych decyzji AC3: pełny przebieg po hardening
+  zakończył się przez to exit `1` (3471 passed / 1 failed / 2 skipped), nie
+  przez flake ani regresję produkcyjną. Nie osłabiono testu AC3.
 
 ## `CTF-001` — dwie różne klasy `CredentialRefreshConflictError` / `CredentialRefreshIdentityError`
 
@@ -1763,3 +1873,192 @@ Load-bearing mutations: stdout-only auth, akceptacja obu kanałów, brak typu
 code-owned schema envelope oraz syntetyczny return omijający preflight/proces
 każdorazowo dały exit `1`. Wszystkie zostały przywrócone przed finalnym live
 GREEN. Pełna bramka i audyt RA-054 zapisują końcowy dowód taska.
+
+## `CTF-025` — receipt fallback omija unresolved mutation failure
+
+- Severity: **HIGH** (niespójność kontraktu postępu; nie dowód obejścia final commit gate).
+- Wykryty: `2026-09-05`, niezależny audyt Engineering checkpointu `ce9b2ff`.
+- Dotyczy: progressive execution RA-048, rozszerzone w RA-055;
+  `apps/agent-worker/src/engineering-execution.ts:184`,
+  `receiptBackedImplementationReport` i callback `executeAndObserve`.
+- Status: **ZAMKNIĘTY** `2026-09-14` — warianty malformed outcome i intra-batch
+  ambiguity potwierdzone regresjami oraz mutation checks; wcześniejsze naprawy
+  outer fallback i unscoped failure pozostają zachowane.
+- Plan naprawy: [R1](../work-units/RA-055/ENGINEERING_COMPLETION_PLAN.md).
+
+Helper przyjmuje `unresolvedMutationFailure`, lecz nie sprawdza go w warunku
+fallbacku. Ten sam brak istnieje w baseline `b4fb467`; pierwotny helper pochodzi
+z `c4f7793` (progressive slice execution). Zbudowany publiczny eksport wywołany
+z `ToolLimitError`, successful path `src/A.swift`, required all-of `[src/A.swift]`
+oraz `unresolvedMutationFailure=true` zwrócił report z `src/A.swift`.
+Sonda zakończyła exit `0`, asertując wykrycie błędu. Pełna bramka baseline przed
+wpisaniem findingów: exit `0`, 3173 passed / 2 skipped.
+
+Osiągalny kształt: sukces A, późniejsza odmowa korekty A, stop tool-loop,
+zaakceptowany wcześniejszy receipt przez zewnętrzny catch. Odmowa nie zmienia
+bajtów, więc fresh diff nie udowodni jej rozwiązania. Test helpera wprost
+oczekuje dziś akceptacji unresolved failure. Potrzebny jest shared path-level
+stan i odmowa fallbacku do czasu naprawienia tego samego targetu, z mutacją
+odłączonego guarda RED i przywróconą bramką GREEN. Nie usuwać tego wpisu ani
+nie zmieniać severity tylko dla przejścia acceptance.
+
+Naprawa `2026-09-05`: tool-loop i outer worker zachowują failed targety per
+path, sticky ambiguity oraz nierozliczalny failure bez targetu. Późniejszy
+successful receipt rozlicza wyłącznie exact server-owned `changed_files`, nie
+modelowy request target. Fallback ma zamkniętą allowlistę dwóch detail codes i
+zachowuje all-of required paths. Primary wykonał build `29/29` bez cache oraz
+focused gate `3/3` pliki, `72/72` testy, exit `0`. Pięć osobnych mutacji
+zabezpieczeń dało exit `1` i zostało przywróconych; mutacja all-of początkowo
+przeżyła przez nie-load-bearing test, więc regresję skorygowano i powtórzono do
+RED. Wpis pozostawał formalnie otwarty do niezależnego sprawdzenia naprawy.
+
+Primary `2026-09-06` ponownie odczytał fallback, exact path-level recovery i
+testy, a następnie celowo usunął sprawdzenie `unresolvedMutationFailure`.
+Test `finalizes an implementation from successful receipts only at the exact
+token fence` zakończył się exit `1`: fallback nie rzucił wymaganego wyjątku.
+Po restore wspólna bramka opisana pod CTF-026 dała `162/162`, exit `0`.
+Zamknięcie dotyczy wyłącznie udowodnionego defektu, nie audytu ani live PASS
+całego RA-055. Testy acceptance i ich reguły pozostają bez zmian.
+
+Ponowne otwarcie tego samego dnia: primary podczas odczytu diffu znalazł
+`packages/model-runtime/src/tool-loop.ts`, gdzie gałąź udanej mutacji pomija
+`unresolvedUnscopedMutationFailure` przy wyliczaniu blokady. Nowy test Luny
+`keeps an unscoped failed mutation unresolved after an unrelated success`
+został niezależnie uruchomiony przez primary:
+`. scripts/dev/env.sh && pnpm exec vitest run packages/bedrock-runtime/test/tool-loop.test.ts -t 'keeps an unscoped'`
+— exit `1`: final został przyjęty po błędzie bez targetu i późniejszym sukcesie
+`src/B.swift`. To nie dowodzi obejścia final commit gates, ale narusza sticky
+recovery kontrakt. Runtime pozostaje chwilowo niezmieniony do terminala
+aktywnego izolowanego live; następny krok to zachowanie flagi w gałęzi sukcesu,
+ponowienie tej regresji, mutation RED→GREEN oraz pełna bramka.
+
+Domknięcie wariantu unscoped: gałąź sukcesu zachowuje teraz sticky flag
+niezależnie od zbioru ścieżek. Worker potwierdził mutation RED exit `1` po
+odłączeniu flagi i przywrócił kod. Primary przeczytał zmianę oraz fixtures:
+scenariusze celowane podają rzeczywiste targety, osobna parametryzowana
+regresja pokrywa wyjątek wejścia i domenowe `FAILED` bez targetu. Po własnym
+forced build `@remoteagent/model-runtime` (`2/2`, `Cached: 0`, exit `0`)
+primary uruchomił z normalnymi importami pakietów:
+`. scripts/dev/env.sh && pnpm exec vitest run packages/bedrock-runtime/test/tool-loop.test.ts packages/model-runtime/test/process-runner.test.ts test/engineering-evals/budget-recovery.test.ts && git diff --check`
+— `71/71`, trzy pliki, exit `0`. Odbiór całego RA-055 nadal wymaga poprawnego
+live oraz pełnej bramki; zamknięcie tego findingu nie zmienia statusu taska.
+
+Wariant malformed outcome, `2026-09-13`: primary odczytał diff tool-loop,
+Luna przygotowała lokalną sondę, a primary przeczytał ją i sam uruchomił:
+`/Users/marcinjackowski/.local/opt/node-v24.19.0-darwin-arm64/bin/node /tmp/ra-mutation-outcome-probe.sajQra/probe.mjs`
+— exit `0` (sonda diagnostyczna, nie zielony test zabezpieczenia).
+Publiczny compiled eksport, FakeTransport, zero provider calls/real mutations:
+sukces A z receipt → mutacja B zwracająca null lub `{outcome:"UNKNOWN"}` →
+final zostaje przyjęty (2calls/3responses). Pozytywna kontrola B=`FAILED`
+odrzuca drugi final (4responses, ToolLimitError failed mutation not recovered).
+`mutationBatchFailed` jest ustawiane, lecz outcome inny niż FAILED/AMBIGUOUS
+nie dodaje unresolved paths/flag; guard traci informację o niepotwierdzonym
+wyniku. To dowód obejścia kontraktu postępu, NIE dowód obejścia final commit.
+Brak poprawnego receiptu mutacji musi fail-closed, bez domniemania sukcesu
+albo bezpiecznej ponownej mutacji. Po terminalu aktywnego live04: ograniczona
+naprawa runtime i regresje malformed/known FAILED/known SUCCEEDED, mutation
+RED→restore GREEN, własny diff oraz pełna bramka. Nie zmieniać załadowanego
+runtime podczas live; ten finding blokuje finalny odbiór niezależnie od wyniku04.
+
+Ta sama sonda rozszerzona i ponownie odczytana/uruchomiona przez primary
+(exit0) potwierdziła wariant intra-batch: dwie mutacje w jednym model response,
+pierwsza AMBIGUOUS, druga SUCCEEDED, dają **2 executor calls** przed odmową
+finalu — zarówno A→B, jak A→A z różnymi tool-use IDs. Kontrola w dwóch osobnych
+model responses daje tylko1call. Guard przed batchem widzi sticky flag dopiero
+po zakończeniu pętli. Naprawa musi blokować następny mutating executor także
+wewnątrz batcha, a nie tylko odmówić końcowego raportu. Wymagane regresje
+z licznikiem rzeczywistych syntetycznych wywołań i mutacja odłączenia guarda.
+
+Naprawa wariantów malformed/intra-batch 2026-09-14: runtime terminalizuje
+niejednoznaczny wynik przed kolejnym executorem. Rzeczywiste mutacje vitest
+odłączenia klasyfikacji i `break` dały exit1; druga wykazała writes2 zamiast1
+dla A→B i A→A (pierwszy wynik AMBIGUOUS, drugi SUCCEEDED).
+Primary odczytał kod, testy i logi, wykonał własny forced build3/3 Cached0
+oraz tool-loop49/49 exit0 (sesja34034). Finding pozostaje formalnie otwarty
+do pełnej kwalifikacji: pełna bramka po naprawach napotkała timeouty dwóch
+testów integracyjnych, odtworzone osobno, i nie zakończyła się exit0.
+To nie dowód obejścia final commit ani zamknięcia RA-055.
+
+Domknięcie 2026-09-14 10:47CEST: po spadku load hosta~100→3 oba wcześniejsze
+timeouty przeszły solo bez zmian limitów (2/2 i3/3, exit0). Własny pełny przebieg
+19263: build29/29 Cached0,3733 testy passed; jedyne2 failures to kontrola
+tego nadal otwartego wpisu w test/acceptance/criteria.test.ts. Wszystkie
+testy kodowe, w tym recovery/worker/fallback, wykonały się bez failure.
+Primary ponownie uruchomił `. scripts/dev/env.sh && pnpm exec vitest run packages/bedrock-runtime/test/tool-loop.test.ts --reporter=dot`
+— exit0,49/49. Własny odczyt diffu i wcześniej opisane rzeczywiste mutation
+RED uzasadniają zamknięcie tego konkretnego defektu, nie usunięcie/brakowanie
+testu acceptance. Pełny przebieg19263 pozostaje exit1 i nie jest raportowany
+jako zielony; po aktualizacji rejestru bramka ma zostać ponowiona w całości.
+RA-055 nie zmienia statusu i nadal wymaga rzeczywistego live/F6/F7.
+
+## `CTF-026` — journal raportuje sukces obsłużonego terminalnego zadania
+
+- Severity: **MEDIUM** (nieprawdziwy operator-facing outcome, nie nieautoryzowany side effect).
+- Wykryty: `2026-09-05`, ten sam niezależny audyt Engineering.
+- Dotyczy: journal wprowadzony w `2c627b4` (iOS execution/debug journals),
+  `apps/agent-worker/src/engineering-debug-journal.ts:1606-1632`.
+- Status: **ZAMKNIĘTY** `2026-09-06` — schema v2 rozdziela
+  handler, durable Engineering outcome i diagnostic completeness; R3B domyka
+  rekonstrukcję oraz zachowanie canonical evidence przed teardownem.
+- Plan naprawy: [R3](../work-units/RA-055/ENGINEERING_COMPLETION_PLAN.md).
+
+`status: failure === undefined ? SUCCEEDED : FAILED` ocenia callback handlera,
+nie trwały wynik Engineering. Obsłużony `AgentCompletion=BLOCKED` może zostać
+poprawnie zapisany bez wyjątku; runtime rozróżnia obsługę terminala od
+nierozwiązanej awarii. Sonda produkcyjnego journal runnera z resolved callback
+i fake DB zawierającą wyłącznie `TerminalReason` wygenerowała `RUN_COMPLETED`
+ze statusem `SUCCEEDED`, `commit_sha=null`, bez success artifacts. Sonda exit
+`0` potwierdziła ten wynik, bez zmian rzeczywistej bazy albo workspace.
+
+Naprawa musi rozdzielić handler outcome, durable Engineering outcome i
+diagnostic completeness. Awaria diagnostyki nie może powtarzać wykonanego
+efektu ani domniemywać sukcesu. Live harness ma osobne sprawdzenie commit/evidence,
+więc jego FAILED nie kwalifikuje production journal runnera. Wymagane testy
+BLOCKED/CANCELLED/WAITING/COMPLETED, brak evidence, błąd DB oraz mutacja
+powrotu do callback-only success.
+
+Primary `2026-09-06` odczytał `engineeringOutcomeForArtifacts`, projekcję
+Supervisor stop, runner i fail-closed rekonstrukcję journala. R3B jest
+zaimplementowane; wcześniejsza adnotacja tabeli „R3B nadal wymagane” była
+nieaktualna. Mutacja zastępująca durable outcome wynikiem samego callbacka
+zaczerwieniła `separates durable Engineering outcome from handler completion`
+(exit `1`): wymagany `BLOCKED` utracono, schema odmówiła fałszywego sukcesu,
+runner zapisał `UNKNOWN/INCOMPLETE`. Przywrócono kod, po czym uruchomiono:
+
+`. scripts/dev/env.sh && RA_REQUIRE_POSTGRES=1 pnpm exec vitest run apps/agent-worker/test/engineering-execution.integration.test.ts apps/agent-worker/test/engineering-debug-journal.test.ts packages/bedrock-runtime/test/tool-loop.test.ts packages/model-runtime/test/process-runner.test.ts && git diff --check`
+
+Wynik: exit `0`, cztery pliki, `162/162` testy, w tym journal reconstruction,
+tampering, missing evidence i export/teardown. To niezależny dowód zamknięcia
+CTF-025/026, nie końcowy audyt taska. RA-055 pozostaje `IN_PROGRESS`, dopóki
+pełna bramka i exact live invocation nie spełnią własnych kryteriów.
+
+## `CTF-027` — sandbox odmawia Node odczytu metadanych przodków worktree
+
+- Severity: **MEDIUM** (blokada poprawnego lokalnego importu ESM; fail-closed,
+  nie obejście izolacji).
+- Wykryty: `2026-09-15`, kontrolowany pilot LIVE04 w RA-055.
+- Dotyczy: `packages/workspace-runner/src/network-policy.ts`.
+- Status: **ZAMKNIĘTY** `2026-09-15` — własne mutation checks, pełna bramka
+  primary i rzeczywisty pilot LIVE07 z potwierdzonym commitem.
+
+Profil odmawiał `file-read*` poza worktree, także `lstat` katalogów nadrzędnych,
+potrzebnego resolverowi Node24. Rzeczywisty nested-workspace ESM reproducer
+zakończył się `EPERM lstat /private`. LIVE04 miał poprawny kod, ale oracle
+nie dochodził do asercji. Poprzedni test sieci sprawdzał builtin `require`,
+nie import pliku i nie ujawniał tej luki funkcjonalnej.
+
+Naprawa zezwala na `file-read-metadata` tylko dla dokładnych katalogów
+nadrzędnych kanonicznego rootu. Ścieżki są parametrami profilu, nie wklejanym
+kodem. Nie dopuszcza ancestor `subpath`, read-data, write ani sieci.
+Primary odczytał diff i skorygował fixture do ścieżek kanonicznych z dodatnią
+kontrolą poza sandboxem. Własny test network-policy2/2 exit0; mutacje usunięcia
+metadata, poszerzenia do read-data i użycia subpath każda dała exit1, po czym
+przywrócono kod. Logi `/tmp/pilot05-{metadata,ancestor-data,ancestor-scope}-red.log`.
+
+Własny replay oryginalnego oracle w produkcyjnym sandboxie: zły seed exit1,
+dobry zachowany kandydat exit0. Pełna bramka85134 exit0 (3845testów, build29,
+typecheck46, Cached0); późniejsza pełna44066 exit0 (3846testów, Cached0).
+LIVE07 exit0 z rzeczywistym Codex subscription, gate/review/verification
+i commitem0515c519e5a8d41335df5588c7f3c843ae9b0184. Primary ponowił oracle
+i test kandydata w sandboxie oraz sprawdził receipts/Git: exit0.
+To zamyka ten defekt, nie pierwotne kryteria iOS/RA-055.

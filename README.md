@@ -1,5 +1,11 @@
 # RemoteAgent
 
+Aktualny stan Engineering (2026-09-28):
+[status, wyniki testów i następny krok iOS](docs/ENGINEERING_CURRENT_STATUS.md).
+Aktywna kwalifikacja używa subskrypcji Codex; Node pilot jest zaliczony,
+ale gotowość dla iOS pozostaje do potwierdzenia. Poniższy opis Bedrock dotyczy
+pierwotnej wizji systemu, nie obecnej konfiguracji testów live.
+
 RemoteAgent będzie prywatnym, Discord-first systemem wspierającym codzienną
 pracę: odbiera zdarzenia z Jira, Gmaila, Google Calendar i GitLaba, prowadzi
 trwałe sprawy, rozmawia z właścicielem i realizuje pełny engineering loop przy
